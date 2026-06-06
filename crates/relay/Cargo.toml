@@ -1,0 +1,10 @@
+[package]
+name = "svastha-relay"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Svastha relay: a zero-knowledge store-and-forward server for encrypted blobs."
+
+[dependencies]
+svastha-core = { path = "../core" }
