@@ -1,0 +1,26 @@
+{
+  "contract_version": 0,
+  "vectors": [
+    {
+      "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+      "passphrase": "",
+      "seed_hex": "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4",
+      "x25519_public_hex": "3b3f14fda5349740018c9a0dd96ee8f5657d48e44ba0830bf8daa9998257cf57",
+      "ed25519_public_hex": "cbae0fc2d68164b481926571948cfd7e62498f9107d687a62fa75096ba7c435a"
+    },
+    {
+      "mnemonic": "legal winner thank year wave sausage worth useful legal winner thank yellow",
+      "passphrase": "TREZOR",
+      "seed_hex": "2e8905819b8723fe2c1d161860e5ee1830318dbf49a83bd451cfb8440c28bd6fa457fe1296106559a3c80937a1c1069be3a3a5bd381ee6260e8d9739fce1f607",
+      "x25519_public_hex": "8d141142bb4b0508659561b2a19f126f8c19d60711a493378d0dca8e49ff793f",
+      "ed25519_public_hex": "6596e0721f470623529c6c8194695b106c7ac16825fa563d6bc5487b08088bef"
+    },
+    {
+      "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+      "passphrase": "TREZOR",
+      "seed_hex": "bda85446c68413707090a52022edd26a1c9462295029f2e60cd7c4f2bbd3097170af7a4d73245cafa9c3cca8d561a7c3de6f5d4a10be8ed2a5e608d68f92fcc8",
+      "x25519_public_hex": "deaafc08ce5be30766895bba68e14c310c3f3c473e037ad23ca6df5dbcfa5378",
+      "ed25519_public_hex": "b5b34151aac44e922f36844e7cf83405420bfb49a922149195c0dc8d113565e0"
+    }
+  ]
+}
