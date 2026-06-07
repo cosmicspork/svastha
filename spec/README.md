@@ -14,8 +14,9 @@ non-Rust reimplementation or an auditor can validate against the same bytes.
 `svastha_core::CONTRACT_VERSION` tracks breaking changes; clients and relays
 negotiate on it so independently deployed and self-hosted pieces can coexist.
 
-Status: key derivation, the encryption envelope, and the event schema are
-specified below. The relay protocol is documented here as it is implemented.
+Status: key derivation, the encryption envelope, the event schema, and the relay
+auth handshake are specified below. The relay blob endpoints are documented here
+as they are implemented.
 
 ## Key derivation
 
@@ -158,3 +159,56 @@ structured `event` → its `canon` bytes and `id`; signed entries add a
 entries differ only in provenance to pin the cross-source id collision. Regenerate
 with `cargo run -p svastha-core --example event_vectors` (only on a deliberate,
 version-bumped contract change).
+
+## Relay wire protocol
+
+The relay is a zero-knowledge store-and-forward server: it holds no keys, stores
+only ciphertext and routing metadata, and authenticates every request by an
+Ed25519 signature. Authentication is **stateless and per-request** — no sessions,
+no server secrets, no nonce store — which keeps the relay a dumb, keyless single
+binary anyone can self-host.
+
+### Auth handshake
+
+A request is described by its `method`, its `path` (including the query string),
+the SHA-256 of its (possibly empty) body, and a Unix-seconds `timestamp`. The
+client signs this canonical preimage:
+
+```
+"svastha/v{VERSION}/relay-auth"     // domain label; VERSION = CONTRACT_VERSION
+  ‖ len(method)  ‖ method           // len is u32 big-endian, value UTF-8
+  ‖ len(path)    ‖ path
+  ‖ sha256(body)                    // 32 bytes
+  ‖ timestamp                       // u64 big-endian
+```
+
+Binding the method, path, and body hash means a captured signature cannot be
+replayed against a different verb, route, or payload. The `relay-auth` domain
+label (distinct from the event signature's `…/event` label) prevents a signature
+made for one purpose from being accepted for another. The signature is Ed25519
+over these bytes.
+
+Transport: the client sends three hex headers alongside the request —
+
+- `Svastha-Public-Key` — the 32-byte Ed25519 public key (the caller's identity),
+- `Svastha-Timestamp` — the same Unix-seconds value bound above,
+- `Svastha-Signature` — the 64-byte signature.
+
+The relay recomputes the preimage from the actual request and verifies the
+signature against `Svastha-Public-Key`. The signed `timestamp` bounds replay: the
+relay rejects requests outside a small freshness window (a server policy). Within
+that window a signed request can still be replayed; since v1 blobs are stored
+under the caller's own key, a replay only re-stores the caller's own ciphertext.
+A nonce store is a later hardening.
+
+Test vectors: [`vectors/relay-auth.json`](vectors/relay-auth.json). Each entry
+pins a `method` + `path` + `body` + `timestamp` + `signer_seed` → the `canon`
+preimage, the `public_key`, and the (deterministic, RFC 8032) `signature`; a GET
+(empty body) and a PUT (non-empty body) are included. All bytes are hex.
+Regenerate with `cargo run -p svastha-core --example relay_auth_vectors` (only on
+a deliberate, version-bumped contract change).
+
+### Blob endpoints
+
+The authenticated store-and-forward endpoints (blob upload, fetch, list) are
+documented here when the relay server lands.

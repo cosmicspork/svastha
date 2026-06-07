@@ -23,3 +23,4 @@ pub(crate) fn version_label(operation: &str) -> String {
 pub mod envelope;
 pub mod event;
 pub mod keys;
+pub mod relay;
