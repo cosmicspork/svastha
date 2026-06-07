@@ -13,6 +13,13 @@
 /// that independently deployed and self-hosted pieces can coexist.
 pub const CONTRACT_VERSION: u32 = 0;
 
+/// HKDF `info` label for a contract operation, tagged with [`CONTRACT_VERSION`]
+/// so a version bump deliberately changes every derived value. Key derivation
+/// and envelope key wrapping share it so the label scheme lives in one place.
+pub(crate) fn version_label(operation: &str) -> String {
+    format!("svastha/v{CONTRACT_VERSION}/{operation}")
+}
+
 pub mod envelope;
 pub mod event;
 pub mod keys;
