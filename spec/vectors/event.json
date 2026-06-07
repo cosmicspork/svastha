@@ -1,0 +1,113 @@
+{
+  "contract_version": 0,
+  "events": [
+    {
+      "note": "observation with quantity value, signed",
+      "event": {
+        "id": "732134e89dcf3272fbabd50cd584640f9cf2e359f301a95710bfe692ee1a7cc0",
+        "kind": "observation",
+        "code": {
+          "system": "http://loinc.org",
+          "code": "85354-9",
+          "display": "Blood pressure panel"
+        },
+        "effective_at": "2026-01-02T15:04:05Z",
+        "value": {
+          "quantity": {
+            "value": "118",
+            "unit": {
+              "system": "http://unitsofmeasure.org",
+              "code": "mm[Hg]",
+              "display": null
+            }
+          }
+        },
+        "provenance": {
+          "source": "Nebraska Medicine",
+          "source_doc": null
+        }
+      },
+      "canon_hex": "0000000b6f62736572766174696f6e0100000010687474703a2f2f6c6f696e632e6f72670000000738353335342d390100000014426c6f6f642070726573737572652070616e656c0100000014323032362d30312d30325431353a30343a30355a0100000000033131380100000019687474703a2f2f756e6974736f666d6561737572652e6f7267000000066d6d5b48675d00",
+      "id_hex": "732134e89dcf3272fbabd50cd584640f9cf2e359f301a95710bfe692ee1a7cc0",
+      "signer_seed_hex": "0102030405060708090a0b0c0d0e0f10",
+      "author_hex": "0b1b59fe721ec4f782ea1343e7a6db66a84289de7d626838f24571b389384f5e",
+      "signature_hex": "bcc4e71b1f6f9b0007d9e56854feb5133fb9dbf817d121baeb86c56a7639dcdea72920a08306a2ffdc23fa781b5a3a69a7bd089ce4fd22ad5d31c867db26b109"
+    },
+    {
+      "note": "same fact from a second source: identical id, different provenance",
+      "event": {
+        "id": "732134e89dcf3272fbabd50cd584640f9cf2e359f301a95710bfe692ee1a7cc0",
+        "kind": "observation",
+        "code": {
+          "system": "http://loinc.org",
+          "code": "85354-9",
+          "display": "Blood pressure panel"
+        },
+        "effective_at": "2026-01-02T15:04:05Z",
+        "value": {
+          "quantity": {
+            "value": "118",
+            "unit": {
+              "system": "http://unitsofmeasure.org",
+              "code": "mm[Hg]",
+              "display": null
+            }
+          }
+        },
+        "provenance": {
+          "source": "Clinic of the Plains",
+          "source_doc": null
+        }
+      },
+      "canon_hex": "0000000b6f62736572766174696f6e0100000010687474703a2f2f6c6f696e632e6f72670000000738353335342d390100000014426c6f6f642070726573737572652070616e656c0100000014323032362d30312d30325431353a30343a30355a0100000000033131380100000019687474703a2f2f756e6974736f666d6561737572652e6f7267000000066d6d5b48675d00",
+      "id_hex": "732134e89dcf3272fbabd50cd584640f9cf2e359f301a95710bfe692ee1a7cc0"
+    },
+    {
+      "note": "immunization coded value, no effective_at, signed",
+      "event": {
+        "id": "28f907f4f8cf85a86fe07c75eb6df2750a2339cc522b370611fe79bc61574ea9",
+        "kind": "immunization",
+        "code": {
+          "system": "http://hl7.org/fhir/sid/cvx",
+          "code": "208",
+          "display": "COVID-19, mRNA"
+        },
+        "effective_at": null,
+        "value": {
+          "coded": {
+            "system": "http://hl7.org/fhir/sid/cvx",
+            "code": "208",
+            "display": null
+          }
+        },
+        "provenance": {
+          "source": "State Registry",
+          "source_doc": "sha256:deadbeef"
+        }
+      },
+      "canon_hex": "0000000c696d6d756e697a6174696f6e010000001b687474703a2f2f686c372e6f72672f666869722f7369642f63767800000003323038010000000e434f5649442d31392c206d524e410001010000001b687474703a2f2f686c372e6f72672f666869722f7369642f6376780000000332303800",
+      "id_hex": "28f907f4f8cf85a86fe07c75eb6df2750a2339cc522b370611fe79bc61574ea9",
+      "signer_seed_hex": "0102030405060708090a0b0c0d0e0f10",
+      "author_hex": "0b1b59fe721ec4f782ea1343e7a6db66a84289de7d626838f24571b389384f5e",
+      "signature_hex": "b8410e2e1f727f6cb3e4539b0ee59d81e7bc95ab1d37ce20994635506a47df919dac8ea9819f14449a53264b79476a905b0fd97cd4ecdcff9cc5cf0da7b9bd06"
+    },
+    {
+      "note": "minimal text observation, no code or effective_at",
+      "event": {
+        "id": "5ae38fc12eed3b2ad7a258d498e621366a82f6452d6461cca39651e89287b2eb",
+        "kind": "observation",
+        "code": null,
+        "effective_at": null,
+        "value": {
+          "text": "patient reports mild headache"
+        },
+        "provenance": {
+          "source": "Self-reported",
+          "source_doc": null
+        }
+      },
+      "canon_hex": "0000000b6f62736572766174696f6e000001020000001d70617469656e74207265706f727473206d696c64206865616461636865",
+      "id_hex": "5ae38fc12eed3b2ad7a258d498e621366a82f6452d6461cca39651e89287b2eb"
+    }
+  ]
+}
