@@ -97,10 +97,9 @@ pub fn verify(verifying_key: &VerifyingKey, message: &[u8], signature: &Signatur
     verifying_key.verify(message, signature).is_ok()
 }
 
-/// Per-key HKDF `info` label, tagged with the contract version so a version bump
-/// changes the derived keys.
+/// Per-key HKDF `info` label (see [`crate::version_label`]).
 fn info(key: &str) -> Vec<u8> {
-    format!("svastha/v{}/{}", crate::CONTRACT_VERSION, key).into_bytes()
+    crate::version_label(key).into_bytes()
 }
 
 /// Expand 32 bytes of key material for the given label. HKDF-SHA256 expand only

@@ -234,7 +234,7 @@ fn derive_wrap_key(
     salt[..KEY_LEN].copy_from_slice(ephemeral_public);
     salt[KEY_LEN..].copy_from_slice(recipient_public);
     let hk = Hkdf::<Sha256>::new(Some(&salt), shared);
-    let info = format!("svastha/v{}/wrap", crate::CONTRACT_VERSION);
+    let info = crate::version_label("wrap");
     let mut okm = [0u8; KEY_LEN];
     hk.expand(info.as_bytes(), &mut okm)
         .expect("HKDF expand of 32 bytes is always within bounds");
