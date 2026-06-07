@@ -14,8 +14,8 @@ non-Rust reimplementation or an auditor can validate against the same bytes.
 `svastha_core::CONTRACT_VERSION` tracks breaking changes; clients and relays
 negotiate on it so independently deployed and self-hosted pieces can coexist.
 
-Status: key derivation and the encryption envelope are specified below. The relay
-protocol is documented here as it is implemented.
+Status: key derivation, the encryption envelope, and the event schema are
+specified below. The relay protocol is documented here as it is implemented.
 
 ## Key derivation
 
@@ -92,3 +92,69 @@ recipient `seed`, `ephemeral_secret`, `nonce`, and `data_key` → `wrapped` (the
 recipient seed lets a reimplementation exercise unwrap end-to-end). All bytes are
 hex. Regenerate with `cargo run -p svastha-core --example envelope_vectors` (only
 on a deliberate, version-bumped contract change).
+
+## Event schema
+
+The store is an append-only log of typed, immutable, signed facts. An event is
+content-addressed (so the same fact from two providers collapses on union) and
+signed (so its author and integrity are verifiable). Both rest on one explicit
+canonical byte encoding.
+
+An event has a `kind` (one of `observation`, `condition`, `medication_statement`,
+`immunization`, `encounter`, `procedure`, `allergy_intolerance`, `document`), an
+optional `code` (a terminology `Code`: `system`, `code`, optional `display`), an
+optional ISO-8601 `effective_at`, an optional `value`, and a `provenance`
+(`source`, optional `source_doc`). A `value` is one of:
+
+- `quantity` — a decimal-string `value` and an optional UCUM `unit` (`Code`).
+  Numbers are strings, never floats, so the bytes are exact and reproducible.
+- `coded` — a `Code`.
+- `text` — a string.
+
+### Canonical encoding
+
+Fields are encoded into a deterministic byte string:
+
+- **string** → 4-byte big-endian length ‖ UTF-8 bytes.
+- **option** → `0x00` if absent, else `0x01` ‖ the value's encoding.
+- **`Code`** → `system` ‖ `code` ‖ `display?`.
+- **`kind`** → its wire name (the `snake_case` string above), length-prefixed, so
+  reordering the enum cannot silently change ids.
+- **`value`** → a 1-byte variant tag (`0x00` quantity, `0x01` coded, `0x02` text)
+  followed by its fields in the order listed above.
+
+The **canonical content** is `kind ‖ code? ‖ effective_at? ‖ value?`. It excludes
+`id` and `provenance`, so a fact reported by two sources canonicalizes identically.
+
+### Content-addressed id
+
+```
+id = SHA-256( "svastha/event-id\0" ‖ canonical_content )
+```
+
+The 32-byte hash, lowercase hex. The domain tag is **version-independent** (unlike
+the key-derivation and envelope HKDF labels, which embed `CONTRACT_VERSION` to
+invalidate on a bump): a fact should keep its identity across a contract bump so
+the union/de-dup property survives upgrades.
+
+### Signing
+
+The author signs, with Ed25519:
+
+```
+sign( "svastha/v{VERSION}/event" ‖ id ‖ source ‖ source_doc? )
+```
+
+where `id` is the 32 raw content-id bytes and `source`/`source_doc?` are the
+canonical provenance. Because `id` is a collision-resistant commitment to all
+content, signing `id ‖ provenance` covers the whole record. The `svastha/v{VERSION}/event`
+prefix is version-tagged and domain-separates event signatures from the relay-auth
+handshake and any other Ed25519 use. A `SignedEvent` carries the `event`, the
+`author` (Ed25519 public key), and the `signature`, both as hex.
+
+Test vectors: [`vectors/event.json`](vectors/event.json). Each entry pins a
+structured `event` → its `canon` bytes and `id`; signed entries add a
+`signer_seed`, the `author`, and the (deterministic, RFC 8032) `signature`. Two
+entries differ only in provenance to pin the cross-source id collision. Regenerate
+with `cargo run -p svastha-core --example event_vectors` (only on a deliberate,
+version-bumped contract change).

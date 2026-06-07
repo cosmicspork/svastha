@@ -10,6 +10,7 @@
 //! deliberately changes the derived keys.
 
 use crate::envelope::{DataKey, EnvelopeError, WrappedKey};
+use crate::event::{Event, SignedEvent};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hkdf::Hkdf;
 use sha2::Sha256;
@@ -88,6 +89,15 @@ impl Identity {
     /// to this identity (or was tampered with).
     pub fn unwrap_key(&self, wrapped: &WrappedKey) -> Result<DataKey, EnvelopeError> {
         wrapped.open(&self.encryption, &self.x25519_public())
+    }
+
+    /// Sign an event as this identity. Stamps the content-addressed id (so the
+    /// stored id and the signed id always agree) and signs
+    /// [`Event::signing_bytes`] with this identity's Ed25519 key.
+    pub fn sign_event(&self, mut event: Event) -> SignedEvent {
+        event.id = event.content_id();
+        let signature = self.sign(&event.signing_bytes());
+        SignedEvent::new(event, self.verifying_key().to_bytes(), signature.to_bytes())
     }
 }
 
