@@ -8,3 +8,15 @@ description = "Svastha relay: a zero-knowledge store-and-forward server for encr
 
 [dependencies]
 svastha-core = { path = "../core" }
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Parse the hex auth headers (public key, signature).
+hex = "0.4"
+
+[dev-dependencies]
+# ServiceExt::oneshot drives the router in-process, no port binding.
+tower = "0.5"

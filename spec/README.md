@@ -15,8 +15,7 @@ non-Rust reimplementation or an auditor can validate against the same bytes.
 negotiate on it so independently deployed and self-hosted pieces can coexist.
 
 Status: key derivation, the encryption envelope, the event schema, and the relay
-auth handshake are specified below. The relay blob endpoints are documented here
-as they are implemented.
+wire protocol (auth handshake and blob endpoints) are specified below.
 
 ## Key derivation
 
@@ -210,5 +209,22 @@ a deliberate, version-bumped contract change).
 
 ### Blob endpoints
 
-The authenticated store-and-forward endpoints (blob upload, fetch, list) are
-documented here when the relay server lands.
+All bytes the relay stores are opaque ciphertext; it sees only the owner public
+key (from the auth headers) as routing metadata. Storage is scoped per owner, so
+one identity can never read another's blobs. Two endpoints are open; the rest
+require the auth handshake above.
+
+| Method & path | Auth | Body | Success | Notes |
+|---|---|---|---|---|
+| `GET /health` | — | — | `200 ok` | liveness |
+| `GET /v0/info` | — | — | `200 {"contract_version":N}` | version negotiation |
+| `PUT /v0/blobs/{id}` | yes | ciphertext | `204` | store (or replace) a blob |
+| `GET /v0/blobs/{id}` | yes | — | `200` octets / `404` | fetch the caller's blob |
+| `GET /v0/blobs` | yes | — | `200 {"ids":[...]}` | list the caller's blob ids |
+| `DELETE /v0/blobs/{id}` | yes | — | `204` / `404` | delete the caller's blob |
+
+`{id}` is a client-chosen token, `[A-Za-z0-9._-]`, 1–128 chars, and never `.` or
+`..` (→ `400`); the request body is capped at 16 MiB (→ `413`). A failed or
+missing signature, or a timestamp outside the relay's freshness window, is `401`.
+The relay is stateless and keyless: it never decrypts, holds no user keys, and
+ships as a single static binary for self-hosting.
