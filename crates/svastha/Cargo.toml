@@ -1,0 +1,10 @@
+[package]
+name = "svastha"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Svastha: self-custodial, end-to-end-encrypted, local-first personal medical records. Umbrella crate re-exporting the trust contract."
+
+[dependencies]
+svastha-core = { path = "../core" }
