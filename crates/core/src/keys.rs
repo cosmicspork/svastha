@@ -9,6 +9,7 @@
 //! [`CONTRACT_VERSION`](crate::CONTRACT_VERSION), so bumping the contract version
 //! deliberately changes the derived keys.
 
+use crate::envelope::{DataKey, EnvelopeError, WrappedKey};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hkdf::Hkdf;
 use sha2::Sha256;
@@ -80,6 +81,13 @@ impl Identity {
     /// X25519 Diffie–Hellman against a peer's public key (basis of key wrapping).
     pub fn diffie_hellman(&self, their_public: &PublicKey) -> SharedSecret {
         self.encryption.diffie_hellman(their_public)
+    }
+
+    /// Unwrap a vault data key that was wrapped to this identity's X25519 public
+    /// key. Fails with [`EnvelopeError::Aead`] if the wrapping was not addressed
+    /// to this identity (or was tampered with).
+    pub fn unwrap_key(&self, wrapped: &WrappedKey) -> Result<DataKey, EnvelopeError> {
+        wrapped.open(&self.encryption, &self.x25519_public())
     }
 }
 

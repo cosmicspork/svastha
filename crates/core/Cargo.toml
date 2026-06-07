@@ -22,6 +22,12 @@ ed25519-dalek = { version = "2", features = ["zeroize"] }
 zeroize = "1"
 thiserror = "2"
 
+# Envelope: XChaCha20-Poly1305 payload sealing + X25519 key wrapping (ECIES).
+# rand_core/OsRng supplies nonces and ephemeral keys; on wasm it draws from the
+# browser entropy source already enabled via getrandom's `js` feature below.
+chacha20poly1305 = "0.10"
+rand_core = { version = "0.6", features = ["getrandom"] }
+
 # getrandom backs new-mnemonic generation; the WASM build needs the browser
 # entropy source. Key *derivation* is RNG-free, so this only affects generate().
 [target.'cfg(target_arch = "wasm32")'.dependencies]

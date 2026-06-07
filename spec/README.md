@@ -14,8 +14,8 @@ non-Rust reimplementation or an auditor can validate against the same bytes.
 `svastha_core::CONTRACT_VERSION` tracks breaking changes; clients and relays
 negotiate on it so independently deployed and self-hosted pieces can coexist.
 
-Status: key derivation is specified below. The envelope and relay protocol are
-documented here as they are implemented.
+Status: key derivation and the encryption envelope are specified below. The relay
+protocol is documented here as it is implemented.
 
 ## Key derivation
 
@@ -45,3 +45,50 @@ entry pins `mnemonic` + `passphrase` → `seed_hex` → the two public keys (hex
 The seeds are the canonical BIP39 reference seeds. Regenerate with
 `cargo run -p svastha-core --example derive_vectors` (only on a deliberate,
 version-bumped contract change).
+
+## Encryption envelope
+
+A vault is encrypted under a symmetric **data key** (256-bit). Two operations,
+both using the same AEAD — **XChaCha20-Poly1305** (192-bit nonce, 128-bit tag):
+
+### Payload sealing
+
+Seal a payload under the data key with a random 24-byte nonce. Associated data
+(`aad`) is authenticated but not encrypted, so callers can bind context (e.g. an
+event id) without revealing it.
+
+```
+seal(data_key, plaintext, aad) -> nonce(24) ‖ ciphertext+tag
+```
+
+The wire form is the nonce followed by the AEAD ciphertext (the Poly1305 tag is
+the last 16 bytes). `open` reverses it and rejects any nonce/key/aad mismatch or
+tampering.
+
+### Key wrapping
+
+Wrap the data key to a recipient's X25519 public key (ECIES / sealed-box), so it
+can be shared without the relay ever seeing it unwrapped:
+
+1. The sender generates an **ephemeral X25519 keypair** `(e_sk, e_pk)`.
+2. `shared = X25519(e_sk, recipient_pk)`.
+3. `wrap_key = HKDF-SHA256(ikm = shared, salt = e_pk ‖ recipient_pk,
+   info = "svastha/v{VERSION}/wrap")[..32]`. Both public keys are bound into the
+   salt so the wrapping is pinned to this exchange; the `info` label embeds
+   `{VERSION}` (`CONTRACT_VERSION`, currently `0` → `svastha/v0/wrap`) so a
+   contract bump deliberately invalidates old wrappings.
+4. Seal the 32-byte data key under `wrap_key` (sealing, above, with empty `aad`).
+
+```
+wrap(recipient_pk, data_key) -> e_pk(32) ‖ nonce(24) ‖ ciphertext+tag(48)
+```
+
+Unwrap is the mirror: the recipient computes `shared = X25519(recipient_sk, e_pk)`,
+re-derives `wrap_key` (it knows its own `recipient_pk`), and opens the sealed key.
+
+Test vectors: [`vectors/envelope.json`](vectors/envelope.json). `sealing` entries
+pin `key` + `nonce` + `aad` + `plaintext` → `sealed`; `wrapping` entries pin a
+recipient `seed`, `ephemeral_secret`, `nonce`, and `data_key` → `wrapped` (the
+recipient seed lets a reimplementation exercise unwrap end-to-end). All bytes are
+hex. Regenerate with `cargo run -p svastha-core --example envelope_vectors` (only
+on a deliberate, version-bumped contract change).
