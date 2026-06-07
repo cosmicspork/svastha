@@ -9,7 +9,8 @@ use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use svastha_core::keys::Identity;
 use svastha_core::relay::{sign_request, AuthRequest};
-use svastha_relay::{app, store::MemoryStore};
+use svastha_relay::app;
+use svastha_relay::store::{FsStore, MemoryStore};
 use tower::ServiceExt;
 
 const SKEW: u64 = 300;
@@ -235,4 +236,28 @@ async fn invalid_id_is_bad_request() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn filesystem_store_persists_across_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let alice = Identity::from_seed(b"alice");
+    let blob = b"durable ciphertext";
+
+    // First "process": store a blob through the HTTP layer.
+    let first = app(Arc::new(FsStore::new(dir.path()).unwrap()), SKEW);
+    let put = first
+        .oneshot(signed(&alice, "PUT", "/v0/blobs/rec1", blob, now()))
+        .await
+        .unwrap();
+    assert_eq!(put.status(), StatusCode::NO_CONTENT);
+
+    // A fresh app over the same directory (a "restart") still serves it.
+    let second = app(Arc::new(FsStore::new(dir.path()).unwrap()), SKEW);
+    let get = second
+        .oneshot(signed(&alice, "GET", "/v0/blobs/rec1", b"", now()))
+        .await
+        .unwrap();
+    assert_eq!(get.status(), StatusCode::OK);
+    assert_eq!(body_bytes(get).await, blob);
 }

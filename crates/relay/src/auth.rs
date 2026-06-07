@@ -51,19 +51,19 @@ pub async fn require_auth(
     }
 
     // The signed path is the path plus query string, exactly as sent.
-    let method = parts.method.as_str().to_owned();
+    // `AuthRequest::new` copies these, so borrow `parts` rather than allocate.
+    let method = parts.method.as_str();
     let path = parts
         .uri
         .path_and_query()
         .map(|pq| pq.as_str())
-        .unwrap_or_else(|| parts.uri.path())
-        .to_owned();
+        .unwrap_or_else(|| parts.uri.path());
 
     let bytes = to_bytes(body, MAX_BODY)
         .await
         .map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)?;
 
-    let auth = AuthRequest::new(&method, &path, &bytes, timestamp);
+    let auth = AuthRequest::new(method, path, &bytes, timestamp);
     if !verify_request(&public_key, &signature, &auth) {
         return Err(StatusCode::UNAUTHORIZED);
     }
