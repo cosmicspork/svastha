@@ -22,6 +22,10 @@ web-check:
 build:
     cargo build --workspace
 
+# run the relay server (SVASTHA_RELAY_ADDR, SVASTHA_RELAY_MAX_SKEW_SECS)
+relay-run:
+    cargo run -p svastha-relay
+
 test:
     cargo test --workspace
 
