@@ -225,6 +225,7 @@ require the auth handshake above.
 
 `{id}` is a client-chosen token, `[A-Za-z0-9._-]`, 1–128 chars, and never `.` or
 `..` (→ `400`); the request body is capped at 16 MiB (→ `413`). A failed or
-missing signature, or a timestamp outside the relay's freshness window, is `401`.
+missing signature, or a timestamp outside the relay's freshness window, is `401`;
+a storage failure is `500`.
 The relay is stateless and keyless: it never decrypts, holds no user keys, and
 ships as a single static binary for self-hosting.
