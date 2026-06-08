@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Svastha trust contract: encryption envelope and event schema. Compiles to native and WASM."
+readme = "README.md"
+keywords = ["cryptography", "encryption", "health", "self-custody", "e2ee"]
+categories = ["cryptography"]
 
 [lib]
 crate-type = ["rlib", "cdylib"]

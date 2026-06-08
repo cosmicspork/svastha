@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Svastha: self-custodial, end-to-end-encrypted, local-first personal medical records. Umbrella crate re-exporting the trust contract."
+readme = "README.md"
+keywords = ["medical", "health", "encryption", "self-custody", "local-first"]
+categories = ["cryptography"]
 
 [dependencies]
-svastha-core = { path = "../core" }
+svastha-core = { path = "../core", version = "0.0.0" }

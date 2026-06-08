@@ -5,9 +5,12 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Svastha relay: a zero-knowledge store-and-forward server for encrypted blobs."
+readme = "README.md"
+keywords = ["relay", "encryption", "zero-knowledge", "server", "svastha"]
+categories = ["network-programming", "cryptography"]
 
 [dependencies]
-svastha-core = { path = "../core" }
+svastha-core = { path = "../core", version = "0.0.0" }
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
 tracing = "0.1"
