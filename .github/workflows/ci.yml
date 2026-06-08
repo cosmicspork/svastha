@@ -24,6 +24,16 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
+      # The web build compiles crates/wasm to WASM via wasm-pack (see the
+      # package.json "wasm" script), so the job needs the Rust wasm toolchain.
+      - name: Install Rust (wasm32)
+        run: rustup target add wasm32-unknown-unknown
+      - uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: v0.13.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/wasm
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run check
