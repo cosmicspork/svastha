@@ -4,10 +4,11 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
+    "wasm": "wasm-pack build ../crates/wasm --target web --out-dir ../../web/src/wasm --out-name svastha",
+    "dev": "bun run wasm && vite",
+    "build": "bun run wasm && vite build",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json"
+    "check": "bun run wasm && svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
