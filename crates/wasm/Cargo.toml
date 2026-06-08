@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "WASM bindings: exposes the svastha trust contract to the web app. Wraps svastha-core."
+readme = "README.md"
+keywords = ["wasm", "webassembly", "cryptography", "health", "svastha"]
+categories = ["cryptography", "wasm"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]

@@ -1,0 +1,72 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  # Opens/updates a release PR from the conventional-commit history; merging it
+  # tags the release, cuts the GitHub release, and sets release_created=true.
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: rp
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # Runs only when a release was actually cut (same workflow run, so it isn't
+  # blocked by the GITHUB_TOKEN "don't trigger workflows" rule). Publishes the
+  # five crates to crates.io and the wasm SDK to npm as @svastha/core.
+  publish:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      # Dependency order: core first; the rest depend only on core. Modern cargo
+      # waits for each crate to appear in the index before returning.
+      - name: Publish crates to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          for crate in svastha-core svastha svastha-wasm svastha-relay svastha-node; do
+            echo "publishing $crate"
+            cargo publish -p "$crate"
+          done
+
+      - uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: v0.13.1
+
+      - name: Build the npm SDK (@svastha/core)
+        run: |
+          wasm-pack build crates/wasm --target bundler --scope svastha
+          version=$(jq -r '."."' .release-please-manifest.json)
+          jq --arg v "$version" '.name = "@svastha/core" | .version = $v' \
+            crates/wasm/pkg/package.json > crates/wasm/pkg/package.json.tmp
+          mv crates/wasm/pkg/package.json.tmp crates/wasm/pkg/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
+        run: cd crates/wasm/pkg && npm publish --access public
