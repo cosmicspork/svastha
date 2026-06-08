@@ -261,3 +261,23 @@ async fn filesystem_store_persists_across_restart() {
     assert_eq!(get.status(), StatusCode::OK);
     assert_eq!(body_bytes(get).await, blob);
 }
+
+#[tokio::test]
+async fn cors_preflight_is_allowed() {
+    // A browser PUT with the custom Svastha-* headers triggers this preflight.
+    let resp = router()
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/v0/blobs/rec1")
+                .header("origin", "http://localhost:5173")
+                .header("access-control-request-method", "PUT")
+                .header("access-control-request-headers", "svastha-signature")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(resp.status().is_success());
+    assert!(resp.headers().contains_key("access-control-allow-origin"));
+}

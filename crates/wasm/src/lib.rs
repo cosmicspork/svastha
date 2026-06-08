@@ -12,6 +12,7 @@ use wasm_bindgen::prelude::*;
 use svastha_core::envelope::{DataKey, Sealed};
 use svastha_core::event::{Code, Event, EventKind, EventValue, Provenance, SignedEvent};
 use svastha_core::keys::Identity;
+use svastha_core::relay::{sign_request as relay_sign_request, AuthRequest};
 
 /// Install a panic hook so a Rust panic shows a real message in the browser
 /// console instead of an opaque `unreachable`. Runs once on module load.
@@ -94,6 +95,15 @@ impl WasmIdentity {
         );
         let signed = self.identity.sign_event(event);
         serde_json::to_string(&signed).map_err(to_js)
+    }
+
+    /// Sign a relay request. The canonical signed bytes (method, path, body hash,
+    /// timestamp) are defined once in `core`, so the browser and relay agree. The
+    /// caller sends the returned 64-byte signature plus `ed25519_public_hex` and
+    /// `timestamp` as the `Svastha-*` headers. `path` includes the query string.
+    pub fn sign_request(&self, method: &str, path: &str, body: &[u8], timestamp: u64) -> Vec<u8> {
+        let request = AuthRequest::new(method, path, body, timestamp);
+        relay_sign_request(&self.identity, &request).to_vec()
     }
 }
 

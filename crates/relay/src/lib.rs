@@ -19,6 +19,7 @@ use axum::{
     routing::{get, put},
     Router,
 };
+use tower_http::cors::CorsLayer;
 
 use store::BlobStore;
 
@@ -58,4 +59,8 @@ pub fn app(store: Arc<dyn BlobStore>, max_skew_secs: u64) -> Router {
         .route("/v0/info", get(routes::info))
         .merge(authed)
         .with_state(state)
+        // Outermost, so even rejections (401) carry CORS headers and the browser
+        // can read them. Any origin is safe: auth is a per-request signature with
+        // no cookies, so a hostile origin gains nothing.
+        .layer(CorsLayer::permissive())
 }
