@@ -1,6 +1,6 @@
 [package]
 name = "svastha-node"
-version = "0.0.0"
+version = "0.0.0" # x-release-please-version
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -10,4 +10,4 @@ keywords = ["health", "encryption", "inference", "rag", "svastha"]
 categories = ["cryptography"]
 
 [dependencies]
-svastha-core = { path = "../core", version = "0.0.0" }
+svastha-core = { path = "../core", version = "0.0.0" } # x-release-please-version
