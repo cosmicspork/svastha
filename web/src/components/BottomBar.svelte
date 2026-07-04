@@ -4,9 +4,9 @@
   const kinds: { kind: string; label: string }[] = [
     { kind: 'vitals', label: 'Vitals' },
     { kind: 'symptom', label: 'Symptom' },
-    { kind: 'meds', label: 'Meds' },
+    { kind: 'med', label: 'Meds' },
     { kind: 'food', label: 'Food' },
-    { kind: 'move', label: 'Move' },
+    { kind: 'exercise', label: 'Move' },
     { kind: 'note', label: 'Note' },
   ]
 </script>

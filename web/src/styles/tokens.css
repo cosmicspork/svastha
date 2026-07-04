@@ -24,6 +24,19 @@
   --danger: #a33a3a;
   --danger-muted: #f4e1e1;
 
+  /* Spine/chip category hues — deliberately distinct from --person-a/b so a
+     category dot is never mistaken for the owner-hue spine rule. Placeholder
+     palette; a design pass can retune the exact values without touching
+     anything that reads them. */
+  --cat-vital: #3d6f91;
+  --cat-symptom: #8a4a6e;
+  --cat-med: #5c56a0;
+  --cat-food: #a98a2e;
+  --cat-exercise: #2f7f7a;
+  --cat-note: #5c6b64;
+  --cat-clinical: #556074;
+  --cat-other: #7c8a83;
+
   /* --- type --- */
   --font-display: 'Young Serif', serif;
   --font-body: 'Atkinson Hyperlegible', system-ui, sans-serif;
@@ -78,5 +91,14 @@
 
     --danger: #e07a7a;
     --danger-muted: #3a2223;
+
+    --cat-vital: #7fa8c8;
+    --cat-symptom: #c98bab;
+    --cat-med: #a79bdb;
+    --cat-food: #d1b45e;
+    --cat-exercise: #5fb3ac;
+    --cat-note: #93a39c;
+    --cat-clinical: #8b96ad;
+    --cat-other: #a9b3ac;
   }
 }
