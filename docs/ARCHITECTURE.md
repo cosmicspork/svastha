@@ -18,6 +18,11 @@ trust contract: the crypto envelope, the event schema, or the relay protocol.
   relay that cannot read anything, which is fine and useful).
 - **Local-first.** The app works offline against on-device storage. The network
   is for backup and, later, sync and sharing.
+- **Lived data.** The record is not just imported clinical history: self-tracked
+  vitals, symptoms, medications, food, and exercise are first-class events in the
+  same log, so reactions can be traced back to their inputs. The binding UX
+  constraint is entry friction — logging must be fast enough to happen every
+  day, or the record never contains the data that makes patterns findable.
 
 ## The trust contract (`crates/core`)
 
@@ -61,6 +66,17 @@ unrecoverable loss is a problem.
   data, and the UX must say so.
 - **Key discovery** is out of band (in-person QR, short verification codes),
   because the sharing graph is mostly people who physically meet.
+
+The first shipped slice of this model is deliberately narrow: **whole-vault,
+ongoing, read-only sharing between two people in one household.** Each vault
+keeps a single writer — the owner logs, the other person reads — so no
+multi-writer merge machinery is needed yet. The relay learns only the grant edge
+(routing metadata, consistent with zero-knowledge); the wrapped vault key travels
+through a store-and-forward mailbox. Filtered grants, terms, and the research
+marketplace remain later work, and revocation is still key rotation with the same
+caveat: it cannot retract already-decrypted data, and the UI must say so. (The
+relay's grant and mailbox endpoints are specified in the Relay section as that
+phase lands.)
 
 ## Event model
 
@@ -143,11 +159,19 @@ power users can run everything locally, from the same codebase.
 
 ## Roadmap
 
-- **v1.** Ingest US EHR exports (C-CDA, FHIR), self-track vitals, local-first PWA
-  plus encrypted cloud backup. No sharing, sync-merge, marketplace, or India yet.
+- **v1 (in progress).** Quick-log lifestyle events (vitals, symptoms, meds, food,
+  exercise, notes); local-first PWA with IndexedDB storage and a
+  passphrase-wrapped seed at rest (custody scheme specified in the Web section as
+  that work lands); encrypted relay backup with multi-device restore from the
+  mnemonic (client blob layout documented alongside the sync work);
+  single-writer, read-only household sharing (relay grants plus a wrapped-key
+  mailbox); client-side import of US EHR exports (Epic C-CDA in IHE XDM packages,
+  FHIR R4 bundles) keeping verbatim provenance blobs; correlation timeline over a
+  thin last-writer-wins curation overlay.
 - **v2.** India document ingestion (OCR, handwriting, human-in-the-loop).
-- **Later.** Multi-writer sync, family and caregiver sharing, the research
-  marketplace, ABDM, native device and health-app integration.
+- **Later.** Multi-writer sync, filtered grants and terms (family and caregiver
+  access beyond the household pair), the research marketplace, ABDM, native
+  device and health-app integration.
 
 ## Keep in sync
 
