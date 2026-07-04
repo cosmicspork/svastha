@@ -1,0 +1,82 @@
+/* Design tokens: the only place color, type, and spacing values are chosen.
+   Everything else in the app references these custom properties. */
+
+:root {
+  color-scheme: light dark;
+
+  /* --- color: light --- */
+  --bg: #f2f5f1; /* porcelain */
+  --text: #22312c; /* ink */
+  --action: #3e6b4f; /* fern */
+  --person-a: #4a5899; /* indigo */
+  --person-b: #b0575f; /* madder */
+  --flare: #c98a2d; /* amber */
+
+  --surface: #fafcf9; /* card/panel bg, a hair lighter than --bg */
+  --muted: #5c6b64; /* secondary text, ink softened toward bg */
+  --border: #dde3da; /* hairlines, ink softened further toward bg */
+
+  --action-muted: #e3ece6; /* fern tint, e.g. hover/active surfaces */
+  --person-a-muted: #e4e6f1;
+  --person-b-muted: #f4e2e3;
+  --flare-muted: #f5e8d3;
+
+  --danger: #a33a3a;
+  --danger-muted: #f4e1e1;
+
+  /* --- type --- */
+  --font-display: 'Young Serif', serif;
+  --font-body: 'Atkinson Hyperlegible', system-ui, sans-serif;
+  --font-data: 'IBM Plex Mono', ui-monospace, monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.5rem;
+  --text-2xl: 2rem;
+  --text-3xl: 2.5rem;
+
+  /* --- spacing --- */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+
+  /* --- shape --- */
+  --radius-sm: 0.375rem;
+  --radius-lg: 0.75rem;
+
+  /* --- motion --- */
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+}
+
+/* Dark tints lighten each hue slightly — a straight value swap on a dark bg
+   would undersaturate and fail contrast, so accent hues get a touch more
+   lightness/chroma here, not just an inverted background. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161d1a;
+    --text: #dce4df;
+    --action: #5c9172;
+    --person-a: #7c89c4;
+    --person-b: #d08890;
+    --flare: #e0a84a;
+
+    --surface: #1e2622;
+    --muted: #93a39c;
+    --border: #2c3733;
+
+    --action-muted: #223229;
+    --person-a-muted: #262b3c;
+    --person-b-muted: #3a2528;
+    --flare-muted: #3a3020;
+
+    --danger: #e07a7a;
+    --danger-muted: #3a2223;
+  }
+}

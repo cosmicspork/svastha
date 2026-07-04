@@ -4,9 +4,7 @@
 // browser and relay agree exactly. The relay stores opaque ciphertext — seal
 // before uploading and open after downloading (see `WasmDataKey`).
 import type { WasmIdentity } from './svastha'
-
-const toHex = (b: Uint8Array) =>
-  Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
+import { toHex } from './hex'
 
 export class RelayClient {
   /**

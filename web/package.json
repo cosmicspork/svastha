@@ -8,7 +8,8 @@
     "dev": "bun run wasm && vite",
     "build": "bun run wasm && vite build",
     "preview": "vite preview",
-    "check": "bun run wasm && svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
+    "check": "bun run wasm && svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json && vitest run",
+    "test": "vitest run",
     "e2e": "playwright test"
   },
   "devDependencies": {
@@ -16,9 +17,17 @@
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
     "@tsconfig/svelte": "^5.0.8",
     "@types/node": "^24.12.3",
+    "fake-indexeddb": "^6.2.5",
     "svelte": "^5.55.5",
     "svelte-check": "^4.4.8",
     "typescript": "~6.0.2",
-    "vite": "^8.0.12"
+    "vite": "^8.0.12",
+    "vite-plugin-pwa": "^1.3.0",
+    "vitest": "^4.1.9"
+  },
+  "dependencies": {
+    "@fontsource/atkinson-hyperlegible": "^5.2.8",
+    "@fontsource/ibm-plex-mono": "^5.2.7",
+    "@fontsource/young-serif": "^5.2.7"
   }
 }

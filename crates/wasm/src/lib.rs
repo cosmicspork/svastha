@@ -157,6 +157,12 @@ impl WasmDataKey {
         let sealed = Sealed::from_bytes(sealed).map_err(to_js)?;
         self.key.open(&sealed, aad).map_err(to_js)
     }
+
+    /// The raw 32 key bytes, so the vault key itself can be sealed into local
+    /// keyvault storage (wrapped under the passphrase-derived key).
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.key.to_bytes().to_vec()
+    }
 }
 
 /// Verify a `SignedEvent` JSON: does the signature bind this exact event to its
