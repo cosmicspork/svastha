@@ -17,7 +17,7 @@ trust contract: the crypto envelope, the event schema, or the relay protocol.
   centralized *service* (the thing to avoid) from centralized *infrastructure* (a
   relay that cannot read anything, which is fine and useful).
 - **Local-first.** The app works offline against on-device storage. The network
-  is for backup and, later, sync and sharing.
+  is for backup, sync, and sharing.
 - **Lived data.** The record is not just imported clinical history: self-tracked
   vitals, symptoms, medications, food, and exercise are first-class events in the
   same log, so reactions can be traced back to their inputs. The binding UX
@@ -230,7 +230,7 @@ A Svelte 5 PWA (bun + Vite), local-first, with on-device storage (IndexedDB). It
 consumes `core` over WASM, so the browser runs the exact same envelope code as the
 servers. Plain Svelte plus a small router, not SvelteKit (no SSR: the server
 cannot read the data). `vite-plugin-pwa` provides the offline shell and
-installability (added as the PWA work begins).
+installability.
 
 **Seed custody.** The mnemonic is passphrase-wrapped at rest, not stored in the
 clear: a passphrase runs through PBKDF2-SHA256 (600,000 iterations, a random
@@ -330,7 +330,7 @@ power users can run everything locally, from the same codebase.
 
 ## Roadmap
 
-- **v1 (in progress).** Quick-log lifestyle events (vitals, symptoms, meds, food,
+- **v1 (shipped in v0.1.0).** Quick-log lifestyle events (vitals, symptoms, meds, food,
   exercise, notes); local-first PWA with IndexedDB storage and a
   passphrase-wrapped seed at rest (custody scheme specified in the Web section as
   that work lands); encrypted relay backup with multi-device restore from the
