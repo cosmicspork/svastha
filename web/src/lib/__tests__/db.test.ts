@@ -11,12 +11,40 @@ describe('MIGRATIONS', () => {
     const db = await openDb()
     expect(db.version).toBe(MIGRATIONS.length)
     expect([...db.objectStoreNames].sort()).toEqual(
-      ['events', 'keyvault', 'prefs', 'provenance', 'sync'].sort(),
+      ['events', 'keyvault', 'prefs', 'provenance', 'shared_events', 'shares', 'sync'].sort(),
     )
 
     const tx = db.transaction('events', 'readonly')
     const events = tx.objectStore('events')
     expect([...events.indexNames].sort()).toEqual(['effective_at', 'kind'].sort())
+
+    const sharedTx = db.transaction('shared_events', 'readonly')
+    expect([...sharedTx.objectStore('shared_events').indexNames]).toEqual(['by-owner'])
+  })
+})
+
+describe('shares and shared_events (v2)', () => {
+  it('round-trips a share (explicit-keyPath store)', async () => {
+    const share = {
+      ownerEd: 'a'.repeat(64),
+      ownerX: 'b'.repeat(64),
+      label: 'Partner',
+      wrappedKeyHex: 'ab',
+      hue: 'b' as const,
+      acceptedAt: '2026-01-01T00:00:00Z',
+    }
+    await put('shares', share)
+    expect(await get('shares', share.ownerEd)).toEqual(share)
+  })
+
+  it('round-trips a compound-keyPath shared event and queries it by owner', async () => {
+    const ownerEd = 'a'.repeat(64)
+    const row = { ownerEd, id: 'evt-1', event: { event: { id: 'evt-1' } } }
+    await put('shared_events', row)
+    expect(await get('shared_events', [ownerEd, 'evt-1'])).toEqual(row)
+
+    const byOwner = await getAllFromIndex('shared_events', 'by-owner', IDBKeyRange.only(ownerEd))
+    expect(byOwner).toEqual([row])
   })
 })
 

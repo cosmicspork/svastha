@@ -75,8 +75,16 @@ multi-writer merge machinery is needed yet. The relay learns only the grant edge
 through a store-and-forward mailbox. Filtered grants, terms, and the research
 marketplace remain later work, and revocation is still key rotation with the same
 caveat: it cannot retract already-decrypted data, and the UI must say so. (The
-relay's grant and mailbox endpoints are specified in the Relay section as that
-phase lands.)
+relay's grant and mailbox endpoints are specified in the Relay section below;
+the wire contract is in `spec/README.md`.)
+
+Identity exchange for this slice is a single self-describing code —
+`svastha1:{ed25519_hex}:{x25519_hex}:{label}` — shown as a QR and as
+selectable text, exchanged out of band (in person, or over a channel both
+people already trust) and pasted into the other person's Share screen. Neither
+key is secret; what the code saves is transcription, and a short fingerprint
+(derived from the Ed25519 key) lets both sides confirm they exchanged the
+right code before granting anything.
 
 ## Event model
 
@@ -115,12 +123,22 @@ Svastha keeps a lean, FHIR-informed shape and reuses the standard code systems
 
 ## Relay (`crates/relay`)
 
-A zero-knowledge store-and-forward server (planned: axum + tokio). It stores and
+A zero-knowledge store-and-forward server (axum + tokio). It stores and
 forwards encrypted blobs it cannot read, holds no keys, and only verifies client
 auth signatures (Ed25519). It is connection-heavy (clients want a "new data"
 push), which suits an async Rust server and ships as a single static binary for
 trivial self-hosting. It depends on `core` only for the signature-verify
 primitives, not the envelope.
+
+**Grants and mailbox.** Household sharing adds two more stores alongside blobs,
+both still pure routing metadata: a grant store (owner authorizes grantee to
+read, queried in both directions so a device can list who it shares with and
+who shares with it) and a mailbox store (a store-and-forward drop box any
+authed identity may deposit into, used to hand a grantee the wrapped vault key
+a grant alone doesn't carry). `GET /v0/shared/{owner}/blobs...` answers `404`
+identically for "no such blob" and "no grant," so probing never leaks the
+sharing graph. See `spec/README.md`'s "Grants" and "Mailbox" subsections for
+the endpoint contract.
 
 ## Node (`crates/node`, later release)
 

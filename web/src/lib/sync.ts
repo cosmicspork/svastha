@@ -17,6 +17,7 @@ import { get, put, getAll } from './db'
 import { verify_event } from './svastha'
 import type { StoredEvent } from './events'
 import { writable } from 'svelte/store'
+import { checkMailboxForInvites, pullShared, teardownSharing } from './shared'
 
 /** The relay surface this engine needs — narrower than `RelayClient` so
  * tests can supply an in-memory fake without fighting `RelayClient`'s
@@ -305,6 +306,12 @@ export async function pullAll(): Promise<void> {
     void drain()
   }
 
+  // Sharing rides the same pull cycle: surface any new mailbox invites, then
+  // pull whatever accepted shares have new events, after this device's own
+  // pull/push reconcile above.
+  await checkMailboxForInvites()
+  await pullShared()
+
   patchStatus({ lastPullAt: new Date().toISOString() })
 }
 
@@ -378,6 +385,7 @@ export function syncTeardown(): void {
   vaultKey = null
   draining = false
   patchStatus({ configured: false })
+  teardownSharing()
   void clearEventsHook()
   if (typeof window !== 'undefined') {
     window.removeEventListener('online', handleOnline)

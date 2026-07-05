@@ -8,6 +8,7 @@ import { session } from './session.svelte'
 import { resealVaultKey } from './keyvault'
 import { fromHex } from './hex'
 import { syncInit } from './sync'
+import { configureSharing } from './shared'
 
 const VAULT_KEY_BLOB_ID = 'vault.key'
 
@@ -65,4 +66,9 @@ export async function connectRelay(relay: RelayClient): Promise<void> {
   await ensureVaultKeyBlob(relay)
   if (!session.vaultKey) throw new Error('Session is locked.')
   syncInit(relay, session.vaultKey)
+  // `relay` (a `RelayClient`) and `session.identity` (a `WasmIdentity`) satisfy
+  // sharing's narrower `SharingClient`/`UnwrapIdentity` interfaces structurally
+  // — see shared.ts's doc comment on why it takes these in rather than reading
+  // the session itself.
+  if (session.identity) configureSharing(relay, session.identity)
 }
