@@ -107,9 +107,9 @@ current `main`.
     ghcr.io/cosmicspork/svastha-relay:latest
   ```
 
-  Publishes the relay's port and mounts a volume at `/data` for durable
-  storage — without it, blobs, grants, and mailbox items live in memory and
-  are lost on restart.
+  Publishes the relay's port and mounts a volume at `/data` so records survive
+  container replacement (the image always writes to `/data`; without a named
+  volume the data lives only in the container's own filesystem layer).
 
 ## Self-hosting the PWA
 
