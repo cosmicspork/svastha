@@ -16,6 +16,14 @@ export interface TimelineEntry {
   value: string
   /** Symptom severity >= 7 — the amber correlation marker. */
   flare: boolean
+  /** Every raw event id folded into this entry (a BP pair, a multi-item meal,
+   * or — the common case — just one). The curation overlay (tags, hide) is
+   * keyed per event id, not per presentational group; the spine simplifies by
+   * reading/writing curation against `eventIds[0]` only (see SpineEntry) —
+   * correct for the single-event groups curation is actually used on today
+   * (a symptom, a note) and a documented simplification for the multi-event
+   * ones. */
+  eventIds: string[]
 }
 
 export interface TimelineDay {
@@ -88,7 +96,10 @@ function formatExercise(events: Ev[]): { label: string; value: string } {
   return { label: activity ?? 'Exercise', value: q ? `${q.value} ${q.unit}`.trim() : '' }
 }
 
-function formatGroup(category: Category, events: Ev[]): Omit<TimelineEntry, 'effective_at' | 'category'> {
+function formatGroup(
+  category: Category,
+  events: Ev[],
+): Omit<TimelineEntry, 'effective_at' | 'category' | 'eventIds'> {
   switch (category) {
     case 'vital':
       return { ...formatVitals(events), flare: false }
@@ -141,6 +152,7 @@ export function buildTimeline(events: StoredEvent[], filter: Category | 'all'): 
     day.entries.push({
       effective_at: group.effective_at,
       category: group.category,
+      eventIds: group.events.map((e) => e.id),
       ...formatGroup(group.category, group.events),
     })
     days.set(key, day)

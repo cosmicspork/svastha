@@ -11,7 +11,7 @@ describe('MIGRATIONS', () => {
     const db = await openDb()
     expect(db.version).toBe(MIGRATIONS.length)
     expect([...db.objectStoreNames].sort()).toEqual(
-      ['events', 'keyvault', 'prefs', 'provenance', 'shared_events', 'shares', 'sync'].sort(),
+      ['curation', 'events', 'keyvault', 'prefs', 'provenance', 'shared_events', 'shares', 'sync'].sort(),
     )
 
     const tx = db.transaction('events', 'readonly')
@@ -20,6 +20,20 @@ describe('MIGRATIONS', () => {
 
     const sharedTx = db.transaction('shared_events', 'readonly')
     expect([...sharedTx.objectStore('shared_events').indexNames]).toEqual(['by-owner'])
+
+    const curationTx = db.transaction('curation', 'readonly')
+    expect([...curationTx.objectStore('curation').indexNames]).toEqual(['updated_at'])
+  })
+})
+
+describe('curation (v3)', () => {
+  it('round-trips a curation record (keyPath store) and queries by updated_at', async () => {
+    const record = { key: 'tag:evt-1', value: { tags: ['flare'] }, updated_at: 1_000, author: 'a'.repeat(64) }
+    await put('curation', record)
+    expect(await get('curation', 'tag:evt-1')).toEqual(record)
+
+    const byUpdatedAt = await getAllFromIndex('curation', 'updated_at', IDBKeyRange.lowerBound(500))
+    expect(byUpdatedAt).toEqual([record])
   })
 })
 

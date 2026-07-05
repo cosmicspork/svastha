@@ -1,16 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { get as storeGet } from 'svelte/store'
-import { deleteDb, put } from '../db'
+import { deleteDb, put, get as dbGet } from '../db'
 import {
   idsToPull,
   idsToPush,
   enqueue,
   drain,
+  pullAll,
   configure,
+  registerCodec,
   syncStatus,
   BACKOFF_SCHEDULE_MS,
   type BlobClient,
   type SealKey,
+  type Codec,
 } from '../sync'
 
 // deleteDb() (not a raw indexedDB.deleteDatabase call) so the module's
@@ -71,8 +74,12 @@ describe('idsToPull', () => {
   })
 
   it('ignores ids with no registered codec prefix', () => {
-    // 'cur-' (the curation overlay) is reserved but not yet registered; see
-    // docs/ARCHITECTURE.md's blob namespace table.
+    // 'vault.key' has no codec at all. 'cur-' (the curation overlay) DOES have
+    // one (curation.ts, registered dynamically from this module's `configure`
+    // — see its module doc comment), but nothing in this test file has
+    // triggered that dynamic import yet, so as of this assertion it's still
+    // unregistered here too. See curation.test.ts for 'cur-' coverage once
+    // registered.
     expect(idsToPull(['ev-aaa', 'cur-bbb', 'vault.key'], new Set())).toEqual(['ev-aaa'])
   })
 
@@ -170,6 +177,64 @@ describe('provenance codec (doc-)', () => {
 
     expect(relay.blobs.has('doc-missing')).toBe(false)
     expect(storeGet(syncStatus).pendingCount).toBe(0)
+  })
+})
+
+describe('mutable codec (Codec.mutable — the shape cur- relies on)', () => {
+  // A minimal fake mutable codec, registered once for this file (`registerCodec`
+  // has no unregister — matches how curation.ts's real 'cur-' codec is
+  // registered permanently for the app's lifetime too). Backed by a plain
+  // in-memory Map rather than the real `curation` IDB store, so this exercises
+  // sync.ts's own mutable-aware plumbing (idsToPull/enqueue/pullAll) in
+  // isolation from curation.ts's LWW logic (covered separately in
+  // curation.test.ts).
+  const store = new Map<string, string>()
+  const mutableCodec: Codec = {
+    prefix: 'mut-',
+    mutable: true,
+    async localHas(id) {
+      return store.has(id)
+    },
+    async localLoad(id) {
+      const v = store.get(id)
+      return v === undefined ? null : new TextEncoder().encode(v)
+    },
+    async remoteApply(id, plaintext) {
+      store.set(id, new TextDecoder().decode(plaintext))
+    },
+  }
+  registerCodec(mutableCodec)
+
+  it('idsToPull always includes a mutable id, even if already marked done', () => {
+    expect(idsToPull(['mut-a'], new Set(['mut-a']))).toEqual(['mut-a'])
+  })
+
+  it('enqueue re-queues a mutable id for push even if already marked done', async () => {
+    await put('sync', { id: 'mut-a', state: 'done', updated_at: new Date().toISOString() })
+    await enqueue(['mut-a'])
+    expect(await dbGet<{ state: string }>('sync', 'mut-a')).toMatchObject({ state: 'pending' })
+  })
+
+  it('pullAll re-fetches and re-applies a mutable id every time, not just once', async () => {
+    store.set('mut-a', 'local-value') // localHas('mut-a') is already true
+    const relay: BlobClient = {
+      async putBlob() {},
+      async getBlob(id) {
+        return id === 'mut-a' ? new TextEncoder().encode('remote-value') : null
+      },
+      async listBlobs() {
+        return ['mut-a']
+      },
+    }
+    configure(relay, passthroughSealKey())
+
+    await pullAll()
+    expect(store.get('mut-a')).toBe('remote-value') // localHas alone didn't short-circuit the fetch
+
+    // A second pull re-fetches again rather than treating the first as final.
+    store.set('mut-a', 'stale-again')
+    await pullAll()
+    expect(store.get('mut-a')).toBe('remote-value')
   })
 })
 

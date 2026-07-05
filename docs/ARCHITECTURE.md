@@ -105,6 +105,66 @@ This keeps conflict handling light even with multiple concurrent writers (for
 example a caregiver and the patient), so a heavyweight CRDT framework is not
 required; an encrypted multi-writer event log carries the load.
 
+### Curation overlay
+
+The event log above is append-only by design (immutable clinical history), but
+the whole point of logging lifestyle data is to look back and spot a pattern —
+which needs a little bit of mutable state layered on top: tags, hides, and
+notes on individual events, plus favorite quick-log templates. This overlay is
+deliberately **not** part of the trust contract (`core` only ever knows about
+signed, immutable events) and lives entirely in the web client
+(`web/src/lib/curation.ts`).
+
+A `CurationRecord` is `{ key, value, updated_at, author }`:
+
+- `key` namespaces what's being curated: `tag:{event_id}` (`{ tags: string[]
+  }`), `note:{event_id}` (`{ text }`), `hide:{event_id}` (`{ hidden: true }`),
+  and `fav:{category}:{hash}` (a favorited draft template, keyed on a hash of
+  its label — see below).
+- `value` is namespace-defined and opaque to the merge rule below.
+- `updated_at` is a plain client clock (unix milliseconds), not a signed or
+  server-attested timestamp.
+- `author` is the writer's Ed25519 hex identity.
+
+**Merge rule: last-writer-wins.** Whichever record has the higher `updated_at`
+wins; a tie breaks on the lexicographically greater `author` hex. This is
+deterministic (every device that sees the same two records computes the same
+winner) without a shared clock, a negotiation round trip, or CRDT machinery —
+appropriate for a field this small (a tag list, a boolean, a short note).
+
+**Deliberately unsigned.** Every other record in this system is signed; a
+`CurationRecord` is not. In today's single-writer vault, possessing the vault
+key already implies you're the one legitimate writer — the AEAD seal on the
+blob (see "Sync and backup" below) is the authenticity boundary, the same way
+`vault.key`'s wrapping is its own proof of legitimate possession without an
+extra signature. Once vaults gain multiple writers, this assumption breaks
+(two writers sharing a vault key could not be told apart by `author` alone)
+and curation records will need their own signatures — revisit then.
+
+**Sync.** Curation records use the `cur-{sha256_hex(key)}` blob id (see the
+namespace table below) and, unlike `ev-`/`doc-` blobs, are **mutable**: a
+write `PUT`s over the existing blob rather than minting a new id. Pull fetches
+every `cur-*` id and LWW-merges each into the local `curation` store; if the
+remote record loses the merge, the local (winning) record is re-enqueued for
+push so the relay converges on the true winner instead of serving a stale
+value forever. Curation is scoped at hundreds of records even for a
+years-long, heavily-tagged log, so a full-listing pull (no pagination, no
+per-blob etag) is adequate for v1; both are natural future hardening as the
+"no manifest" section below already flags for the `ev-`/`doc-` namespaces.
+
+**Owner-only in v1.** Shared (read-only household) pulls fetch only `ev-*`
+blobs — a share never touches `cur-*`. The owner's tags, hides, and notes are
+their own working state, not something to project onto someone reading their
+shared record.
+
+**Favorites migration.** Favorited quick-log templates used to live in a
+single device-local `prefs` key; they now live under `fav:` curation records
+so they follow the person to a second device the same way tags do. A one-time
+migration copies any pre-existing favorites over the first time curation
+loads; the old `prefs` key is left in place afterward (harmless dead data)
+rather than deleted, since deleting it buys nothing and risks a data-loss bug
+for no benefit.
+
 ## Data model and interop
 
 FHIR and C-CDA are interface formats, used only at the boundary. They are too
@@ -204,7 +264,7 @@ by prefix:
 | `ev-{event_id_hex}` | one sealed `SignedEvent` (JSON) |
 | `vault.key` | the vault data key, wrapped to the owner's own X25519 key |
 | `doc-{sha256_hex}` | one imported source document's verbatim bytes (name + base64 bytes, JSON), keyed by its own content hash |
-| `cur-*` | reserved (curation overlay, later PR) |
+| `cur-{sha256_hex(key)}` | one curation overlay record (tag/note/hide/favorite — see the Event model's "Curation overlay" subsection), keyed by the hash of its own app-level `key`. Unlike `ev-`/`doc-`, this blob is **mutable**: a write `PUT`s over the existing id rather than minting a new one. |
 
 **AAD = blob id.** Every blob sealed under the vault key uses the UTF-8 bytes
 of its own blob id as the AEAD associated data. The relay stores opaque

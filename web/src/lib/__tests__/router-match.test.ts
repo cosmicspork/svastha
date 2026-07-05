@@ -28,6 +28,7 @@ describe('matchRoute', () => {
     expect(matchRoute('#/settings')).toEqual({ path: '/settings', params: {} })
     expect(matchRoute('#/share')).toEqual({ path: '/share', params: {} })
     expect(matchRoute('#/import')).toEqual({ path: '/import', params: {} })
+    expect(matchRoute('#/correlate')).toEqual({ path: '/correlate', params: {} })
   })
 
   it('captures the person route dynamic segment', () => {

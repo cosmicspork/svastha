@@ -19,6 +19,7 @@ const KNOWN_PATTERNS = [
   '/share',
   '/person/:ed',
   '/import',
+  '/correlate',
 ]
 
 /** Split a pattern and a concrete path into same-length segment arrays, or

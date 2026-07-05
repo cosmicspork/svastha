@@ -4,12 +4,16 @@
   import { allEvents, type StoredEvent } from '../lib/events'
   import { buildTimeline, categoriesPresent } from '../lib/timeline'
   import { CATEGORIES, CATEGORY_META, type Category } from '../lib/category'
+  import { allCurationByPrefix, allTags, setHidden } from '../lib/curation'
   import SpineEntry from './SpineEntry.svelte'
+  import TagChips from './TagChips.svelte'
 
   // `readonly` (the person screen, over a share's cached events) supplies its
-  // own already-loaded `events` and skips the own-vault fetch and the shared
-  // `spine-filter` pref — a shared timeline's filter shouldn't clobber (or be
-  // clobbered by) the owner's own spine.
+  // own already-loaded `events` and skips the own-vault fetch, the shared
+  // `spine-filter` pref, and all curation reads/writes — a shared timeline's
+  // filter shouldn't clobber (or be clobbered by) the owner's own spine, and
+  // curation is owner-only in v1 (see docs/ARCHITECTURE.md, "Sync and
+  // backup" — shared pulls never fetch `cur-*`).
   let {
     hue,
     events: providedEvents,
@@ -27,8 +31,24 @@
   let visibleDays = $state(60)
   let animate = $state(true)
 
+  let tagsByEvent = $state<Map<string, string[]>>(new Map())
+  let hiddenEvents = $state<Set<string>>(new Set())
+  let allTagsList = $state<string[]>([])
+  let selectedTags = $state<Set<string>>(new Set())
+
   const days = $derived(buildTimeline(events, filter))
-  const shown = $derived(days.slice(0, visibleDays))
+  const filteredDays = $derived.by(() => {
+    if (selectedTags.size === 0) return days
+    return days
+      .map((day) => ({
+        ...day,
+        entries: day.entries.filter((e) =>
+          e.eventIds.some((id) => (tagsByEvent.get(id) ?? []).some((t) => selectedTags.has(t))),
+        ),
+      }))
+      .filter((day) => day.entries.length > 0)
+  })
+  const shown = $derived(filteredDays.slice(0, visibleDays))
   const present = $derived(new Set(categoriesPresent(events)))
   const filterChips = $derived(CATEGORIES.filter((c) => present.has(c)))
 
@@ -44,6 +64,26 @@
     return offsets
   })
 
+  async function loadCuration() {
+    const [tagRecords, hideRecords, tags] = await Promise.all([
+      allCurationByPrefix('tag:'),
+      allCurationByPrefix('hide:'),
+      allTags(),
+    ])
+    tagsByEvent = new Map(
+      tagRecords.map((r) => [
+        r.key.slice('tag:'.length),
+        (r.value as { tags?: string[] } | undefined)?.tags ?? [],
+      ]),
+    )
+    hiddenEvents = new Set(
+      hideRecords
+        .filter((r) => (r.value as { hidden?: boolean } | undefined)?.hidden === true)
+        .map((r) => r.key.slice('hide:'.length)),
+    )
+    allTagsList = tags
+  }
+
   onMount(async () => {
     // Readonly callers (Person.svelte) already awaited their events before
     // rendering this component, so there's nothing left to load here.
@@ -54,6 +94,7 @@
     const storedFilter = await get<Category | 'all'>('prefs', 'spine-filter')
     if (storedFilter) filter = storedFilter
     ownEvents = await allEvents()
+    await loadCuration()
     loaded = true
     // One-shot: after the entrance has played, later re-renders (filter
     // changes, "Show older") appear instantly.
@@ -65,6 +106,27 @@
     animate = false
     if (!readonly) await put('prefs', next, 'spine-filter')
   }
+
+  function toggleTagFilter(tag: string) {
+    const next = new Set(selectedTags)
+    if (next.has(tag)) next.delete(tag)
+    else next.add(tag)
+    selectedTags = next
+  }
+
+  async function handleTagsChanged(eventId: string, tags: string[]) {
+    tagsByEvent = new Map(tagsByEvent).set(eventId, tags)
+    allTagsList = await allTags()
+  }
+
+  async function handleToggleHidden(eventId: string, hidden: boolean) {
+    await setHidden(eventId, hidden)
+    const next = new Set(hiddenEvents)
+    if (hidden) next.add(eventId)
+    else next.delete(eventId)
+    hiddenEvents = next
+  }
+
 </script>
 
 {#if loaded}
@@ -96,6 +158,10 @@
     </div>
   {/if}
 
+  {#if !readonly && allTagsList.length > 0}
+    <TagChips tags={allTagsList} selected={selectedTags} onToggle={toggleTagFilter} testIdPrefix="spine-tag-filter" />
+  {/if}
+
   <div class="spine" style:--spine-color={`var(--person-${hue})`}>
     <div class="rule"></div>
     {#if events.length === 0}
@@ -119,11 +185,16 @@
               {entry}
               {animate}
               delay={Math.min((dayOffsets[dayIndex] + i) * 20, 250)}
+              tags={readonly ? [] : (tagsByEvent.get(entry.eventIds[0]) ?? [])}
+              hidden={!readonly && hiddenEvents.has(entry.eventIds[0])}
+              editable={!readonly}
+              onTagsChanged={handleTagsChanged}
+              onToggleHidden={handleToggleHidden}
             />
           {/each}
         </section>
       {/each}
-      {#if days.length > visibleDays}
+      {#if filteredDays.length > visibleDays}
         <button
           type="button"
           class="show-older"

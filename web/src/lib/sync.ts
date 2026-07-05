@@ -39,6 +39,20 @@ export interface SealKey {
  * here the same way the events codec (below) does. */
 export interface Codec {
   prefix: string
+  /**
+   * `ev-`/`doc-` blob ids are content-addressed: once a device has pushed or
+   * pulled one, that id's content can never change, so "already handled" is
+   * permanent (`idsToPull`'s `doneIds` filtering, and `pullAll`'s
+   * `localHas`-then-skip below, both lean on this). `cur-` blobs are the one
+   * namespace where that's false — the SAME id gets `PUT` over with new
+   * content on every write (see docs/ARCHITECTURE.md's "Curation overlay").
+   * Setting `mutable: true` opts a codec out of both of those
+   * once-and-done shortcuts: its ids are always re-pulled (never filtered by
+   * `doneIds`), always re-fetched-and-applied (never skipped just because
+   * `localHas` is true), and always re-enqueued by a fresh local write (never
+   * skipped by `enqueue`'s "already done" check). Defaults to `false`.
+   */
+  mutable?: boolean
   localHas(id: string): Promise<boolean>
   localLoad(id: string): Promise<Uint8Array | null>
   remoteApply(id: string, plaintext: Uint8Array): Promise<void>
@@ -52,6 +66,10 @@ export function registerCodec(codec: Codec): void {
 
 function codecFor(id: string): Codec | undefined {
   return codecs.find((c) => id.startsWith(c.prefix))
+}
+
+function isMutableId(id: string): boolean {
+  return codecFor(id)?.mutable === true
 }
 
 /** Every vault-key-sealed blob is bound to its own id as AAD: a malicious
@@ -170,9 +188,11 @@ registerCodec(provenanceCodec)
 // --- pure diff functions (unit tested without wasm or a browser) ---
 
 /** Blob ids on the relay this device should pull: known to a registered
- * codec and not already applied locally. */
+ * codec, and either not already applied locally or (see `Codec.mutable`'s
+ * doc comment) belonging to a namespace that must be re-checked every pull
+ * regardless of `doneIds`. */
 export function idsToPull(remoteIds: string[], doneIds: ReadonlySet<string>): string[] {
-  return remoteIds.filter((id) => !doneIds.has(id) && codecFor(id) !== undefined)
+  return remoteIds.filter((id) => codecFor(id) !== undefined && (isMutableId(id) || !doneIds.has(id)))
 }
 
 /** Local events missing from the relay's list — these need pushing so a
@@ -263,7 +283,11 @@ export async function enqueue(blobIds: string[]): Promise<void> {
   const now = new Date().toISOString()
   for (const id of blobIds) {
     const existing = await get<SyncRecord>('sync', id)
-    if (existing?.state === 'done') continue
+    // A mutable id (see `Codec.mutable`) can be 'done' from a stale pull or
+    // an earlier push of an older value; a fresh local write always has
+    // something new to push regardless, so it bypasses the "already done"
+    // skip that's correct for a content-addressed (immutable) blob id.
+    if (existing?.state === 'done' && !isMutableId(id)) continue
     await put('sync', { id, state: 'pending', updated_at: now })
   }
   await refreshPendingCount()
@@ -285,6 +309,13 @@ let draining = false
 export function configure(relay: BlobClient, key: SealKey): void {
   relayClient = relay
   vaultKey = key
+  // Dynamic import: curation.ts registers its own 'cur-' codec as a
+  // top-level side effect (mirrors this file's own ev-/doc- registration
+  // above) once this module is loaded. Loading it dynamically rather than
+  // with a static import avoids a circular import back to this file (which
+  // curation.ts imports for `registerCodec`/`enqueue`/`drain`) — the same
+  // shape as `installEventsHook` below, and for the same reason.
+  void import('./curation')
 }
 
 /** Push every pending outbox entry, one at a time (concurrency 1 is fine at
@@ -353,7 +384,12 @@ export async function pullAll(): Promise<void> {
   for (const id of idsToPull(remoteIds, doneIds)) {
     const codec = codecFor(id)! // idsToPull only returns ids with a registered codec
     try {
-      if (await codec.localHas(id)) {
+      // The localHas-then-skip shortcut only makes sense for an immutable
+      // id: "already have it" and "have the latest version of it" are the
+      // same fact there. For a mutable id they're not (someone else may have
+      // PUT a newer value over the same id), so always fetch and let the
+      // codec's own remoteApply (LWW merge, for cur-) decide.
+      if (!codec.mutable && (await codec.localHas(id))) {
         // Already have it (e.g. logged before sync was configured) — record
         // done without a redundant round trip.
         await markDone(id)
