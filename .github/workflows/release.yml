@@ -56,7 +56,7 @@ jobs:
           for crate in svastha-core svastha-import svastha svastha-wasm svastha-relay svastha-node; do
             echo "publishing $crate"
             if ! output=$(cargo publish -p "$crate" 2>&1); then
-              if grep -q "already uploaded" <<<"$output"; then
+              if grep -qE "already (uploaded|exists)" <<<"$output"; then
                 echo "$crate: this version is already on crates.io — skipping"
               else
                 echo "$output"
