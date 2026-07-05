@@ -139,6 +139,22 @@ servers. Plain Svelte plus a small router, not SvelteKit (no SSR: the server
 cannot read the data). `vite-plugin-pwa` provides the offline shell and
 installability (added as the PWA work begins).
 
+**Seed custody.** The mnemonic is passphrase-wrapped at rest, not stored in the
+clear: a passphrase runs through PBKDF2-SHA256 (600,000 iterations, a random
+16-byte salt) to derive a 32-byte key, which seals the mnemonic as a `core`
+envelope (`DataKey::seal`). The vault data key is sealed the same way, under the
+same derived key, so unlocking recovers both in one KDF pass. A third sealed
+record — a fixed check sentinel — lets the app tell "wrong passphrase" apart
+from any other failure without touching the mnemonic or vault key. The BIP39
+mnemonic passphrase itself is deliberately left empty: the unlock passphrase is
+a local wrapping secret for this device's keyvault, not part of the seed →
+identity derivation, so changing or forgetting it never changes the identity.
+The local event store is plaintext by design — origin isolation and OS disk
+encryption are the boundary for now; OS-keystore hardening (Keychain, Keystore)
+arrives with the native wrapper. The mnemonic remains the sole recovery root: it
+is the only material that reconstructs the identity if the passphrase and this
+device are both lost.
+
 ## Native (later)
 
 The same web bundle wraps in Capacitor or Tauri (Tauri is Rust and composes with

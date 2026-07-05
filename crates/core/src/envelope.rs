@@ -76,6 +76,13 @@ impl DataKey {
         Self(bytes)
     }
 
+    /// Expose the raw key bytes. Narrow escape hatch for callers that must seal
+    /// the key itself under another key (e.g. wrapping a vault key into local
+    /// keyvault storage); prefer wrapping/sealing APIs everywhere else.
+    pub fn to_bytes(&self) -> [u8; KEY_LEN] {
+        self.0
+    }
+
     /// Seal a payload under this key with a fresh random nonce. `aad` is
     /// authenticated but not encrypted.
     pub fn seal(&self, plaintext: &[u8], aad: &[u8]) -> Sealed {
