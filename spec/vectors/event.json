@@ -92,6 +92,27 @@
       "signature_hex": "b8410e2e1f727f6cb3e4539b0ee59d81e7bc95ab1d37ce20994635506a47df919dac8ea9819f14449a53264b79476a905b0fd97cd4ecdcff9cc5cf0da7b9bd06"
     },
     {
+      "note": "nutrition intake text value, signed",
+      "event": {
+        "id": "a2a8d668dbb7e27cdfc214418e96a8471b45024de3e9bf082f659936956659ab",
+        "kind": "nutrition_intake",
+        "code": null,
+        "effective_at": "2026-01-02T08:30:00-06:00",
+        "value": {
+          "text": "black coffee"
+        },
+        "provenance": {
+          "source": "self",
+          "source_doc": null
+        }
+      },
+      "canon_hex": "000000106e7574726974696f6e5f696e74616b65000100000019323032362d30312d30325430383a33303a30302d30363a303001020000000c626c61636b20636f66666565",
+      "id_hex": "a2a8d668dbb7e27cdfc214418e96a8471b45024de3e9bf082f659936956659ab",
+      "signer_seed_hex": "0102030405060708090a0b0c0d0e0f10",
+      "author_hex": "0b1b59fe721ec4f782ea1343e7a6db66a84289de7d626838f24571b389384f5e",
+      "signature_hex": "0149f93c6484fac330e5a97f16f7f499e18d30c4801ad5913f6e7f92c590227d332e3eabbe452723f825a82439255a1e6f22969beee4e8c3316aedecf7a8eb07"
+    },
+    {
       "note": "minimal text observation, no code or effective_at",
       "event": {
         "id": "5ae38fc12eed3b2ad7a258d498e621366a82f6452d6461cca39651e89287b2eb",

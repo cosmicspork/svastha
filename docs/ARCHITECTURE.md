@@ -86,6 +86,10 @@ typed, signed, stably-identified events, plus a thin mutable curation overlay
 
 - Imported facts merge by union and de-duplication. Stable, content-addressed ids
   let the same immunization reported by two providers collapse to one.
+- Self-tracked lifestyle data lives in the same log: symptoms, vitals, and
+  exercise are observations, food is a `nutrition_intake` event, and a
+  multi-part entry (a blood pressure reading, a several-item meal) is one event
+  per component sharing an `effective_at` — grouping is presentational.
 - Only the small curation overlay needs conflict resolution (last-writer-wins or
   similar).
 

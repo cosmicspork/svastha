@@ -203,6 +203,9 @@ pub enum EventKind {
     Procedure,
     AllergyIntolerance,
     Document,
+    /// Self-reported food or drink intake (FHIR R5 NutritionIntake is the
+    /// model). One event per item; a multi-item meal shares an `effective_at`.
+    NutritionIntake,
 }
 
 impl EventKind {
@@ -218,6 +221,7 @@ impl EventKind {
             EventKind::Procedure => "procedure",
             EventKind::AllergyIntolerance => "allergy_intolerance",
             EventKind::Document => "document",
+            EventKind::NutritionIntake => "nutrition_intake",
         }
     }
 }
@@ -380,6 +384,26 @@ mod tests {
                 source_doc: None,
             },
         )
+    }
+
+    #[test]
+    fn wire_names_match_serde() {
+        // The canonical encoding and the JSON form must agree on kind names;
+        // a variant added to one but not the other corrupts ids or parsing.
+        for kind in [
+            EventKind::Observation,
+            EventKind::Condition,
+            EventKind::MedicationStatement,
+            EventKind::Immunization,
+            EventKind::Encounter,
+            EventKind::Procedure,
+            EventKind::AllergyIntolerance,
+            EventKind::Document,
+            EventKind::NutritionIntake,
+        ] {
+            let json = serde_json::to_value(&kind).unwrap();
+            assert_eq!(json.as_str().unwrap(), kind.wire_name());
+        }
     }
 
     #[test]

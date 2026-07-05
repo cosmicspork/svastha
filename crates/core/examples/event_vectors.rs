@@ -125,6 +125,19 @@ fn main() {
                 },
             ),
         ),
+        signed(
+            "nutrition intake text value, signed",
+            Event::new(
+                EventKind::NutritionIntake,
+                None,
+                Some("2026-01-02T08:30:00-06:00".into()),
+                Some(EventValue::Text("black coffee".into())),
+                Provenance {
+                    source: "self".into(),
+                    source_doc: None,
+                },
+            ),
+        ),
         unsigned(
             "minimal text observation, no code or effective_at",
             Event::new(

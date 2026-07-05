@@ -101,10 +101,10 @@ signed (so its author and integrity are verifiable). Both rest on one explicit
 canonical byte encoding.
 
 An event has a `kind` (one of `observation`, `condition`, `medication_statement`,
-`immunization`, `encounter`, `procedure`, `allergy_intolerance`, `document`), an
-optional `code` (a terminology `Code`: `system`, `code`, optional `display`), an
-optional ISO-8601 `effective_at`, an optional `value`, and a `provenance`
-(`source`, optional `source_doc`). A `value` is one of:
+`immunization`, `encounter`, `procedure`, `allergy_intolerance`, `document`,
+`nutrition_intake`), an optional `code` (a terminology `Code`: `system`, `code`,
+optional `display`), an optional ISO-8601 `effective_at`, an optional `value`,
+and a `provenance` (`source`, optional `source_doc`). A `value` is one of:
 
 - `quantity` — a decimal-string `value` and an optional UCUM `unit` (`Code`).
   Numbers are strings, never floats, so the bytes are exact and reproducible.
@@ -125,6 +125,10 @@ Fields are encoded into a deterministic byte string:
 
 The **canonical content** is `kind ‖ code? ‖ effective_at? ‖ value?`. It excludes
 `id` and `provenance`, so a fact reported by two sources canonicalizes identically.
+
+A multi-part fact (a blood pressure reading, a several-item meal) is written as
+one event per component sharing an `effective_at`; there are no panel or grouping
+events. This is an informative convention — ids do not depend on it.
 
 ### Content-addressed id
 
