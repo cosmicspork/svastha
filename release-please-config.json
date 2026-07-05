@@ -9,6 +9,7 @@
       "bump-minor-pre-major": true,
       "extra-files": [
         "crates/core/Cargo.toml",
+        "crates/import/Cargo.toml",
         "crates/svastha/Cargo.toml",
         "crates/wasm/Cargo.toml",
         "crates/relay/Cargo.toml",
