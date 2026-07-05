@@ -133,6 +133,32 @@ textarea:disabled {
   color: var(--danger);
 }
 
+/* --- category hues (spine dots/glyphs, chips) --- */
+.cat-vital {
+  color: var(--cat-vital);
+}
+.cat-symptom {
+  color: var(--cat-symptom);
+}
+.cat-med {
+  color: var(--cat-med);
+}
+.cat-food {
+  color: var(--cat-food);
+}
+.cat-exercise {
+  color: var(--cat-exercise);
+}
+.cat-note {
+  color: var(--cat-note);
+}
+.cat-clinical {
+  color: var(--cat-clinical);
+}
+.cat-other {
+  color: var(--cat-other);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
