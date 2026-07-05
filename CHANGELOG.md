@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.0](https://github.com/cosmicspork/svastha/compare/v0.1.0...v0.2.0) (2026-07-05)
+
+
+### Features
+
+* **import:** map administered and discharge medication sections ([ad7bed0](https://github.com/cosmicspork/svastha/commit/ad7bed02cab37e57d161df46d47c3dcd21e58de5))
+* **import:** map encounter-nested procedures and resolve ST narrative references ([cb0aab7](https://github.com/cosmicspork/svastha/commit/cb0aab7804241aa8e389ebd9033881d17c02b979))
+* **import:** map more real-world C-CDA shapes (nested procedures, narrative refs, med sections) ([f1a889a](https://github.com/cosmicspork/svastha/commit/f1a889aac98a301d84edf3c8fc1c09a6cd994fc8))
+
+
+### Bug Fixes
+
+* **web:** replace scaffold favicon with the spine mark ([4e110a0](https://github.com/cosmicspork/svastha/commit/4e110a041ddac7079dcd5578a3f9c493000c325e))
+* **web:** replace scaffold favicon with the spine mark ([4e9d86a](https://github.com/cosmicspork/svastha/commit/4e9d86a622c05b3dd3fa75bce27256a163bcf503))
+
 ## [0.1.0](https://github.com/cosmicspork/svastha/compare/v0.0.1...v0.1.0) (2026-07-05)
 
 
