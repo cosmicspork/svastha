@@ -31,12 +31,17 @@ fn maps_every_section_to_its_expected_event_count() {
     );
     assert_eq!(
         count(EventKind::Observation),
-        4,
-        "2 results + 2 vitals (BP pair)"
+        5,
+        "2 results + 1 narrative-reference result + 2 vitals (BP pair); \
+         the dangling-reference result must not become an event"
     );
-    assert_eq!(count(EventKind::Procedure), 1);
+    assert_eq!(
+        count(EventKind::Procedure),
+        3,
+        "the standalone procedure entry + 2 nested in the encounter"
+    );
     assert_eq!(count(EventKind::Encounter), 1);
-    assert_eq!(result.events.len(), 10);
+    assert_eq!(result.events.len(), 13);
 }
 
 #[test]
@@ -145,6 +150,89 @@ fn unmapped_section_is_recorded_as_skipped() {
             .skipped
             .iter()
             .any(|s| s.what.contains("29762-2") && s.why.contains("not mapped")),
+        "skipped: {:?}",
+        result.skipped
+    );
+}
+
+#[test]
+fn encounter_nested_procedures_use_own_or_fallback_effective_time() {
+    // Epic exports nest most procedures inside the encounter entry rather
+    // than in the Procedures section; both a <procedure> and a Procedure
+    // Activity Act are exercised here.
+    let evs = events();
+    let own_time = evs
+        .iter()
+        .find(|e| e.code.as_ref().is_some_and(|c| c.code == "28191009"))
+        .expect("nested procedure with its own effectiveTime");
+    assert_eq!(own_time.kind, EventKind::Procedure);
+    assert_eq!(
+        own_time.effective_at.as_deref(),
+        Some("2024-01-03T09:15:00-05:00")
+    );
+
+    let fallback = evs
+        .iter()
+        .find(|e| e.code.as_ref().is_some_and(|c| c.code == "171207006"))
+        .expect("nested procedure falling back to the encounter's effectiveTime");
+    assert_eq!(fallback.kind, EventKind::Procedure);
+    assert_eq!(
+        fallback.effective_at.as_deref(),
+        Some("2024-01-03T09:00:00-05:00"),
+        "falls back to the encounter's own effectiveTime when it has none"
+    );
+}
+
+#[test]
+fn encounter_nested_procedure_with_no_code_is_skipped_not_dropped() {
+    let result = import_ccda(FIXTURE).unwrap();
+    assert!(
+        result
+            .skipped
+            .iter()
+            .any(|s| s.what == "encounter nested procedure" && s.why.contains("nullFlavor")),
+        "skipped: {:?}",
+        result.skipped
+    );
+}
+
+#[test]
+fn st_value_resolves_via_section_narrative_reference() {
+    let culture = events()
+        .into_iter()
+        .find(|e| e.code.as_ref().is_some_and(|c| c.code == "600-7"))
+        .expect("result carried only by narrative reference");
+    assert_eq!(
+        culture.value,
+        Some(EventValue::Text(
+            "Wound culture: no growth after 5 days".into()
+        ))
+    );
+}
+
+#[test]
+fn dangling_narrative_reference_is_skipped_with_a_warning() {
+    let result = import_ccda(FIXTURE).unwrap();
+    assert!(
+        !result
+            .events
+            .iter()
+            .any(|e| e.code.as_ref().is_some_and(|c| c.code == "601-5")),
+        "a dangling reference must not become an event"
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.contains("narrative reference") && w.contains("did not resolve")),
+        "warnings: {:?}",
+        result.warnings
+    );
+    assert!(
+        result
+            .skipped
+            .iter()
+            .any(|s| s.what.contains("601-5") && s.why.contains("no text content")),
         "skipped: {:?}",
         result.skipped
     );

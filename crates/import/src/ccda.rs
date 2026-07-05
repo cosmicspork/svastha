@@ -299,12 +299,14 @@ fn import_observation_entries(section: Node, label: &str, result: &mut ImportRes
             continue;
         }
         for obs in observations {
-            import_result_observation(obs, label, result);
+            import_result_observation(obs, section, label, result);
         }
     }
 }
 
-fn import_result_observation(obs: Node, label: &str, result: &mut ImportResult) {
+// `section` is threaded through only so an empty ST `<value>` can resolve a
+// narrative `<reference>` against its enclosing section's `<text>` block.
+fn import_result_observation(obs: Node, section: Node, label: &str, result: &mut ImportResult) {
     let what = format!("{label} observation");
     let Some(code_el) = find_child(obs, "code") else {
         result.skipped.push(Skipped {
@@ -330,8 +332,12 @@ fn import_result_observation(obs: Node, label: &str, result: &mut ImportResult) 
         return;
     };
 
-    if let Some(value) = value_to_event_value(value_el, &format!("{what} ({})", code.code), result)
-    {
+    if let Some(value) = value_to_event_value(
+        value_el,
+        section,
+        &format!("{what} ({})", code.code),
+        result,
+    ) {
         result.events.push(EventDraft {
             kind: EventKind::Observation,
             code: Some(code),
@@ -347,6 +353,7 @@ fn import_result_observation(obs: Node, label: &str, result: &mut ImportResult) 
 /// (skipped — free-form embedded data has no structured fact to extract).
 fn value_to_event_value(
     value_el: Node,
+    section: Node,
     what: &str,
     result: &mut ImportResult,
 ) -> Option<EventValue> {
@@ -380,14 +387,31 @@ fn value_to_event_value(
         },
         "ST" => {
             let text = value_el.text().unwrap_or_default().trim();
-            if text.is_empty() {
+            if !text.is_empty() {
+                return Some(EventValue::Text(text.to_string()));
+            }
+            // No inline text — real Epic exports often carry the value only
+            // as a `<reference value="#id"/>` into the section's own
+            // narrative `<text>` block instead of repeating it in the entry.
+            let Some(reference_id) = narrative_reference_id(value_el) else {
                 result.skipped.push(Skipped {
                     what: what.into(),
                     why: "ST value has no text content".into(),
                 });
-                None
-            } else {
-                Some(EventValue::Text(text.to_string()))
+                return None;
+            };
+            match resolve_narrative_reference(section, &reference_id) {
+                Some(text) => Some(EventValue::Text(text)),
+                None => {
+                    result.warnings.push(format!(
+                        "{what}: ST narrative reference #{reference_id} did not resolve to any text"
+                    ));
+                    result.skipped.push(Skipped {
+                        what: what.into(),
+                        why: "ST value has no text content".into(),
+                    });
+                    None
+                }
             }
         }
         "IVL_PQ" | "IVL_REAL" => {
@@ -445,28 +469,45 @@ fn import_procedures(section: Node, result: &mut ImportResult) {
             });
             continue;
         };
-        let Some(code_el) = find_child(procedure, "code") else {
-            result.skipped.push(Skipped {
-                what: what.into(),
-                why: "no <code>".into(),
-            });
-            continue;
-        };
-        let Some(code) = extract_code(code_el) else {
-            result.skipped.push(Skipped {
-                what: what.into(),
-                why: "code unusable (nullFlavor)".into(),
-            });
-            continue;
-        };
-        let effective_at = effective_time(procedure, what, result);
-        result.events.push(EventDraft {
-            kind: EventKind::Procedure,
-            code: Some(code),
-            effective_at,
-            value: None,
-        });
+        if let Some(event) = map_procedure(procedure, what, None, result) {
+            result.events.push(event);
+        }
     }
+}
+
+/// Shared per-element mapping for a Procedures-section entry and for a
+/// procedure nested inside an encounter (see `import_encounters`) — same
+/// code/effectiveTime extraction either way. `encounter_effective_at` is only
+/// consulted when `el` has no `effectiveTime` of its own: nested procedures
+/// commonly inherit the encounter's date rather than repeating it.
+fn map_procedure(
+    el: Node,
+    what: &str,
+    encounter_effective_at: Option<&str>,
+    result: &mut ImportResult,
+) -> Option<EventDraft> {
+    let Some(code_el) = find_child(el, "code") else {
+        result.skipped.push(Skipped {
+            what: what.into(),
+            why: "no <code>".into(),
+        });
+        return None;
+    };
+    let Some(code) = extract_code(code_el) else {
+        result.skipped.push(Skipped {
+            what: what.into(),
+            why: "code unusable (nullFlavor)".into(),
+        });
+        return None;
+    };
+    let effective_at =
+        effective_time(el, what, result).or_else(|| encounter_effective_at.map(String::from));
+    Some(EventDraft {
+        kind: EventKind::Procedure,
+        code: Some(code),
+        effective_at,
+        value: None,
+    })
 }
 
 // --- encounters (46240-8) ---
@@ -501,10 +542,53 @@ fn import_encounters(section: Node, result: &mut ImportResult) {
         result.events.push(EventDraft {
             kind: EventKind::Encounter,
             code: Some(code),
-            effective_at,
+            effective_at: effective_at.clone(),
             value: None,
         });
+
+        // Real Epic exports nest most procedures inside the encounter entry
+        // (via entryRelationship) rather than in the Procedures section —
+        // walk for anything procedure-shaped and map it the same way.
+        for candidate in nested_procedure_candidates(encounter) {
+            if let Some(event) = map_procedure(
+                candidate,
+                "encounter nested procedure",
+                effective_at.as_deref(),
+                result,
+            ) {
+                result.events.push(event);
+            }
+        }
     }
+}
+
+/// Procedure Activity Act / Procedure Activity Observation templateIds — the
+/// only `<act>`/`<observation>` shapes nested in an encounter that represent
+/// a procedure rather than some other clinical statement (reason for visit,
+/// encounter diagnosis, plan of care, ...).
+const PROCEDURE_ACTIVITY_ACT: &str = "2.16.840.1.113883.10.20.22.4.12";
+const PROCEDURE_ACTIVITY_OBSERVATION: &str = "2.16.840.1.113883.10.20.22.4.13";
+
+/// Every entryRelationship-nested element inside an encounter that could be a
+/// procedure: a bare `<procedure>`, or an `<act>`/`<observation>` carrying the
+/// matching Procedure Activity templateId (without it, a same-tagged element
+/// is something else and must not be mapped as a procedure).
+fn nested_procedure_candidates<'a, 'input: 'a>(
+    encounter: Node<'a, 'input>,
+) -> impl Iterator<Item = Node<'a, 'input>> {
+    descendants_named(encounter, "procedure")
+        .chain(
+            descendants_named(encounter, "act")
+                .filter(|n| has_template(*n, PROCEDURE_ACTIVITY_ACT)),
+        )
+        .chain(
+            descendants_named(encounter, "observation")
+                .filter(|n| has_template(*n, PROCEDURE_ACTIVITY_OBSERVATION)),
+        )
+}
+
+fn has_template(node: Node, root: &str) -> bool {
+    children_named(node, "templateId").any(|t| t.attribute("root") == Some(root))
 }
 
 // --- shared helpers ---
@@ -633,4 +717,118 @@ fn descendants_named<'a, 'input: 'a>(
 fn find_descendant<'a, 'input>(node: Node<'a, 'input>, name: &str) -> Option<Node<'a, 'input>> {
     node.descendants()
         .find(|n| n.is_element() && n.tag_name().name() == name)
+}
+
+// --- narrative references (ST values with no inline text) ---
+
+/// A C-CDA narrative reference — `<reference value="#someid"/>` inside a
+/// `<value>` with no inline text of its own, pointing at the enclosing
+/// section's narrative `<text>` block. Returns the bare id, `#` stripped.
+fn narrative_reference_id(value_el: Node) -> Option<String> {
+    find_child(value_el, "reference")
+        .and_then(|r| r.attribute("value"))
+        .and_then(|v| v.strip_prefix('#'))
+        .map(String::from)
+}
+
+/// Resolve a narrative `#id` reference against a section's `<text>` block:
+/// the descendant element whose `ID` attribute equals `id` (narrative markup
+/// is uppercase `ID`; matched case-insensitively on the attribute name in
+/// case an export doesn't follow that), flattened to normalized text. `None`
+/// if the section has no narrative, nothing carries that id, or the match has
+/// no text — the caller treats all three the same (skip, don't guess).
+fn resolve_narrative_reference(section: Node, id: &str) -> Option<String> {
+    let narrative = find_child(section, "text")?;
+    let target = narrative.descendants().find(|n| {
+        n.is_element()
+            && n.attributes()
+                .any(|a| a.name().eq_ignore_ascii_case("id") && a.value() == id)
+    })?;
+    let text = flatten_text(target);
+    (!text.is_empty()).then_some(text)
+}
+
+/// An element's full text content: descendant text nodes concatenated (no
+/// separator — most tag boundaries carry no word break) and whitespace runs
+/// collapsed to single spaces, since narrative markup (tables, lists,
+/// `<content>` spans) commonly splits one logical value across many text
+/// nodes and indentation whitespace.
+fn flatten_text(node: Node) -> String {
+    let raw: String = node
+        .descendants()
+        .filter(|n| n.is_text())
+        .filter_map(|n| n.text())
+        .collect();
+    raw.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+mod narrative_reference_tests {
+    use roxmltree::Document;
+
+    use super::{find_child, flatten_text, resolve_narrative_reference};
+
+    #[test]
+    fn flatten_text_joins_and_normalizes_whitespace_across_markup() {
+        let doc = Document::parse(
+            r#"<table>
+                <tr ID="r1">
+                    <td>Culture:
+                        no   growth</td>
+                    <td> after <b>5</b> days </td>
+                </tr>
+            </table>"#,
+        )
+        .unwrap();
+        let row = find_child(doc.root_element(), "tr").unwrap();
+        assert_eq!(flatten_text(row), "Culture: no growth after 5 days");
+    }
+
+    #[test]
+    fn resolve_matches_id_case_insensitively_on_attribute_name() {
+        let doc = Document::parse(
+            r#"<section>
+                <text><content id="narrative1">no growth</content></text>
+            </section>"#,
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_narrative_reference(doc.root_element(), "narrative1"),
+            Some("no growth".into())
+        );
+    }
+
+    #[test]
+    fn resolve_returns_none_for_missing_id() {
+        let doc = Document::parse(
+            r#"<section>
+                <text><content ID="narrative1">no growth</content></text>
+            </section>"#,
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_narrative_reference(doc.root_element(), "does-not-exist"),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_returns_none_when_matched_element_has_no_text() {
+        let doc = Document::parse(
+            r#"<section>
+                <text><content ID="empty1"></content></text>
+            </section>"#,
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_narrative_reference(doc.root_element(), "empty1"),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_returns_none_with_no_narrative_text_block() {
+        let doc = Document::parse(r#"<section><title>No text here</title></section>"#).unwrap();
+        assert_eq!(resolve_narrative_reference(doc.root_element(), "any"), None);
+    }
 }

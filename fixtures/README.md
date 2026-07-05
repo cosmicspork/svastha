@@ -13,8 +13,14 @@ before sharing it.
   `crates/import/src/ccda.rs` maps (allergy, problem, medication, immunization,
   result, vital, procedure, encounter), plus one nullFlavor'd entry with no
   usable translation (must be skipped, not silently dropped) and one section
-  (`29762-2`, Social History) the mapping deliberately doesn't handle yet.
-  Fictional patient "Alex Example", fictional codes and values.
+  (`29762-2`, Social History) the mapping deliberately doesn't handle yet. The
+  Encounters section also nests three `entryRelationship` candidates — a
+  `<procedure>` with its own `effectiveTime`, a Procedure Activity Act that
+  falls back to the encounter's, and a Procedure Activity Observation with an
+  unusable code (must skip, not drop) — and the Results section carries two ST
+  values with no inline text: one resolved via a `<reference>` into the
+  section's narrative `<text>`, one dangling (must skip + warn). Fictional
+  patient "Alex Example", fictional codes and values.
 - `fhir/bundle-minimal.json` — a small FHIR R4 `Bundle` with one of each
   resourceType `crates/import/src/fhir.rs` maps, a `Patient` (unmapped) and an
   `Appointment` (unmapped), and a `valueQuantity` of `98.60` — the trailing
