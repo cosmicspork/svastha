@@ -1,6 +1,6 @@
 [package]
 name = "svastha-wasm"
-version = "0.0.1" # x-release-please-version
+version = "0.1.0" # x-release-please-version
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -13,8 +13,8 @@ categories = ["cryptography", "wasm"]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-svastha-core = { path = "../core", version = "0.0.1" } # x-release-please-version
-svastha-import = { path = "../import", version = "0.0.1" } # x-release-please-version
+svastha-core = { path = "../core", version = "0.1.0" } # x-release-please-version
+svastha-import = { path = "../import", version = "0.1.0" } # x-release-please-version
 wasm-bindgen = "0.2"
 # Structured contract types (events) cross the JS boundary as JSON, reusing
 # core's serde derives; binary (blobs, signatures) crosses as Uint8Array.

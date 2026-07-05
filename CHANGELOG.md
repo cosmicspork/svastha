@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.1.0](https://github.com/cosmicspork/svastha/compare/v0.0.1...v0.1.0) (2026-07-05)
+
+
+### Features
+
+* client-side C-CDA and FHIR import with provenance blobs ([e0c0535](https://github.com/cosmicspork/svastha/commit/e0c0535bd96bf3b109468f2d00f86a6908603f31))
+* client-side C-CDA and FHIR import with provenance blobs ([83daeb7](https://github.com/cosmicspork/svastha/commit/83daeb7db263d611ea2553b9f90ecc5096a4556b))
+* **core:** add nutrition_intake event kind ([1efcebf](https://github.com/cosmicspork/svastha/commit/1efcebfa6cb67422debc084a991a9f0b5f422207))
+* **core:** add nutrition_intake event kind ([20cae32](https://github.com/cosmicspork/svastha/commit/20cae32d9d2f655f3ccee1a33732a266a26498db))
+* household sharing via relay grants and wrapped-key mailbox ([1b37957](https://github.com/cosmicspork/svastha/commit/1b37957ec1a6ceafd2a062fce32697bec16e9bfa))
+* household sharing via relay grants and wrapped-key mailbox ([c903b77](https://github.com/cosmicspork/svastha/commit/c903b776d01039174885a3a626acec31ec391775))
+* **web:** app shell, local storage, and passphrase key custody ([b86ae0a](https://github.com/cosmicspork/svastha/commit/b86ae0aa040532fc54a48ccbe70cb8610cf0907e))
+* **web:** app shell, local storage, and passphrase key custody ([74cdf0a](https://github.com/cosmicspork/svastha/commit/74cdf0a49f8bd445f3d4bc3ecb9809e39697e14f))
+* **web:** curation overlay and correlation views ([8957ae2](https://github.com/cosmicspork/svastha/commit/8957ae27edbefac6d9998687b662e8c47bbada9b))
+* **web:** curation overlay and correlation views ([f451dc6](https://github.com/cosmicspork/svastha/commit/f451dc6a34eaa776fe11c4529687cabea6c1dbb4))
+* **web:** encrypted relay backup and multi-device sync ([7522346](https://github.com/cosmicspork/svastha/commit/75223464461a48c8a7902449b88bff9a41af2734))
+* **web:** encrypted relay backup and multi-device sync ([ab1591e](https://github.com/cosmicspork/svastha/commit/ab1591ebcd89707a9d38b595a138fc8d5478e6ca))
+* **web:** quick-log forms and the spine timeline ([1ab2c91](https://github.com/cosmicspork/svastha/commit/1ab2c916e352ed14286be3a0acf7d67c5342a996))
+* **web:** quick-log forms and the spine timeline ([2f8fd12](https://github.com/cosmicspork/svastha/commit/2f8fd127fa9602372477e2d577c7240a90ff216b))
+
 ## 0.0.1 (2026-06-08)
 
 
