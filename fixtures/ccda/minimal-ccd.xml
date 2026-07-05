@@ -192,14 +192,26 @@
         </section>
       </component>
 
-      <!-- Results: one PQ, one IVL_PQ (interval collapses to <low>, with a warning). -->
+      <!-- Results: one PQ, one IVL_PQ (interval collapses to <low>, with a
+           warning), plus two ST values carried only by narrative reference
+           (see <text> below): one resolves, one is dangling (must skip + warn). -->
       <component>
         <section>
           <templateId root="2.16.840.1.113883.10.20.22.2.3.1"/>
           <id root="e0e0e0e0-0000-0000-0000-000000000000"/>
           <code code="30954-2" codeSystem="2.16.840.1.113883.6.1" displayName="Relevant diagnostic tests and/or laboratory data"/>
           <title>Results</title>
-          <text>Glucose and Hemoglobin A1c.</text>
+          <text>
+            <paragraph>Glucose and Hemoglobin A1c.</paragraph>
+            <table>
+              <tbody>
+                <tr ID="woundCultureNarrative">
+                  <td>Wound culture: no
+                    growth after 5 days</td>
+                </tr>
+              </tbody>
+            </table>
+          </text>
           <entry>
             <organizer classCode="BATTERY" moodCode="EVN">
               <templateId root="2.16.840.1.113883.10.20.22.4.1"/>
@@ -231,6 +243,34 @@
                 </observation>
               </component>
             </organizer>
+          </entry>
+          <entry>
+            <observation classCode="OBS" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.2"/>
+              <id root="e1e1e1e1-0000-0000-0000-000000000004"/>
+              <code code="600-7" codeSystem="2.16.840.1.113883.6.1" displayName="Wound culture"/>
+              <statusCode code="completed"/>
+              <effectiveTime value="20240111100000-0500"/>
+              <!-- No inline text: the value lives only in the section's
+                   narrative <text> block, referenced by id. -->
+              <value xsi:type="ST">
+                <reference value="#woundCultureNarrative"/>
+              </value>
+            </observation>
+          </entry>
+          <entry>
+            <observation classCode="OBS" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.2"/>
+              <id root="e1e1e1e1-0000-0000-0000-000000000005"/>
+              <code code="601-5" codeSystem="2.16.840.1.113883.6.1" displayName="Blood culture"/>
+              <statusCode code="completed"/>
+              <effectiveTime value="20240111110000-0500"/>
+              <!-- Dangling reference: no element in <text> carries this id.
+                   Must skip with a warning, not silently drop. -->
+              <value xsi:type="ST">
+                <reference value="#missingNarrative"/>
+              </value>
+            </observation>
           </entry>
         </section>
       </component>
@@ -295,7 +335,13 @@
         </section>
       </component>
 
-      <!-- Encounters: one, effectiveTime as a low/high interval. -->
+      <!-- Encounters: one, effectiveTime as a low/high interval, with three
+           entryRelationship-nested candidates (Epic exports nest most
+           procedures inside the encounter rather than the Procedures
+           section): a <procedure> with its own effectiveTime, a Procedure
+           Activity Act with none (falls back to the encounter's), and a
+           Procedure Activity Observation with an unusable code (must be
+           Skipped, not silently dropped). -->
       <component>
         <section>
           <templateId root="2.16.840.1.113883.10.20.22.2.22.1"/>
@@ -312,7 +358,108 @@
                 <low value="20240103090000-0500"/>
                 <high value="20240103093000-0500"/>
               </effectiveTime>
+              <entryRelationship typeCode="SUBJ">
+                <procedure classCode="PROC" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.14"/>
+                  <id root="h2h2h2h2-0000-0000-0000-000000000001"/>
+                  <statusCode code="completed"/>
+                  <code code="28191009" codeSystem="2.16.840.1.113883.6.96" displayName="Skin suture"/>
+                  <effectiveTime value="20240103091500-0500"/>
+                </procedure>
+              </entryRelationship>
+              <entryRelationship typeCode="SUBJ">
+                <act classCode="ACT" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.12"/>
+                  <id root="h2h2h2h2-0000-0000-0000-000000000002"/>
+                  <code code="171207006" codeSystem="2.16.840.1.113883.6.96" displayName="Depression screening"/>
+                  <statusCode code="completed"/>
+                </act>
+              </entryRelationship>
+              <entryRelationship typeCode="SUBJ">
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.13"/>
+                  <id root="h2h2h2h2-0000-0000-0000-000000000003"/>
+                  <code nullFlavor="UNK"/>
+                  <statusCode code="completed"/>
+                </observation>
+              </entryRelationship>
             </encounter>
+          </entry>
+        </section>
+      </component>
+
+      <!-- Administered Medications (29549-3): same entry shape as 10160-0,
+           a plain substanceAdministration. -->
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.38"/>
+          <id root="j0j0j0j0-0000-0000-0000-000000000000"/>
+          <code code="29549-3" codeSystem="2.16.840.1.113883.6.1" displayName="Medications administered"/>
+          <title>Administered Medications</title>
+          <text>Ondansetron 4 mg IV.</text>
+          <entry>
+            <substanceAdministration classCode="SBADM" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.16"/>
+              <id root="j1j1j1j1-0000-0000-0000-000000000001"/>
+              <statusCode code="completed"/>
+              <effectiveTime value="20240103091000-0500"/>
+              <doseQuantity value="4" unit="mg"/>
+              <consumable>
+                <manufacturedProduct classCode="MANU">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.23"/>
+                  <manufacturedMaterial>
+                    <code code="312086" codeSystem="2.16.840.1.113883.6.88" displayName="Ondansetron 4 MG Injection"/>
+                  </manufacturedMaterial>
+                </manufacturedProduct>
+              </consumable>
+            </substanceAdministration>
+          </entry>
+        </section>
+      </component>
+
+      <!-- Medications at Time of Discharge (10183-2): each entry wraps the
+           substanceAdministration in a Discharge Medication act. The second
+           entry's act has nothing inside (must be Skipped, not silently
+           dropped). -->
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.11.1"/>
+          <id root="k0k0k0k0-0000-0000-0000-000000000000"/>
+          <code code="10183-2" codeSystem="2.16.840.1.113883.6.1" displayName="Hospital discharge medications"/>
+          <title>Discharge Medications</title>
+          <text>Amoxicillin 500 mg.</text>
+          <entry>
+            <act classCode="ACT" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.35"/>
+              <id root="k1k1k1k1-0000-0000-0000-000000000001"/>
+              <code code="10183-2" codeSystem="2.16.840.1.113883.6.1" displayName="Hospital discharge medication"/>
+              <entryRelationship typeCode="SUBJ">
+                <substanceAdministration classCode="SBADM" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.16"/>
+                  <id root="k1k1k1k1-0000-0000-0000-000000000002"/>
+                  <statusCode code="active"/>
+                  <effectiveTime xsi:type="IVL_TS">
+                    <low value="20240104"/>
+                  </effectiveTime>
+                  <doseQuantity value="500" unit="mg"/>
+                  <consumable>
+                    <manufacturedProduct classCode="MANU">
+                      <templateId root="2.16.840.1.113883.10.20.22.4.23"/>
+                      <manufacturedMaterial>
+                        <code code="308191" codeSystem="2.16.840.1.113883.6.88" displayName="Amoxicillin 500 MG Oral Capsule"/>
+                      </manufacturedMaterial>
+                    </manufacturedProduct>
+                  </consumable>
+                </substanceAdministration>
+              </entryRelationship>
+            </act>
+          </entry>
+          <entry>
+            <act classCode="ACT" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.35"/>
+              <id root="k1k1k1k1-0000-0000-0000-000000000003"/>
+              <code code="10183-2" codeSystem="2.16.840.1.113883.6.1" displayName="Hospital discharge medication"/>
+            </act>
           </entry>
         </section>
       </component>
