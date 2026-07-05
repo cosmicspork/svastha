@@ -15,6 +15,7 @@
   import Settings from './routes/Settings.svelte'
   import Share from './routes/Share.svelte'
   import Person from './routes/Person.svelte'
+  import Import from './routes/Import.svelte'
   import BottomBar from './components/BottomBar.svelte'
 
   let ready = $state(false)
@@ -59,7 +60,7 @@
   {:else if locked()}
     <Unlock />
   {:else}
-    {#if route.path === '/settings' || route.path === '/share' || route.path === '/person/:ed'}
+    {#if route.path === '/settings' || route.path === '/share' || route.path === '/person/:ed' || route.path === '/import'}
       <button class="settings-nav" onclick={() => navigate('#/')} data-testid="nav-back">
         ← Back
       </button>
@@ -77,6 +78,8 @@
       <Share />
     {:else if route.path === '/person/:ed'}
       <Person ed={route.params.ed} />
+    {:else if route.path === '/import'}
+      <Import />
     {:else}
       <Home />
     {/if}

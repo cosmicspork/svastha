@@ -281,6 +281,12 @@
   {/if}
 </section>
 
+<section class="stack">
+  <h2>Import</h2>
+  <p class="muted">Bring in records from a C-CDA export or a FHIR bundle.</p>
+  <button onclick={() => navigate('#/import')} data-testid="nav-import">Import records</button>
+</section>
+
 {#if relayConnected}
   <section class="stack">
     <h2>Sharing</h2>

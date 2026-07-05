@@ -1,0 +1,147 @@
+{
+  "resourceType": "Bundle",
+  "type": "collection",
+  "entry": [
+    {
+      "resource": {
+        "resourceType": "Patient",
+        "id": "patient-1",
+        "name": [{ "given": ["Alex"], "family": "Example" }]
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "Observation",
+        "id": "obs-temp-1",
+        "status": "final",
+        "code": {
+          "coding": [{ "system": "http://loinc.org", "code": "8310-5", "display": "Body temperature" }]
+        },
+        "effectiveDateTime": "2024-01-10T09:00:00-05:00",
+        "valueQuantity": {
+          "value": 98.60,
+          "unit": "degF",
+          "system": "http://unitsofmeasure.org",
+          "code": "[degF]"
+        }
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "Condition",
+        "id": "cond-1",
+        "code": {
+          "coding": [{ "system": "http://snomed.info/sct", "code": "38341003", "display": "Hypertension" }]
+        },
+        "onsetDateTime": "2020-03-10"
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "AllergyIntolerance",
+        "id": "allergy-1",
+        "code": {
+          "coding": [{ "system": "http://snomed.info/sct", "code": "256349002", "display": "Peanut" }]
+        },
+        "recordedDate": "2010-06-04"
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "Immunization",
+        "id": "imm-1",
+        "status": "completed",
+        "vaccineCode": {
+          "coding": [
+            { "system": "http://hl7.org/fhir/sid/cvx", "code": "140", "display": "Influenza, seasonal, injectable" }
+          ]
+        },
+        "occurrenceDateTime": "2023-10-15"
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "Immunization",
+        "id": "imm-2",
+        "status": "not-done",
+        "vaccineCode": {
+          "coding": [{ "system": "http://hl7.org/fhir/sid/cvx", "code": "88", "display": "Influenza virus vaccine" }]
+        },
+        "occurrenceDateTime": "2023-10-01"
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "MedicationStatement",
+        "id": "med-1",
+        "status": "active",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "314076",
+              "display": "Lisinopril 10 MG Oral Tablet"
+            }
+          ]
+        },
+        "effectiveDateTime": "2023-06-01"
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "Encounter",
+        "id": "enc-1",
+        "status": "finished",
+        "class": {
+          "system": "http://terminology.hl7.org/CodeSystem/v3-ActCode",
+          "code": "AMB",
+          "display": "ambulatory"
+        },
+        "period": { "start": "2024-01-03T09:00:00-05:00", "end": "2024-01-03T09:30:00-05:00" }
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "Procedure",
+        "id": "proc-1",
+        "status": "completed",
+        "code": {
+          "coding": [{ "system": "http://snomed.info/sct", "code": "80146002", "display": "Appendectomy" }]
+        },
+        "performedDateTime": "2015-06-20"
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "Observation",
+        "id": "obs-bp-1",
+        "status": "final",
+        "code": {
+          "coding": [{ "system": "http://loinc.org", "code": "85354-9", "display": "Blood pressure panel" }]
+        },
+        "effectiveDateTime": "2024-01-12T08:00:00-05:00",
+        "component": [
+          {
+            "code": {
+              "coding": [{ "system": "http://loinc.org", "code": "8480-6", "display": "Systolic blood pressure" }]
+            },
+            "valueQuantity": { "value": 122, "unit": "mmHg", "system": "http://unitsofmeasure.org", "code": "mm[Hg]" }
+          },
+          {
+            "code": {
+              "coding": [{ "system": "http://loinc.org", "code": "8462-4", "display": "Diastolic blood pressure" }]
+            },
+            "valueQuantity": { "value": 78, "unit": "mmHg", "system": "http://unitsofmeasure.org", "code": "mm[Hg]" }
+          }
+        ]
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "Appointment",
+        "id": "appt-1",
+        "status": "booked"
+      }
+    }
+  ]
+}

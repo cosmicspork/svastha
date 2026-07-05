@@ -1,6 +1,8 @@
 //! WASM bindings for the svastha trust contract. Thin `#[wasm_bindgen]` wrappers
 //! over [`svastha_core`] so the browser runs the exact same contract code as the
 //! relay and node — `core` stays pure (no JS attributes); the glue lives here.
+//! Also wraps `svastha_import`'s C-CDA/FHIR mapping, so document import runs
+//! entirely client-side too (see the "import" section below).
 //!
 //! Conventions at the JS boundary: binary values (sealed blobs, signatures) cross
 //! as `Uint8Array`; structured contract types (events) cross as JSON strings,
@@ -192,4 +194,48 @@ impl WasmDataKey {
 pub fn verify_event(signed_json: &str) -> Result<bool, JsError> {
     let signed: SignedEvent = serde_json::from_str(signed_json).map_err(to_js)?;
     Ok(signed.verify())
+}
+
+// --- import (crates/import): client-side C-CDA/FHIR mapping ---
+//
+// These three functions are the whole import surface: map a source document
+// to draft events (nothing signed, nothing hashed as a content id yet), and
+// separately compute the content id a draft *would* get if kept — so the web
+// client can check a plan's drafts against the local event log for dedup
+// before the user commits to importing anything.
+
+/// Map a C-CDA document (a CCD or a per-encounter Summary of Care) to draft
+/// events. Returns the `ImportResult` (`events`, `warnings`, `skipped`) as
+/// JSON — see `crates/import`'s doc comments for the section/value mapping.
+#[wasm_bindgen]
+pub fn import_ccda(xml: &str) -> Result<String, JsError> {
+    let result = svastha_import::import_ccda(xml).map_err(to_js)?;
+    serde_json::to_string(&result).map_err(to_js)
+}
+
+/// Map a FHIR R4 `Bundle` to draft events, same `ImportResult` JSON shape as
+/// [`import_ccda`].
+#[wasm_bindgen]
+pub fn import_fhir(json: &str) -> Result<String, JsError> {
+    let result = svastha_import::import_fhir_bundle(json).map_err(to_js)?;
+    serde_json::to_string(&result).map_err(to_js)
+}
+
+/// The content-addressed id an `EventContent` would get, WITHOUT signing it —
+/// reuses the same `EventContent` shape as [`WasmIdentity::sign_event`]
+/// (`provenance` is required by that struct but doesn't affect the id; the
+/// import plan can pass an empty one). Used for dry-run dedup: checking a
+/// draft's would-be id against the local event log before the user decides to
+/// import it.
+#[wasm_bindgen]
+pub fn event_id(content_json: &str) -> Result<String, JsError> {
+    let content: EventContent = serde_json::from_str(content_json).map_err(to_js)?;
+    let event = Event::new(
+        content.kind,
+        content.code,
+        content.effective_at,
+        content.value,
+        content.provenance,
+    );
+    Ok(event.id.to_hex())
 }

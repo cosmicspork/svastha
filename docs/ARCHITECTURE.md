@@ -112,10 +112,25 @@ heavy and nested to be the internal model for a local-first event log. Internall
 Svastha keeps a lean, FHIR-informed shape and reuses the standard code systems
 (LOINC, RxNorm, SNOMED, CVX).
 
-- **Import.** US EHR exports arrive as Epic C-CDA (in IHE XDM packages) or as FHIR
-  R4 bundles. C-CDA converts to FHIR at the boundary (Microsoft FHIR-Converter or
-  `srdc/cda2fhir`), then maps into the internal event model. The verbatim source
-  document is kept as an immutable provenance blob for re-derivation.
+- **Import.** US EHR exports arrive as Epic C-CDA (in IHE XDM packages, one
+  Continuity of Care Document plus many per-encounter Summary of Care documents)
+  or as FHIR R4 bundles (e.g. FollowMyHealth). Import runs entirely client-side,
+  so the previously-imagined server-side converters (Microsoft FHIR-Converter,
+  `srdc/cda2fhir` — both .NET/JVM, neither runs in-browser) aren't the shape:
+  instead `crates/import` maps C-CDA and FHIR directly into the internal event
+  model in Rust, compiled to WASM alongside the rest of the trust contract
+  (`crates/wasm`). Content-addressed event ids mean re-import and cross-org
+  overlap (the same fact reported by several per-encounter documents) collapse
+  by union automatically, no separate reconciliation step needed. The verbatim
+  source document is still kept, as an encrypted provenance blob (`doc-*`, see
+  "Sync and backup" below) — the mapping will keep improving, and the blob is
+  what lets a fact be re-derived later without the original export.
+
+  `crates/import` is deliberately its own crate, not part of `core`: EHR mapping
+  is churny domain logic (new section quirks, evolving code-system tables) that
+  will keep changing long after the trust contract is frozen, and `core` stays
+  the frozen audit surface — the canonical encoding and content-id rules never
+  move to accommodate a parser fix.
 - **India (later).** Document ingestion with on-device OCR (native OS OCR through
   the wrapper for quality, human-in-the-loop for handwriting). ABDM is
   consent-federated rather than self-custodial; it is a future boundary adapter,
@@ -188,7 +203,7 @@ by prefix:
 |---|---|
 | `ev-{event_id_hex}` | one sealed `SignedEvent` (JSON) |
 | `vault.key` | the vault data key, wrapped to the owner's own X25519 key |
-| `doc-*` | reserved (provenance documents, later PR) |
+| `doc-{sha256_hex}` | one imported source document's verbatim bytes (name + base64 bytes, JSON), keyed by its own content hash |
 | `cur-*` | reserved (curation overlay, later PR) |
 
 **AAD = blob id.** Every blob sealed under the vault key uses the UTF-8 bytes

@@ -1,0 +1,21 @@
+[package]
+name = "svastha-import"
+version = "0.0.1" # x-release-please-version
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Svastha import: client-side C-CDA and FHIR R4 mapping into the internal event model."
+readme = "README.md"
+keywords = ["ccda", "fhir", "import", "health", "svastha"]
+categories = ["parser-implementations"]
+
+[dependencies]
+svastha-core = { path = "../core", version = "0.0.1" } # x-release-please-version
+# Namespace-agnostic, non-validating XML parsing for C-CDA documents.
+roxmltree = "0.21"
+serde = { version = "1", features = ["derive"] }
+# `arbitrary_precision` so a FHIR valueQuantity JSON number crosses to a Rust
+# string byte-for-byte (e.g. "98.60" keeps its trailing zero) instead of
+# round-tripping through f64.
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+thiserror = "2"
