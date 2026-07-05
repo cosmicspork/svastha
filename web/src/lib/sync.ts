@@ -94,6 +94,79 @@ const eventsCodec: Codec = {
 }
 registerCodec(eventsCodec)
 
+// --- provenance codec ('doc-') ---
+//
+// One entry per imported source document (see `import.ts`): the verbatim
+// bytes, kept so parsers can re-derive facts as the mapping improves (see
+// docs/ARCHITECTURE.md, "Data model and interop"), plus its display name. The
+// wire payload is a small JSON envelope (name + base64 bytes) rather than raw
+// bytes with an ad hoc binary header — it reuses the same "JSON blob, sealed
+// under the vault key" shape as every other namespace here instead of
+// inventing a framing just for this one.
+
+interface ProvenanceRecord {
+  sha256: string
+  name: string
+  bytes: Uint8Array
+  importedAt: string
+}
+
+function provenanceIdFromBlobId(blobId: string): string {
+  return blobId.slice('doc-'.length)
+}
+
+/** Chunked to avoid blowing the call stack on `String.fromCharCode(...bytes)`
+ * for a multi-megabyte C-CDA document. */
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
+  }
+  return btoa(binary)
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return bytes
+}
+
+/** Duplicated from import.ts's own `sha256Hex` rather than imported: import.ts
+ * imports enqueue/drain from this module, and this module importing back from
+ * import.ts would make the two circular. */
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', bytes as BufferSource)
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+const provenanceCodec: Codec = {
+  prefix: 'doc-',
+  async localHas(id) {
+    return (await get<ProvenanceRecord>('provenance', provenanceIdFromBlobId(id))) !== undefined
+  },
+  async localLoad(id) {
+    const doc = await get<ProvenanceRecord>('provenance', provenanceIdFromBlobId(id))
+    if (!doc) return null
+    const envelope = JSON.stringify({ name: doc.name, bytes: bytesToBase64(doc.bytes) })
+    return new TextEncoder().encode(envelope)
+  },
+  async remoteApply(id, plaintext) {
+    const sha256 = provenanceIdFromBlobId(id)
+    const { name, bytes: b64 } = JSON.parse(new TextDecoder().decode(plaintext)) as { name: string; bytes: string }
+    const bytes = base64ToBytes(b64)
+    // Mirrors the ev- codec's embedded-id check: the AAD binding already
+    // stops the relay from swapping ciphertext between blob ids, but this
+    // additionally guards against a same-device bug (e.g. a document pushed
+    // under the wrong sha256) ever landing silently.
+    const actual = await sha256Hex(bytes)
+    if (actual !== sha256) throw new Error(`doc- blob ${id}: content hash does not match the blob id`)
+    await put('provenance', { sha256, name, bytes, importedAt: new Date().toISOString() })
+  },
+}
+registerCodec(provenanceCodec)
+
 // --- pure diff functions (unit tested without wasm or a browser) ---
 
 /** Blob ids on the relay this device should pull: known to a registered

@@ -29,6 +29,7 @@
     "@fontsource/atkinson-hyperlegible": "^5.2.8",
     "@fontsource/ibm-plex-mono": "^5.2.7",
     "@fontsource/young-serif": "^5.2.7",
+    "fflate": "^0.8.3",
     "uqr": "^0.1.3"
   }
 }

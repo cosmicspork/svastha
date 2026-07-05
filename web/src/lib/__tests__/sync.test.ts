@@ -71,7 +71,13 @@ describe('idsToPull', () => {
   })
 
   it('ignores ids with no registered codec prefix', () => {
-    expect(idsToPull(['ev-aaa', 'doc-bbb', 'vault.key'], new Set())).toEqual(['ev-aaa'])
+    // 'cur-' (the curation overlay) is reserved but not yet registered; see
+    // docs/ARCHITECTURE.md's blob namespace table.
+    expect(idsToPull(['ev-aaa', 'cur-bbb', 'vault.key'], new Set())).toEqual(['ev-aaa'])
+  })
+
+  it('pulls doc- (provenance) ids too, now that the codec is registered', () => {
+    expect(idsToPull(['ev-aaa', 'doc-bbb'], new Set())).toEqual(['ev-aaa', 'doc-bbb'])
   })
 
   it('skips ids already marked done', () => {
@@ -130,6 +136,40 @@ describe('enqueue + drain', () => {
     await drain()
 
     expect(relay.blobs.has('ev-evt-2')).toBe(false)
+  })
+})
+
+describe('provenance codec (doc-)', () => {
+  it('pushes a stored provenance record as a name+base64-bytes envelope', async () => {
+    const bytes = new Uint8Array([1, 2, 3, 250])
+    await put('provenance', {
+      sha256: 'abc123',
+      name: 'DOC0001.XML',
+      bytes,
+      importedAt: new Date().toISOString(),
+    })
+    const relay = inMemoryBlobClient()
+    configure(relay, passthroughSealKey())
+
+    await enqueue(['doc-abc123'])
+    await drain()
+
+    const pushed = relay.blobs.get('doc-abc123')
+    expect(pushed).toBeDefined()
+    const envelope = JSON.parse(new TextDecoder().decode(pushed)) as { name: string; bytes: string }
+    expect(envelope.name).toBe('DOC0001.XML')
+    expect(Array.from(atob(envelope.bytes), (c) => c.charCodeAt(0))).toEqual([1, 2, 3, 250])
+  })
+
+  it('marks a doc- id done without pushing when no local provenance record backs it', async () => {
+    const relay = inMemoryBlobClient()
+    configure(relay, passthroughSealKey())
+
+    await enqueue(['doc-missing'])
+    await drain()
+
+    expect(relay.blobs.has('doc-missing')).toBe(false)
+    expect(storeGet(syncStatus).pendingCount).toBe(0)
   })
 })
 

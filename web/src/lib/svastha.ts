@@ -6,6 +6,9 @@
 import init, {
   contract_version,
   verify_event,
+  import_ccda,
+  import_fhir,
+  event_id,
   WasmIdentity,
   WasmDataKey,
 } from '../wasm/svastha'
@@ -17,4 +20,4 @@ export function initSvastha(): Promise<void> {
   return (ready ??= init().then(() => undefined))
 }
 
-export { contract_version, verify_event, WasmIdentity, WasmDataKey }
+export { contract_version, verify_event, import_ccda, import_fhir, event_id, WasmIdentity, WasmDataKey }
