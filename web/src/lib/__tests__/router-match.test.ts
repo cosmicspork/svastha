@@ -26,6 +26,15 @@ describe('matchRoute', () => {
     expect(matchRoute('#/onboard')).toEqual({ path: '/onboard', params: {} })
     expect(matchRoute('#/unlock')).toEqual({ path: '/unlock', params: {} })
     expect(matchRoute('#/settings')).toEqual({ path: '/settings', params: {} })
+    expect(matchRoute('#/share')).toEqual({ path: '/share', params: {} })
+  })
+
+  it('captures the person route dynamic segment', () => {
+    const ed = 'a'.repeat(64)
+    expect(matchRoute(`#/person/${ed}`)).toEqual({
+      path: '/person/:ed',
+      params: { ed },
+    })
   })
 
   it('falls back to home for an unknown route', () => {

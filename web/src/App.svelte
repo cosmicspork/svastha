@@ -13,6 +13,8 @@
   import Home from './routes/Home.svelte'
   import Log from './routes/Log.svelte'
   import Settings from './routes/Settings.svelte'
+  import Share from './routes/Share.svelte'
+  import Person from './routes/Person.svelte'
   import BottomBar from './components/BottomBar.svelte'
 
   let ready = $state(false)
@@ -57,7 +59,7 @@
   {:else if locked()}
     <Unlock />
   {:else}
-    {#if route.path === '/settings'}
+    {#if route.path === '/settings' || route.path === '/share' || route.path === '/person/:ed'}
       <button class="settings-nav" onclick={() => navigate('#/')} data-testid="nav-back">
         ← Back
       </button>
@@ -71,12 +73,16 @@
       <Log kind={route.params.kind} />
     {:else if route.path === '/settings'}
       <Settings />
+    {:else if route.path === '/share'}
+      <Share />
+    {:else if route.path === '/person/:ed'}
+      <Person ed={route.params.ed} />
     {:else}
       <Home />
     {/if}
   {/if}
 
-  {#if ready && vaultExists && !locked()}
+  {#if ready && vaultExists && !locked() && route.path !== '/person/:ed'}
     <BottomBar />
   {/if}
 </main>

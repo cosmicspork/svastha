@@ -3,13 +3,15 @@
 //!
 //! - `SVASTHA_RELAY_ADDR` — listen address (default `127.0.0.1:8080`).
 //! - `SVASTHA_RELAY_MAX_SKEW_SECS` — auth replay window (default `300`).
-//! - `SVASTHA_RELAY_DATA_DIR` — durable blob directory; if unset, blobs are kept
-//!   in memory and lost on restart.
+//! - `SVASTHA_RELAY_DATA_DIR` — durable blob, grant, and mailbox directory; if
+//!   unset, all three are kept in memory and lost on restart.
 //! - `RUST_LOG` — tracing filter (default `svastha_relay=info`).
 
 use std::sync::Arc;
 
 use svastha_relay::app;
+use svastha_relay::grants::{FsGrantStore, GrantStore, MemoryGrantStore};
+use svastha_relay::mailbox::{FsMailboxStore, MailboxStore, MemoryMailboxStore};
 use svastha_relay::store::{BlobStore, FsStore, MemoryStore};
 use tracing_subscriber::EnvFilter;
 
@@ -28,21 +30,31 @@ async fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(300);
 
-    let store: Arc<dyn BlobStore> = match std::env::var("SVASTHA_RELAY_DATA_DIR") {
+    let (store, grants, mailbox): (
+        Arc<dyn BlobStore>,
+        Arc<dyn GrantStore>,
+        Arc<dyn MailboxStore>,
+    ) = match std::env::var("SVASTHA_RELAY_DATA_DIR") {
         Ok(dir) => {
             let store = FsStore::new(&dir).expect("create data directory");
+            let grants = FsGrantStore::new(&dir).expect("create data directory");
+            let mailbox = FsMailboxStore::new(&dir).expect("create data directory");
             tracing::info!(data_dir = %dir, "durable filesystem store");
-            Arc::new(store)
+            (Arc::new(store), Arc::new(grants), Arc::new(mailbox))
         }
         Err(_) => {
             tracing::warn!(
-                "SVASTHA_RELAY_DATA_DIR unset; using in-memory store (blobs lost on restart)"
-            );
-            Arc::new(MemoryStore::new())
+                    "SVASTHA_RELAY_DATA_DIR unset; using in-memory store (blobs, grants, and mailbox lost on restart)"
+                );
+            (
+                Arc::new(MemoryStore::new()),
+                Arc::new(MemoryGrantStore::new()),
+                Arc::new(MemoryMailboxStore::new()),
+            )
         }
     };
 
-    let app = app(store, max_skew_secs);
+    let app = app(store, grants, mailbox, max_skew_secs);
 
     let listener = tokio::net::TcpListener::bind(&addr)
         .await

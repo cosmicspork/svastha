@@ -21,6 +21,16 @@ export const MIGRATIONS: ((db: IDBDatabase, tx: IDBTransaction) => void)[] = [
     db.createObjectStore('provenance', { keyPath: 'sha256' })
     db.createObjectStore('prefs')
   },
+  // v2: spousal sharing — accepted shares (one row per person who shared their
+  // vault with this device) and the read-only event cache pulled from each.
+  (db) => {
+    db.createObjectStore('shares', { keyPath: 'ownerEd' })
+
+    // Compound keyPath: an id is only unique within one owner's log, and a
+    // device may hold events from several shares, so the key must be the pair.
+    const sharedEvents = db.createObjectStore('shared_events', { keyPath: ['ownerEd', 'id'] })
+    sharedEvents.createIndex('by-owner', 'ownerEd')
+  },
 ]
 
 function requestToPromise<T>(req: IDBRequest<T>): Promise<T> {

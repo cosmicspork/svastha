@@ -6,9 +6,18 @@
   import { CATEGORIES, CATEGORY_META, type Category } from '../lib/category'
   import SpineEntry from './SpineEntry.svelte'
 
-  let { hue }: { hue: 'a' | 'b' } = $props()
+  // `readonly` (the person screen, over a share's cached events) supplies its
+  // own already-loaded `events` and skips the own-vault fetch and the shared
+  // `spine-filter` pref — a shared timeline's filter shouldn't clobber (or be
+  // clobbered by) the owner's own spine.
+  let {
+    hue,
+    events: providedEvents,
+    readonly = false,
+  }: { hue: 'a' | 'b'; events?: StoredEvent[]; readonly?: boolean } = $props()
 
-  let events = $state<StoredEvent[]>([])
+  let ownEvents = $state<StoredEvent[]>([])
+  const events = $derived(readonly ? (providedEvents ?? []) : ownEvents)
   let loaded = $state(false)
   let filter = $state<Category | 'all'>('all')
   // Day-group cap, not a scroll virtualizer: a couple logging many times a day
@@ -36,9 +45,15 @@
   })
 
   onMount(async () => {
+    // Readonly callers (Person.svelte) already awaited their events before
+    // rendering this component, so there's nothing left to load here.
+    if (readonly) {
+      loaded = true
+      return
+    }
     const storedFilter = await get<Category | 'all'>('prefs', 'spine-filter')
     if (storedFilter) filter = storedFilter
-    events = await allEvents()
+    ownEvents = await allEvents()
     loaded = true
     // One-shot: after the entrance has played, later re-renders (filter
     // changes, "Show older") appear instantly.
@@ -48,7 +63,7 @@
   async function setFilter(next: Category | 'all') {
     filter = next
     animate = false
-    await put('prefs', next, 'spine-filter')
+    if (!readonly) await put('prefs', next, 'spine-filter')
   }
 </script>
 
@@ -86,7 +101,9 @@
     {#if events.length === 0}
       <div class="tick" data-testid="day-tick"></div>
       <p class="empty-copy" data-testid="empty-state">
-        Nothing logged yet. Start with today — tap Log below.
+        {readonly
+          ? "They haven't logged anything yet."
+          : 'Nothing logged yet. Start with today — tap Log below.'}
       </p>
     {:else}
       {#each shown as day, dayIndex (day.day)}

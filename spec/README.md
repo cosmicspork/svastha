@@ -234,5 +234,65 @@ a storage failure is `500`.
 Client blob-layout conventions (which ids hold what, and how their contents are
 sealed) are app-level and documented in `docs/ARCHITECTURE.md` ("Sync and
 backup"); the wire contract here is unchanged by them.
+
+### Grants
+
+A grant is pure routing metadata: it tells the relay "grantee may list and read
+owner's blobs," nothing more. The relay still never decrypts anything — a grant
+without the wrapped vault key (which travels through the mailbox, below) is
+ciphertext-only access. Keys are Ed25519 identities, the same ones the auth
+handshake authenticates. All auth-required rows use the same handshake as the
+blob endpoints above; there is no separate auth scheme for sharing.
+
+| Method & path | Auth | Body | Success | Notes |
+|---|---|---|---|---|
+| `PUT /v0/grants/{grantee}` | yes | — | `204` | authorize `{grantee}` to read the caller's shared blobs; idempotent |
+| `DELETE /v0/grants/{grantee}` | yes | — | `204` / `404` | revoke |
+| `GET /v0/grants` | yes | — | `200 {"grantees":[hex...]}` | who the caller has granted |
+| `GET /v0/shared` | yes | — | `200 {"owners":[hex...]}` | who has granted the caller |
+| `GET /v0/shared/{owner}/blobs` | yes | — | `200 {"ids":[...]}` / `404` | list `{owner}`'s blob ids, gated on a live grant |
+| `GET /v0/shared/{owner}/blobs/{id}` | yes | — | `200` octets / `404` | fetch one of `{owner}`'s blobs, gated on a live grant |
+
+`{grantee}`/`{owner}` are 64 lowercase hex chars (an Ed25519 public key) or
+`400`. **A missing grant and a missing blob both answer `404`.** If they
+answered differently, a caller could probe an arbitrary public key and learn
+from the status code alone whether it grants them access — leaking the sharing
+graph, which the relay is otherwise blind to. One status code for "not shared
+with you" and "nothing there" keeps that graph unobservable. There are no
+write routes under `/v0/shared/*`; a `PUT` or `DELETE` there is `405`.
+Revocation stops future reads only — it cannot retract anything the grantee
+already synced to their device; the client is responsible for saying so.
+
+### Mailbox
+
+A store-and-forward drop box, used to hand a grantee the vault key a grant
+alone doesn't carry: the depositor wraps it (ECIES) to the recipient's X25519
+key before depositing, so the relay only ever sees ciphertext. Any authed
+identity may deposit into any recipient's mailbox — there is nothing to
+protect at deposit time, since the payload is opaque and the recipient decides
+whether to trust it (see the client-side accept flow in
+`docs/ARCHITECTURE.md`). Reading, listing, and deleting are scoped to the
+caller's own mailbox.
+
+| Method & path | Auth | Body | Success | Notes |
+|---|---|---|---|---|
+| `PUT /v0/mailbox/{recipient}/{id}` | yes | ≤ 4 KiB | `204` / `413` | deposit an item for `{recipient}` |
+| `GET /v0/mailbox` | yes | — | `200 {"items":[{"id":...,"from":hex}...]}` | list the caller's items |
+| `GET /v0/mailbox/{id}` | yes | — | `200` octets / `404` | fetch one, with a `svastha-from: {hex}` response header |
+| `DELETE /v0/mailbox/{id}` | yes | — | `204` / `404` | delete one |
+
+`{recipient}` is 64 lowercase hex chars or `400`; `{id}` reuses the blob `{id}`
+rule above. The 4 KiB cap is deliberately small: a mailbox item carries one
+wrapped vault key plus a small JSON envelope, never anything larger, so the
+cap bounds the spam surface without constraining legitimate use. The
+`svastha-from` header is the relay's attestation of the depositor's
+already-verified auth identity — not a claim the client makes about itself —
+which the receiving client then binds to whatever identity the payload itself
+claims to be from, so a mismatch is detectable.
+
 The relay is stateless and keyless: it never decrypts, holds no user keys, and
-ships as a single static binary for self-hosting.
+ships as a single static binary for self-hosting. All of the above — blobs,
+grants, and mailbox — reuse the one auth handshake; server-side semantics
+(the two-404 non-leak rule, the mailbox cap, method routing) are pinned by the
+relay's integration tests rather than by test vectors, since none of it changes
+the signed bytes.

@@ -3,58 +3,19 @@
 //! from `svastha_core::relay`, so these exercise the whole auth contract.
 
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-use axum::body::{to_bytes, Body};
+use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use svastha_core::keys::Identity;
 use svastha_core::relay::{sign_request, AuthRequest};
 use svastha_relay::app;
-use svastha_relay::store::{FsStore, MemoryStore};
+use svastha_relay::grants::MemoryGrantStore;
+use svastha_relay::mailbox::MemoryMailboxStore;
+use svastha_relay::store::FsStore;
 use tower::ServiceExt;
 
-const SKEW: u64 = 300;
-
-fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
-}
-
-fn router() -> axum::Router {
-    app(Arc::new(MemoryStore::new()), SKEW)
-}
-
-/// Build a request and attach the three signed-auth headers for `signer`.
-fn signed(
-    signer: &Identity,
-    method: &str,
-    path: &str,
-    body: &[u8],
-    timestamp: u64,
-) -> Request<Body> {
-    let auth = AuthRequest::new(method, path, body, timestamp);
-    let signature = sign_request(signer, &auth);
-    Request::builder()
-        .method(method)
-        .uri(path)
-        .header(
-            "svastha-public-key",
-            hex::encode(signer.verifying_key().to_bytes()),
-        )
-        .header("svastha-timestamp", timestamp.to_string())
-        .header("svastha-signature", hex::encode(signature))
-        .body(Body::from(body.to_vec()))
-        .unwrap()
-}
-
-async fn body_bytes(response: axum::response::Response) -> Vec<u8> {
-    to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap()
-        .to_vec()
-}
+mod common;
+use common::{body_bytes, now, router, signed, SKEW};
 
 #[tokio::test]
 async fn health_and_info_need_no_auth() {
@@ -244,8 +205,15 @@ async fn filesystem_store_persists_across_restart() {
     let alice = Identity::from_seed(b"alice");
     let blob = b"durable ciphertext";
 
-    // First "process": store a blob through the HTTP layer.
-    let first = app(Arc::new(FsStore::new(dir.path()).unwrap()), SKEW);
+    // First "process": store a blob through the HTTP layer. Grants and mailbox
+    // are fresh in-memory stores each time — this test only cares about blob
+    // durability.
+    let first = app(
+        Arc::new(FsStore::new(dir.path()).unwrap()),
+        Arc::new(MemoryGrantStore::new()),
+        Arc::new(MemoryMailboxStore::new()),
+        SKEW,
+    );
     let put = first
         .oneshot(signed(&alice, "PUT", "/v0/blobs/rec1", blob, now()))
         .await
@@ -253,7 +221,12 @@ async fn filesystem_store_persists_across_restart() {
     assert_eq!(put.status(), StatusCode::NO_CONTENT);
 
     // A fresh app over the same directory (a "restart") still serves it.
-    let second = app(Arc::new(FsStore::new(dir.path()).unwrap()), SKEW);
+    let second = app(
+        Arc::new(FsStore::new(dir.path()).unwrap()),
+        Arc::new(MemoryGrantStore::new()),
+        Arc::new(MemoryMailboxStore::new()),
+        SKEW,
+    );
     let get = second
         .oneshot(signed(&alice, "GET", "/v0/blobs/rec1", b"", now()))
         .await

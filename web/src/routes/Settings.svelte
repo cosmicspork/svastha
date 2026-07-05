@@ -7,6 +7,7 @@
   import { RelayClient, checkRelayInfo, normalizeRelayUrl } from '../lib/relay'
   import { connectRelay } from '../lib/vault'
   import { syncTeardown, syncStatus, pullAll } from '../lib/sync'
+  import { navigate } from '../lib/router.svelte'
 
   /** Show a public key as spaced hex byte-groups, truncated — enough to eyeball
    * a match, not the full 64-char key. */
@@ -279,6 +280,14 @@
     </div>
   {/if}
 </section>
+
+{#if relayConnected}
+  <section class="stack">
+    <h2>Sharing</h2>
+    <p class="muted">Give your partner ongoing, read-only access to your vault.</p>
+    <button onclick={() => navigate('#/share')} data-testid="nav-share">Share my vault</button>
+  </section>
+{/if}
 
 <section class="stack">
   <h2>About</h2>

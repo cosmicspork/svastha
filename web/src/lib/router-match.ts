@@ -10,7 +10,15 @@ export interface RouteMatch {
   params: Record<string, string>
 }
 
-const KNOWN_PATTERNS = ['/', '/log/:kind', '/onboard', '/unlock', '/settings']
+const KNOWN_PATTERNS = [
+  '/',
+  '/log/:kind',
+  '/onboard',
+  '/unlock',
+  '/settings',
+  '/share',
+  '/person/:ed',
+]
 
 /** Split a pattern and a concrete path into same-length segment arrays, or
  * `null` if the segment counts differ. */

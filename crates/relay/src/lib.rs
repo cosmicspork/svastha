@@ -5,10 +5,19 @@
 //! scopes storage to the authenticated owner, and stores opaque ciphertext it
 //! cannot read. See `docs/ARCHITECTURE.md` and `spec/README.md`.
 //!
-//! [`app`] builds the router for a given [`store::BlobStore`]; the binary
-//! ([`main`](../main.rs)) wires it to an in-memory store and `axum::serve`.
+//! Beyond blobs, the relay also carries two pieces of pure routing metadata for
+//! household sharing: [`grants::GrantStore`] (who has authorized whom to read
+//! their vault) and [`mailbox::MailboxStore`] (a store-and-forward drop box for
+//! the wrapped vault key that makes a grant useful). Neither reveals vault
+//! contents; see `docs/ARCHITECTURE.md`, "Vaults and grants".
+//!
+//! [`app`] builds the router for a given set of stores; the binary
+//! ([`main`](../main.rs)) wires it to in-memory (or filesystem) stores and
+//! `axum::serve`.
 
 pub mod auth;
+pub mod grants;
+pub mod mailbox;
 pub mod routes;
 pub mod store;
 
@@ -21,20 +30,31 @@ use axum::{
 };
 use tower_http::cors::CorsLayer;
 
+use grants::GrantStore;
+use mailbox::MailboxStore;
 use store::BlobStore;
 
-/// Shared handler state: the blob store and the auth freshness window.
+/// Shared handler state: the stores and the auth freshness window.
 #[derive(Clone)]
 pub struct AppState {
     pub store: Arc<dyn BlobStore>,
+    pub grants: Arc<dyn GrantStore>,
+    pub mailbox: Arc<dyn MailboxStore>,
     pub max_skew_secs: u64,
 }
 
 /// Build the relay router. `max_skew_secs` is how far a request's signed
 /// timestamp may differ from the relay's clock (replay window).
-pub fn app(store: Arc<dyn BlobStore>, max_skew_secs: u64) -> Router {
+pub fn app(
+    store: Arc<dyn BlobStore>,
+    grants: Arc<dyn GrantStore>,
+    mailbox: Arc<dyn MailboxStore>,
+    max_skew_secs: u64,
+) -> Router {
     let state = AppState {
         store,
+        grants,
+        mailbox,
         max_skew_secs,
     };
 
@@ -49,6 +69,23 @@ pub fn app(store: Arc<dyn BlobStore>, max_skew_secs: u64) -> Router {
                 .get(routes::get_blob)
                 .delete(routes::delete_blob),
         )
+        .route("/v0/grants", get(routes::list_grants))
+        .route(
+            "/v0/grants/{grantee}",
+            put(routes::put_grant).delete(routes::delete_grant),
+        )
+        .route("/v0/shared", get(routes::list_shared))
+        .route("/v0/shared/{owner}/blobs", get(routes::list_shared_blobs))
+        .route(
+            "/v0/shared/{owner}/blobs/{id}",
+            get(routes::get_shared_blob),
+        )
+        .route("/v0/mailbox", get(routes::list_mailbox))
+        .route(
+            "/v0/mailbox/{id}",
+            get(routes::get_mailbox).delete(routes::delete_mailbox),
+        )
+        .route("/v0/mailbox/{recipient}/{id}", put(routes::put_mailbox))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,

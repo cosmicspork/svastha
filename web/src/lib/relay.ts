@@ -12,6 +12,13 @@ export function normalizeRelayUrl(url: string): string {
   return url.trim().replace(/\/+$/, '')
 }
 
+/** One entry in a `GET /v0/mailbox` listing: an id and the depositor's hex
+ * Ed25519 public key. */
+export interface MailboxItem {
+  id: string
+  from: string
+}
+
 /**
  * Version-negotiate with a relay before trusting it with anything: fetch its
  * unauthenticated `/v0/info` and compare `contract_version`. Throws a
@@ -74,6 +81,97 @@ export class RelayClient {
     const res = await this.fetch('DELETE', `/v0/blobs/${id}`)
     if (res.status === 404) return false
     if (!res.ok) throw new Error(`deleteBlob ${id}: ${res.status}`)
+    return true
+  }
+
+  // --- grants: relay-level read authorization for household sharing ---
+
+  /** Authorize `granteeHex` (an Ed25519 public key, hex) to read this
+   * identity's shared blobs. Idempotent. */
+  async putGrant(granteeHex: string): Promise<void> {
+    const res = await this.fetch('PUT', `/v0/grants/${granteeHex}`)
+    if (!res.ok) throw new Error(`putGrant ${granteeHex}: ${res.status}`)
+  }
+
+  /** Revoke a grant; resolves to whether one existed. */
+  async deleteGrant(granteeHex: string): Promise<boolean> {
+    const res = await this.fetch('DELETE', `/v0/grants/${granteeHex}`)
+    if (res.status === 404) return false
+    if (!res.ok) throw new Error(`deleteGrant ${granteeHex}: ${res.status}`)
+    return true
+  }
+
+  /** Everyone this identity has granted read access to (hex Ed25519 keys). */
+  async listGrants(): Promise<string[]> {
+    const res = await this.fetch('GET', '/v0/grants')
+    if (!res.ok) throw new Error(`listGrants: ${res.status}`)
+    const body = (await res.json()) as { grantees: string[] }
+    return body.grantees
+  }
+
+  // --- shared: reading a vault someone else granted this identity ---
+
+  /** Everyone who has granted this identity read access to their vault. */
+  async listShared(): Promise<string[]> {
+    const res = await this.fetch('GET', '/v0/shared')
+    if (!res.ok) throw new Error(`listShared: ${res.status}`)
+    const body = (await res.json()) as { owners: string[] }
+    return body.owners
+  }
+
+  /** List `ownerHex`'s blob ids, or `null` if there is no live grant (the
+   * grant was revoked, or never existed) — the relay answers the same `404`
+   * either way, so this can't distinguish "revoked" from "never shared". */
+  async listSharedBlobs(ownerHex: string): Promise<string[] | null> {
+    const res = await this.fetch('GET', `/v0/shared/${ownerHex}/blobs`)
+    if (res.status === 404) return null
+    if (!res.ok) throw new Error(`listSharedBlobs ${ownerHex}: ${res.status}`)
+    const body = (await res.json()) as { ids: string[] }
+    return body.ids
+  }
+
+  /** Fetch one of `ownerHex`'s blobs, or `null` if there is no live grant or
+   * no such blob (see {@link listSharedBlobs}'s note on the shared `404`). */
+  async getSharedBlob(ownerHex: string, id: string): Promise<Uint8Array | null> {
+    const res = await this.fetch('GET', `/v0/shared/${ownerHex}/blobs/${id}`)
+    if (res.status === 404) return null
+    if (!res.ok) throw new Error(`getSharedBlob ${ownerHex}/${id}: ${res.status}`)
+    return new Uint8Array(await res.arrayBuffer())
+  }
+
+  // --- mailbox: a store-and-forward drop box for wrapped vault keys ---
+
+  /** Deposit an item for `recipientHex`. Any authed identity may deposit into
+   * any mailbox — see `spec/README.md`'s "Mailbox" section. */
+  async putMailbox(recipientHex: string, id: string, blob: Uint8Array): Promise<void> {
+    const res = await this.fetch('PUT', `/v0/mailbox/${recipientHex}/${id}`, blob)
+    if (!res.ok) throw new Error(`putMailbox ${recipientHex}/${id}: ${res.status}`)
+  }
+
+  /** List this identity's mailbox items (no bodies). */
+  async listMailbox(): Promise<MailboxItem[]> {
+    const res = await this.fetch('GET', '/v0/mailbox')
+    if (!res.ok) throw new Error(`listMailbox: ${res.status}`)
+    const body = (await res.json()) as { items: MailboxItem[] }
+    return body.items
+  }
+
+  /** Fetch one mailbox item, or `null` if it doesn't exist. `from` is the
+   * relay's attestation of the depositor's identity (the `svastha-from`
+   * response header), not a claim the payload makes about itself. */
+  async getMailbox(id: string): Promise<{ blob: Uint8Array; from: string } | null> {
+    const res = await this.fetch('GET', `/v0/mailbox/${id}`)
+    if (res.status === 404) return null
+    if (!res.ok) throw new Error(`getMailbox ${id}: ${res.status}`)
+    const from = res.headers.get('svastha-from') ?? ''
+    return { blob: new Uint8Array(await res.arrayBuffer()), from }
+  }
+
+  /** Delete a mailbox item; resolves to whether one existed. */
+  async deleteMailbox(id: string): Promise<boolean> {
+    const res = await this.fetch('DELETE', `/v0/mailbox/${id}`)
+    if (res.status === 404) return false
+    if (!res.ok) throw new Error(`deleteMailbox ${id}: ${res.status}`)
     return true
   }
 
