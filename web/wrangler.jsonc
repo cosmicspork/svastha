@@ -1,0 +1,11 @@
+{
+  // Static assets only, no Worker script: the PWA is a client-side hash router
+  // over IndexedDB and WASM, with no server-rendered or edge-computed routes.
+  "name": "svastha",
+  "compatibility_date": "2026-07-05",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+  // No routes/custom domain here; those are attached in the dashboard later.
+}
