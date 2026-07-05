@@ -35,6 +35,13 @@ jobs:
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    # npm publishes via trusted publishing (OIDC): the workflow identity is the
+    # credential, so no npm token exists to leak. id-token lets the runner mint
+    # the OIDC token; job-level permissions override the workflow block, so
+    # contents: read must be restated.
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -79,12 +86,16 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
+          node-version: 24
 
+      # Trusted publishing needs npm >= 11.5.1; the runner's bundled npm may lag.
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      # No token: npm detects the Actions OIDC context and authenticates as the
+      # trusted publisher configured in the package's npmjs.com settings.
+      # Provenance attestations are generated automatically.
       - name: Publish to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
         run: cd crates/wasm/pkg && npm publish --access public
 
   # Builds and pushes the relay image. Downstream deploy config watches GHCR
