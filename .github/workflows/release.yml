@@ -29,9 +29,11 @@ jobs:
   # Runs only when a release was actually cut (same workflow run, so it isn't
   # blocked by the GITHUB_TOKEN "don't trigger workflows" rule). Publishes the
   # six crates to crates.io and the wasm SDK to npm as @svastha/core.
+  # Also dispatchable: versions come from the Cargo.tomls on main (not the
+  # release output), and the already-uploaded skip makes re-runs safe.
   publish:
     needs: release-please
-    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    if: ${{ needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,13 +46,23 @@ jobs:
 
       # Dependency order: core first; the rest depend only on core. Modern cargo
       # waits for each crate to appear in the index before returning.
+      # Already-uploaded versions are skipped, so a run that dies mid-loop
+      # (crates.io rate limits new crates in bursts) can be re-dispatched and
+      # picks up where it left off instead of failing on the first crate.
       - name: Publish crates to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           for crate in svastha-core svastha-import svastha svastha-wasm svastha-relay svastha-node; do
             echo "publishing $crate"
-            cargo publish -p "$crate"
+            if ! output=$(cargo publish -p "$crate" 2>&1); then
+              if grep -q "already uploaded" <<<"$output"; then
+                echo "$crate: this version is already on crates.io — skipping"
+              else
+                echo "$output"
+                exit 1
+              fi
+            fi
           done
 
       - uses: jetli/wasm-pack-action@v0.4.0
