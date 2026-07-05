@@ -15,7 +15,8 @@ non-Rust reimplementation or an auditor can validate against the same bytes.
 negotiate on it so independently deployed and self-hosted pieces can coexist.
 
 Status: key derivation, the encryption envelope, the event schema, and the relay
-wire protocol (auth handshake and blob endpoints) are specified below.
+wire protocol (auth handshake, blob endpoints, grants, and mailbox) are
+specified below.
 
 ## Key derivation
 
