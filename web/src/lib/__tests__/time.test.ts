@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { toLocalIso, dayKey, formatTime, formatDay } from '../time'
+import { toLocalIso, dayKey, formatTime, formatDay, isoToMillis, addHoursIso } from '../time'
 
 /** The expected `±HH:MM` suffix for a date in the runner's local timezone —
  * derived independently of toLocalIso so the tests hold in any TZ. */
@@ -58,6 +58,37 @@ describe('formatTime', () => {
     expect(formatTime('2026-07-04T00:05:00-05:00')).toBe('12:05 AM')
     expect(formatTime('2026-07-04T12:00:00+09:00')).toBe('12:00 PM')
     expect(formatTime('2026-07-04T23:59:00Z')).toBe('11:59 PM')
+  })
+})
+
+describe('isoToMillis', () => {
+  it('is a true instant comparison, not a lexical string comparison', () => {
+    // Same instant, two different (both valid) offset spellings — a lexical
+    // string comparison would treat these as unequal or misordered.
+    expect(isoToMillis('2026-07-04T12:00:00+00:00')).toBe(isoToMillis('2026-07-04T07:00:00-05:00'))
+  })
+})
+
+describe('addHoursIso', () => {
+  // Built from toLocalIso(new Date(...)) rather than a hardcoded offset
+  // string, same reasoning as expectedOffset() above: this file doesn't pin
+  // a timezone, so the expected offset has to be whatever the runner's own
+  // zone says. None of these three dates are near a DST transition in any
+  // real-world zone, so wall-clock and real-elapsed-time addition agree —
+  // the boundary-crossing case (where they don't) is dst.test.ts's job.
+  it('adds whole hours', () => {
+    const start = toLocalIso(new Date(2026, 6, 4, 8, 30, 0))
+    expect(addHoursIso(start, 3)).toBe(toLocalIso(new Date(2026, 6, 4, 11, 30, 0)))
+  })
+
+  it('adds fractional hours', () => {
+    const start = toLocalIso(new Date(2026, 6, 4, 8, 0, 0))
+    expect(addHoursIso(start, 1.5)).toBe(toLocalIso(new Date(2026, 6, 4, 9, 30, 0)))
+  })
+
+  it('supports negative hours (looking backward)', () => {
+    const start = toLocalIso(new Date(2026, 6, 4, 8, 0, 0))
+    expect(addHoursIso(start, -2)).toBe(toLocalIso(new Date(2026, 6, 4, 6, 0, 0)))
   })
 })
 

@@ -53,6 +53,27 @@ export function formatTime(iso: string): string {
   return `${hour12}:${minute} ${suffix}`
 }
 
+/** True-instant milliseconds for an ISO string produced by `toLocalIso` (or
+ * any other valid ISO-8601 offset string). Deliberately NOT a lexical string
+ * comparison: two `toLocalIso` strings that straddle a DST boundary carry
+ * different UTC offsets, so comparing the date/time characters directly can
+ * misorder them. `Date` parses the offset correctly, so its epoch millis is
+ * the one true ordering. */
+export function isoToMillis(iso: string): number {
+  return new Date(iso).getTime()
+}
+
+/** Add (possibly fractional, possibly negative) hours to an ISO instant and
+ * re-serialize as local wall-clock time. DST-safe: the addition happens in
+ * real elapsed milliseconds (via `Date`, not by editing the string's hour
+ * field), and `toLocalIso` then reads whichever UTC offset is in effect at
+ * the *result* instant — so "2 hours after 1:30 AM" on a spring-forward day
+ * correctly lands on 4:30 AM wall-clock (1 real hour of which is the
+ * skipped 2 AM hour), not 3:30 AM. Used by correlate.ts for window math. */
+export function addHoursIso(iso: string, hours: number): string {
+  return toLocalIso(new Date(new Date(iso).getTime() + hours * 3_600_000))
+}
+
 /** "Today" / "Yesterday" / weekday + date, relative to the device's current
  * local date. */
 export function formatDay(key: string): string {

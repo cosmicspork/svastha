@@ -31,6 +31,15 @@ export const MIGRATIONS: ((db: IDBDatabase, tx: IDBTransaction) => void)[] = [
     const sharedEvents = db.createObjectStore('shared_events', { keyPath: ['ownerEd', 'id'] })
     sharedEvents.createIndex('by-owner', 'ownerEd')
   },
+  // v3: the curation overlay (see lib/curation.ts) — the store's only mutable
+  // records (tags, notes, hides, favorites), keyed on the curation record's
+  // own namespaced `key` (e.g. `tag:{event_id}`). `updated_at` is indexed so a
+  // future admin/debug view can page through the most recently touched
+  // records without a full scan.
+  (db) => {
+    const curation = db.createObjectStore('curation', { keyPath: 'key' })
+    curation.createIndex('updated_at', 'updated_at')
+  },
 ]
 
 function requestToPromise<T>(req: IDBRequest<T>): Promise<T> {

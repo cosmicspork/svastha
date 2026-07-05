@@ -49,8 +49,8 @@
   </div>
 {/each}
 
-{#if shares.length > 0}
-  <div class="switcher" data-testid="person-switcher">
+<div class="switcher" data-testid="home-nav">
+  {#if shares.length > 0}
     <button
       class="switch-chip"
       aria-pressed="true"
@@ -68,8 +68,11 @@
         {share.label}
       </button>
     {/each}
-  </div>
-{/if}
+  {/if}
+  <button class="switch-chip patterns" onclick={() => navigate('#/correlate')} data-testid="nav-correlate">
+    Patterns
+  </button>
+</div>
 
 <Spine {hue} />
 
@@ -105,5 +108,9 @@
     border-color: var(--action);
     color: var(--action);
     background: var(--action-muted);
+  }
+
+  .switch-chip.patterns {
+    margin-left: auto;
   }
 </style>
