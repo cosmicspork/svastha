@@ -26,6 +26,45 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
+      # release-please stamps the new version into the workspace Cargo.tomls
+      # (via extra-files) but can't touch Cargo.lock, so the release PR opens
+      # with a stale lockfile until someone pushes a manual refresh — this bit
+      # the v0.1.0 release PR (CI failed on the version mismatch). The refresh
+      # has to happen here, in this job, right after the action runs: a
+      # separate workflow watching pushes to the release branch would never
+      # fire, since pushes made with GITHUB_TOKEN (release-please-action's
+      # commits included) don't trigger other workflows.
+      - name: Check out the release PR branch
+        if: steps.rp.outputs.prs_created == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ fromJson(steps.rp.outputs.pr).headBranchName }}
+
+      - name: Install Rust
+        if: steps.rp.outputs.prs_created == 'true'
+        run: rustup toolchain install stable --profile minimal
+
+      # Re-resolves only the workspace-member versions release-please just
+      # bumped; third-party dependency versions are left alone.
+      - name: Refresh Cargo.lock
+        if: steps.rp.outputs.prs_created == 'true'
+        run: cargo update --workspace
+
+      # Committed and pushed as github-actions[bot] with GITHUB_TOKEN, same as
+      # release-please-action's own commits — so this can't loop: the push
+      # won't trigger this workflow, and a re-run finds a clean lockfile and
+      # skips the commit.
+      - name: Commit and push the refreshed lockfile
+        if: steps.rp.outputs.prs_created == 'true'
+        run: |
+          if [ -n "$(git status --porcelain Cargo.lock)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add Cargo.lock
+            git commit -m "chore: refresh Cargo.lock for release"
+            git push origin HEAD:${{ fromJson(steps.rp.outputs.pr).headBranchName }}
+          fi
+
   # Runs only when a release was actually cut (same workflow run, so it isn't
   # blocked by the GITHUB_TOKEN "don't trigger workflows" rule). Publishes the
   # six crates to crates.io and the wasm SDK to npm as @svastha/core.
