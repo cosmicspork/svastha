@@ -22,3 +22,6 @@ serde_json = "1"
 hex = "0.4"
 # Surfaces Rust panics in the browser console instead of an opaque unreachable.
 console_error_panic_hook = "0.1"
+# Only for the WasmDataKey::wrap_to public-key parameter type — same version
+# as core, no `static_secrets` (we only ever construct a public key here).
+x25519-dalek = "2"

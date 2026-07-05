@@ -4,7 +4,38 @@
 // browser and relay agree exactly. The relay stores opaque ciphertext — seal
 // before uploading and open after downloading (see `WasmDataKey`).
 import type { WasmIdentity } from './svastha'
+import { contract_version } from './svastha'
 import { toHex } from './hex'
+
+/** Strip a trailing slash so `${url}/v0/...` never double-slashes. */
+export function normalizeRelayUrl(url: string): string {
+  return url.trim().replace(/\/+$/, '')
+}
+
+/**
+ * Version-negotiate with a relay before trusting it with anything: fetch its
+ * unauthenticated `/v0/info` and compare `contract_version`. Throws a
+ * user-facing message either way (network failure vs. version mismatch), so
+ * Settings and Onboard can show the error directly.
+ */
+export async function checkRelayInfo(baseUrl: string): Promise<void> {
+  let res: Response
+  try {
+    res = await fetch(`${baseUrl}/v0/info`)
+  } catch {
+    throw new Error('Could not reach the relay — check the address and your connection.')
+  }
+  if (!res.ok) {
+    throw new Error('Could not reach the relay — check the address and your connection.')
+  }
+  const body = (await res.json()) as { contract_version: number }
+  const ours = contract_version()
+  if (body.contract_version !== ours) {
+    throw new Error(
+      `This relay speaks contract v${body.contract_version}, this app v${ours} — update the older one.`,
+    )
+  }
+}
 
 export class RelayClient {
   /**

@@ -1,0 +1,391 @@
+// Relay sync engine: after every signed event, seal it under the vault key
+// and push it to the relay; pull namespaces this device doesn't have yet.
+// There is no manifest (see docs/ARCHITECTURE.md, "Sync and backup"): the
+// relay only lists blob ids, and the diff below (against the local `sync`
+// outbox and the `events` store) is what converges two devices.
+//
+// This module deliberately does not import session.svelte.ts (or events.ts's
+// runtime — only its type), because both ultimately depend on Svelte's
+// `$state` rune, which is compiled by Vite's svelte plugin. vitest.config.ts
+// runs plain TS unit tests without that plugin (see its comment), so pulling
+// a rune module in transitively would crash at import time. Callers pass the
+// relay client and vault key in explicitly (`syncInit`), and the one
+// unavoidable runtime hook into events.ts (`setOnEventsLogged`) is wired via
+// a dynamic import, touched only by real app code, never by a test that
+// imports this module to exercise the diff/queue functions below.
+import { get, put, getAll } from './db'
+import { verify_event } from './svastha'
+import type { StoredEvent } from './events'
+import { writable } from 'svelte/store'
+
+/** The relay surface this engine needs — narrower than `RelayClient` so
+ * tests can supply an in-memory fake without fighting `RelayClient`'s
+ * private-field nominal typing. `RelayClient` satisfies this structurally. */
+export interface BlobClient {
+  putBlob(id: string, blob: Uint8Array): Promise<void>
+  getBlob(id: string): Promise<Uint8Array | null>
+  listBlobs(): Promise<string[]>
+}
+
+/** The vault-key surface this engine needs. `WasmDataKey` satisfies this
+ * structurally. */
+export interface SealKey {
+  seal(plaintext: Uint8Array, aad: Uint8Array): Uint8Array
+  open(sealed: Uint8Array, aad: Uint8Array): Uint8Array
+}
+
+/** A namespace plug-in. `doc-` and `cur-` arrive in later PRs and register
+ * here the same way the events codec (below) does. */
+export interface Codec {
+  prefix: string
+  localHas(id: string): Promise<boolean>
+  localLoad(id: string): Promise<Uint8Array | null>
+  remoteApply(id: string, plaintext: Uint8Array): Promise<void>
+}
+
+const codecs: Codec[] = []
+
+export function registerCodec(codec: Codec): void {
+  codecs.push(codec)
+}
+
+function codecFor(id: string): Codec | undefined {
+  return codecs.find((c) => id.startsWith(c.prefix))
+}
+
+/** Every vault-key-sealed blob is bound to its own id as AAD: a malicious
+ * relay must not be able to swap ciphertext between two blob ids
+ * undetected. */
+function aad(blobId: string): Uint8Array {
+  return new TextEncoder().encode(blobId)
+}
+
+// --- events codec ('ev-') ---
+
+function eventBlobId(eventId: string): string {
+  return `ev-${eventId}`
+}
+
+function eventIdFromBlobId(blobId: string): string {
+  return blobId.slice('ev-'.length)
+}
+
+const eventsCodec: Codec = {
+  prefix: 'ev-',
+  async localHas(id) {
+    return (await get('events', eventIdFromBlobId(id))) !== undefined
+  },
+  async localLoad(id) {
+    const stored = await get<StoredEvent>('events', eventIdFromBlobId(id))
+    return stored ? new TextEncoder().encode(JSON.stringify(stored)) : null
+  },
+  async remoteApply(id, plaintext) {
+    const eventId = eventIdFromBlobId(id)
+    const json = new TextDecoder().decode(plaintext)
+    // A malicious relay must not be able to inject or swap events: the
+    // signature must verify, AND the embedded id must equal the blob id it
+    // was fetched under (`aad` above binds the sealing; this binds content).
+    if (!verify_event(json)) throw new Error(`ev- blob ${id}: signature does not verify`)
+    const signed = JSON.parse(json) as StoredEvent
+    if (signed.event.id !== eventId) throw new Error(`ev- blob ${id}: embedded id does not match`)
+    await put('events', signed)
+  },
+}
+registerCodec(eventsCodec)
+
+// --- pure diff functions (unit tested without wasm or a browser) ---
+
+/** Blob ids on the relay this device should pull: known to a registered
+ * codec and not already applied locally. */
+export function idsToPull(remoteIds: string[], doneIds: ReadonlySet<string>): string[] {
+  return remoteIds.filter((id) => !doneIds.has(id) && codecFor(id) !== undefined)
+}
+
+/** Local events missing from the relay's list — these need pushing so a
+ * second device converges without a manifest (restore-then-log-on-two-devices
+ * agreement). */
+export function idsToPush(
+  localEventIds: string[],
+  remoteIds: ReadonlySet<string>,
+  doneIds: ReadonlySet<string>,
+): string[] {
+  return localEventIds
+    .map(eventBlobId)
+    .filter((blobId) => !remoteIds.has(blobId) && !doneIds.has(blobId))
+}
+
+// --- status surface ---
+//
+// A plain Svelte store (not a `.svelte.ts` rune module) for the same reason
+// as the module doc comment above: `svelte/store`'s `writable` is a regular
+// function export, not a compiler macro, so it works under plain vitest.
+// Settings.svelte reads it with `$syncStatus`.
+
+export interface SyncStatusValue {
+  configured: boolean
+  online: boolean
+  pendingCount: number
+  lastPullAt: string | null
+  lastError: string | null
+  // Applied-during-the-current-pull counter, reset at the start of each
+  // `pullAll()`. Onboard's restore-with-relay flow reads this for a "N so
+  // far" progress line; nothing else needs it, so it's not otherwise wired.
+  pulledCount: number
+}
+
+// `navigator.onLine` is a browser API; under vitest/Node it's either absent
+// or present-but-`undefined` (as opposed to explicitly `false`), so treat
+// anything other than an explicit `false` as online.
+function isOnline(): boolean {
+  return typeof navigator === 'undefined' || navigator.onLine !== false
+}
+
+export const syncStatus = writable<SyncStatusValue>({
+  configured: false,
+  online: isOnline(),
+  pendingCount: 0,
+  lastPullAt: null,
+  lastError: null,
+  pulledCount: 0,
+})
+
+function patchStatus(partial: Partial<SyncStatusValue>): void {
+  syncStatus.update((s) => ({ ...s, ...partial }))
+}
+
+// --- outbox ---
+
+interface SyncRecord {
+  id: string
+  state: 'pending' | 'done'
+  updated_at: string
+}
+
+/** Capped exponential backoff for a failing push: 1s, 5s, 30s, then give up
+ * and wait for the next external trigger (an enqueue, the 'online' event, or
+ * the next scheduled pull) rather than retrying forever unattended. */
+export const BACKOFF_SCHEDULE_MS = [1000, 5000, 30_000]
+
+async function refreshPendingCount(): Promise<void> {
+  const all = await getAll<SyncRecord>('sync')
+  patchStatus({ pendingCount: all.filter((r) => r.state === 'pending').length })
+}
+
+async function markDone(id: string): Promise<void> {
+  await put('sync', { id, state: 'done', updated_at: new Date().toISOString() })
+}
+
+/** Queue blobs for push. Already-`done` ids are left alone — re-enqueuing a
+ * blob that is already confirmed on the relay would just re-push identical
+ * ciphertext (harmless, but pointless).
+ *
+ * Deliberately does not kick `drain()` itself: callers that want the queue
+ * drained right away (the events hook, `pullAll`'s reconcile step, the
+ * 'online' handler) do so explicitly, one line after their `enqueue` call.
+ * This keeps `enqueue` awaitable to a clean, fully-settled state — useful
+ * for tests, and for anything that wants to know the queue write landed
+ * without racing `drain`'s own reentrancy guard. */
+export async function enqueue(blobIds: string[]): Promise<void> {
+  const now = new Date().toISOString()
+  for (const id of blobIds) {
+    const existing = await get<SyncRecord>('sync', id)
+    if (existing?.state === 'done') continue
+    await put('sync', { id, state: 'pending', updated_at: now })
+  }
+  await refreshPendingCount()
+}
+
+async function nextPending(): Promise<SyncRecord | undefined> {
+  const all = await getAll<SyncRecord>('sync')
+  return all.find((r) => r.state === 'pending')
+}
+
+let relayClient: BlobClient | null = null
+let vaultKey: SealKey | null = null
+let draining = false
+
+/** Wire the relay client and vault key the engine pushes/pulls through.
+ * Split out from `syncInit` so tests can drive `enqueue`/`drain`/`pullAll`
+ * against a mock relay without the browser-only wiring (event listeners,
+ * timers, the events-hook dynamic import) `syncInit` also does. */
+export function configure(relay: BlobClient, key: SealKey): void {
+  relayClient = relay
+  vaultKey = key
+}
+
+/** Push every pending outbox entry, one at a time (concurrency 1 is fine at
+ * this scale — quick-log rarely produces more than a handful of events per
+ * save). Stops and waits for the next trigger once a push has exhausted
+ * `BACKOFF_SCHEDULE_MS`, rather than retrying unattended forever. */
+export async function drain(): Promise<void> {
+  if (draining || !relayClient || !vaultKey) return
+  if (!isOnline()) return
+  draining = true
+  try {
+    for (;;) {
+      const pending = await nextPending()
+      if (!pending) return
+
+      let attempt = 0
+      for (;;) {
+        try {
+          await pushOne(pending.id)
+          break
+        } catch (err) {
+          patchStatus({ lastError: String(err) })
+          if (attempt >= BACKOFF_SCHEDULE_MS.length) return // wait for the next trigger
+          await new Promise((resolve) => setTimeout(resolve, BACKOFF_SCHEDULE_MS[attempt]))
+          attempt++
+        }
+      }
+    }
+  } finally {
+    draining = false
+    await refreshPendingCount()
+  }
+}
+
+async function pushOne(blobId: string): Promise<void> {
+  const codec = codecFor(blobId)
+  const plaintext = codec ? await codec.localLoad(blobId) : null
+  if (!plaintext) {
+    // Nothing to push — deleted locally, or an id with no registered codec.
+    // Mark it done so it isn't retried forever.
+    await markDone(blobId)
+    return
+  }
+  const sealed = vaultKey!.seal(plaintext, aad(blobId))
+  await relayClient!.putBlob(blobId, sealed)
+  await markDone(blobId)
+}
+
+/** List the relay, pull anything new, and enqueue any local event missing
+ * remotely (the reconcile step that makes two devices converge). */
+export async function pullAll(): Promise<void> {
+  if (!relayClient || !vaultKey) return
+
+  let remoteIds: string[]
+  try {
+    remoteIds = await relayClient.listBlobs()
+  } catch (err) {
+    patchStatus({ lastError: String(err) })
+    return
+  }
+
+  const syncRecords = await getAll<SyncRecord>('sync')
+  const doneIds = new Set(syncRecords.filter((r) => r.state === 'done').map((r) => r.id))
+
+  patchStatus({ pulledCount: 0 })
+  for (const id of idsToPull(remoteIds, doneIds)) {
+    const codec = codecFor(id)! // idsToPull only returns ids with a registered codec
+    try {
+      if (await codec.localHas(id)) {
+        // Already have it (e.g. logged before sync was configured) — record
+        // done without a redundant round trip.
+        await markDone(id)
+        continue
+      }
+      const blob = await relayClient.getBlob(id)
+      if (!blob) continue
+      const plaintext = vaultKey.open(blob, aad(id))
+      await codec.remoteApply(id, plaintext)
+      await markDone(id)
+      syncStatus.update((s) => ({ ...s, pulledCount: s.pulledCount + 1 }))
+    } catch (err) {
+      // Left un-done on failure (bad open, failed verify, network hiccup) —
+      // retried on the next pull rather than dropped.
+      patchStatus({ lastError: String(err) })
+    }
+  }
+
+  const localEventIds = (await getAll<StoredEvent>('events')).map((e) => e.event.id)
+  const toPush = idsToPush(localEventIds, new Set(remoteIds), doneIds)
+  if (toPush.length) {
+    await enqueue(toPush)
+    void drain()
+  }
+
+  patchStatus({ lastPullAt: new Date().toISOString() })
+}
+
+// --- lifecycle ---
+
+const PULL_INTERVAL_MS = 5 * 60 * 1000
+let pullTimer: ReturnType<typeof setInterval> | null = null
+
+/** Dynamically imported (see the module doc comment) so this file never
+ * statically depends on events.ts's runtime. */
+async function installEventsHook(): Promise<void> {
+  const { setOnEventsLogged } = await import('./events')
+  setOnEventsLogged((events) => {
+    void enqueue(events.map((e) => eventBlobId(e.event.id))).then(() => drain())
+  })
+}
+
+async function clearEventsHook(): Promise<void> {
+  const { setOnEventsLogged } = await import('./events')
+  setOnEventsLogged(() => {})
+}
+
+function handleOnline(): void {
+  patchStatus({ online: true })
+  void drain()
+}
+
+function handleOffline(): void {
+  patchStatus({ online: false })
+}
+
+function handleVisibility(): void {
+  if (document.visibilityState === 'visible') void pullAll()
+}
+
+/**
+ * Start the sync engine for an unlocked, relay-configured session. Idempotent
+ * — a second call while already configured is a no-op.
+ *
+ * Callers MUST have already reconciled the vault key against the relay
+ * (`vault.ts`'s `ensureVaultKeyBlob`) before calling this: pushing an event
+ * sealed under the wrong vault key is unrecoverable. `vault.ts`'s
+ * `connectRelay` is the one place that enforces this ordering — call that,
+ * not this function directly, from UI code.
+ */
+export function syncInit(relay: BlobClient, key: SealKey): void {
+  if (relayClient) return
+  configure(relay, key)
+  patchStatus({
+    configured: true,
+    online: isOnline(),
+    lastError: null,
+  })
+
+  void installEventsHook()
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+  }
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', handleVisibility)
+  }
+
+  void pullAll()
+  pullTimer = setInterval(() => void pullAll(), PULL_INTERVAL_MS)
+}
+
+/** Stop the engine and forget the relay/vault key — called on lock/logout. */
+export function syncTeardown(): void {
+  relayClient = null
+  vaultKey = null
+  draining = false
+  patchStatus({ configured: false })
+  void clearEventsHook()
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('online', handleOnline)
+    window.removeEventListener('offline', handleOffline)
+  }
+  if (typeof document !== 'undefined') {
+    document.removeEventListener('visibilitychange', handleVisibility)
+  }
+  if (pullTimer) clearInterval(pullTimer)
+  pullTimer = null
+}

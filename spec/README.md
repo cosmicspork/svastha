@@ -231,5 +231,8 @@ require the auth handshake above.
 `..` (→ `400`); the request body is capped at 16 MiB (→ `413`). A failed or
 missing signature, or a timestamp outside the relay's freshness window, is `401`;
 a storage failure is `500`.
+Client blob-layout conventions (which ids hold what, and how their contents are
+sealed) are app-level and documented in `docs/ARCHITECTURE.md` ("Sync and
+backup"); the wire contract here is unchanged by them.
 The relay is stateless and keyless: it never decrypts, holds no user keys, and
 ships as a single static binary for self-hosting.
