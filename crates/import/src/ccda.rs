@@ -51,10 +51,13 @@ fn import_section(section: Node, result: &mut ImportResult) {
         return;
     };
 
+    // 66149-6 (Ordered Prescriptions) is deliberately NOT mapped: ordered is
+    // not taken, so a medication_statement would assert something the record
+    // doesn't support. It falls through to the "not mapped" skip.
     match code.as_str() {
         "48765-2" => import_allergies(section, result),
         "11450-4" | "11348-0" => import_problems(section, result),
-        "10160-0" => import_medications(section, result),
+        "10160-0" | "29549-3" | "10183-2" => import_medications(section, result),
         "11369-6" => import_immunizations(section, result),
         "30954-2" => import_results(section, result),
         "8716-3" => import_vitals(section, result),
@@ -167,8 +170,13 @@ fn import_problems(section: Node, result: &mut ImportResult) {
     }
 }
 
-// --- medications (10160-0) ---
+// --- medications (10160-0 history, 29549-3 administered, 10183-2 discharge) ---
 
+/// All three medication sections share this mapping. 10160-0 and 29549-3
+/// carry a plain `<substanceAdministration>` per entry; 10183-2 wraps it in a
+/// Discharge Medication `<act>` — the descendant walk below finds it either
+/// way, and an act with nothing inside hits the Skipped path like any other
+/// substanceAdministration-less entry.
 fn import_medications(section: Node, result: &mut ImportResult) {
     for entry in children_named(section, "entry") {
         let what = "medication entry";

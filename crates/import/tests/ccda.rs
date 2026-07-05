@@ -23,7 +23,12 @@ fn maps_every_section_to_its_expected_event_count() {
         1,
         "only the nullFlavor'd problem should be dropped"
     );
-    assert_eq!(count(EventKind::MedicationStatement), 1);
+    assert_eq!(
+        count(EventKind::MedicationStatement),
+        3,
+        "history (10160-0) + administered (29549-3) + discharge (10183-2); \
+         the empty discharge act must not become an event"
+    );
     assert_eq!(
         count(EventKind::Immunization),
         1,
@@ -41,7 +46,7 @@ fn maps_every_section_to_its_expected_event_count() {
         "the standalone procedure entry + 2 nested in the encounter"
     );
     assert_eq!(count(EventKind::Encounter), 1);
-    assert_eq!(result.events.len(), 13);
+    assert_eq!(result.events.len(), 15);
 }
 
 #[test]
@@ -233,6 +238,88 @@ fn dangling_narrative_reference_is_skipped_with_a_warning() {
             .skipped
             .iter()
             .any(|s| s.what.contains("601-5") && s.why.contains("no text content")),
+        "skipped: {:?}",
+        result.skipped
+    );
+}
+
+#[test]
+fn administered_medications_section_maps_like_medication_history() {
+    // 29549-3 carries the same plain-substanceAdministration entry shape as
+    // 10160-0 and routes to the same mapping.
+    let ondansetron = events()
+        .into_iter()
+        .find(|e| e.code.as_ref().is_some_and(|c| c.code == "312086"))
+        .expect("administered medication");
+    assert_eq!(ondansetron.kind, EventKind::MedicationStatement);
+    assert_eq!(
+        ondansetron.effective_at.as_deref(),
+        Some("2024-01-03T09:10:00-05:00")
+    );
+    assert_eq!(
+        ondansetron.value,
+        Some(EventValue::Quantity {
+            value: "4".into(),
+            unit: Some(Code {
+                system: "http://unitsofmeasure.org".into(),
+                code: "mg".into(),
+                display: None
+            })
+        })
+    );
+}
+
+#[test]
+fn discharge_medication_is_unwrapped_from_its_act() {
+    // 10183-2 wraps each substanceAdministration in a Discharge Medication
+    // act; the mapping must find it through the wrapper.
+    let amoxicillin = events()
+        .into_iter()
+        .find(|e| e.code.as_ref().is_some_and(|c| c.code == "308191"))
+        .expect("act-wrapped discharge medication");
+    assert_eq!(amoxicillin.kind, EventKind::MedicationStatement);
+    assert_eq!(amoxicillin.effective_at.as_deref(), Some("2024-01-04"));
+}
+
+#[test]
+fn discharge_act_with_no_substance_administration_is_skipped_not_dropped() {
+    let result = import_ccda(FIXTURE).unwrap();
+    assert!(
+        result
+            .skipped
+            .iter()
+            .any(|s| s.what == "medication entry" && s.why.contains("no substanceAdministration")),
+        "skipped: {:?}",
+        result.skipped
+    );
+}
+
+#[test]
+fn ordered_prescriptions_section_is_deliberately_not_mapped() {
+    // 66149-6 must keep hitting the "not mapped" skip: ordered is not taken,
+    // and mapping it would assert a medication_statement the record doesn't
+    // support. Asserted directly against the dispatch (the fixture has no
+    // such section) so adding one later can't silently start mapping it.
+    let doc = r#"<ClinicalDocument xmlns="urn:hl7-org:v3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+          <component><structuredBody><component>
+            <section>
+              <code code="66149-6" codeSystem="2.16.840.1.113883.6.1"/>
+              <title>Ordered Prescriptions</title>
+              <entry><substanceAdministration classCode="SBADM" moodCode="INT">
+                <consumable><manufacturedProduct><manufacturedMaterial>
+                  <code code="308191" codeSystem="2.16.840.1.113883.6.88" displayName="Amoxicillin 500 MG Oral Capsule"/>
+                </manufacturedMaterial></manufacturedProduct></consumable>
+              </substanceAdministration></entry>
+            </section>
+          </component></structuredBody></component>
+        </ClinicalDocument>"#;
+    let result = import_ccda(doc).unwrap();
+    assert!(result.events.is_empty(), "events: {:?}", result.events);
+    assert!(
+        result
+            .skipped
+            .iter()
+            .any(|s| s.what.contains("66149-6") && s.why.contains("not mapped")),
         "skipped: {:?}",
         result.skipped
     );

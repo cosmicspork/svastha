@@ -19,7 +19,10 @@ before sharing it.
   falls back to the encounter's, and a Procedure Activity Observation with an
   unusable code (must skip, not drop) — and the Results section carries two ST
   values with no inline text: one resolved via a `<reference>` into the
-  section's narrative `<text>`, one dangling (must skip + warn). Fictional
+  section's narrative `<text>`, one dangling (must skip + warn). Medications
+  appear in all three mapped section shapes: history (`10160-0`), administered
+  (`29549-3`, same plain-substanceAdministration entries), and discharge
+  (`10183-2`, act-wrapped, plus one empty act that must skip). Fictional
   patient "Alex Example", fictional codes and values.
 - `fhir/bundle-minimal.json` — a small FHIR R4 `Bundle` with one of each
   resourceType `crates/import/src/fhir.rs` maps, a `Patient` (unmapped) and an
