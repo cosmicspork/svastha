@@ -17,8 +17,8 @@
     error = ''
     busy = true
     try {
-      const { identity, vaultKey } = await unlock(passphrase)
-      setSession(identity, vaultKey)
+      const { identity, vaultKey, kdfOut } = await unlock(passphrase)
+      setSession(identity, vaultKey, kdfOut)
     } catch (err) {
       error =
         err instanceof WrongPassphraseError

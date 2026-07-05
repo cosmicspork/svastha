@@ -2,6 +2,9 @@ import { expect, type Page } from '@playwright/test'
 
 export const PASSPHRASE = 'correct horse battery staple'
 
+/** The relay origin from playwright.config.ts. */
+export const RELAY = 'http://127.0.0.1:8787'
+
 /** Drive the real onboarding UI: generate a mnemonic, confirm the randomly
  * chosen words, set a passphrase, and land on the home screen. Returns the
  * generated mnemonic (for reference; not needed by callers today). */
@@ -32,4 +35,50 @@ export async function onboardViaUI(page: Page, passphrase: string = PASSPHRASE):
 
   await expect(page.getByTestId('empty-state')).toBeVisible()
   return words
+}
+
+/** Connect a relay through the Settings UI and land back on Home. Assumes an
+ * unlocked session currently on Home. */
+export async function connectRelayViaUI(page: Page, relayUrl: string = RELAY): Promise<void> {
+  await page.getByTestId('nav-settings').click()
+  await page.getByTestId('relay-url').fill(relayUrl)
+  await page.getByTestId('relay-connect').click()
+  await expect(page.getByTestId('sync-pending')).toBeVisible()
+  await page.getByTestId('nav-back').click()
+}
+
+/** Drive the Restore tab: seed phrase, passphrase, and (optionally) a relay
+ * URL to restore records from. Lands unlocked on Home. */
+export async function restoreViaUI(
+  page: Page,
+  words: string[],
+  passphrase: string = PASSPHRASE,
+  relayUrl?: string,
+): Promise<void> {
+  await page.goto('/')
+  await page.getByTestId('tab-restore').click()
+  await page.getByTestId('restore-mnemonic').fill(words.join(' '))
+  await page.getByTestId('restore-passphrase').fill(passphrase)
+  if (relayUrl) await page.getByTestId('restore-relay-url').fill(relayUrl)
+  await page.getByTestId('restore-submit').click()
+  // Unlocked-and-on-Home marker that works whether or not any records exist.
+  await expect(page.getByTestId('nav-settings')).toBeVisible()
+}
+
+/** Log a blood pressure reading through the quick-log UI (two events). */
+export async function logBP(page: Page, systolic: string, diastolic: string): Promise<void> {
+  await page.getByTestId('log-vitals').click()
+  await page.getByTestId('bp-systolic').fill(systolic)
+  await page.getByTestId('bp-diastolic').fill(diastolic)
+  await page.getByTestId('save').click()
+  await expect(page.getByTestId('spine-entry').filter({ hasText: `${systolic}/${diastolic}` })).toBeVisible()
+}
+
+/** Log one food item through the quick-log UI (one event). */
+export async function logFood(page: Page, item: string): Promise<void> {
+  await page.getByTestId('log-food').click()
+  await page.getByTestId('food-input').fill(item)
+  await page.getByTestId('food-input').press('Enter')
+  await page.getByTestId('save').click()
+  await expect(page.getByTestId('spine-entry').filter({ hasText: item })).toBeVisible()
 }

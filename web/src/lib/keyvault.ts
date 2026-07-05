@@ -88,6 +88,9 @@ export async function initVault(mnemonic: string, passphrase: string): Promise<v
 export interface UnlockedSession {
   identity: WasmIdentity
   vaultKey: WasmDataKey
+  // See session.svelte.ts's `kdfOut` doc comment for why this is returned
+  // (and kept in memory) rather than discarded once the vault key is open.
+  kdfOut: Uint8Array
 }
 
 /** Derive the passphrase key once, verify it against the check sentinel, then
@@ -125,7 +128,26 @@ export async function unlock(passphrase: string): Promise<UnlockedSession> {
   const vaultKeyBytes = openRecord(vaultkeyRecord, kdfOut, AAD.vaultkey)
   const vaultKey = WasmDataKey.from_bytes(vaultKeyBytes)
 
-  return { identity, vaultKey }
+  return { identity, vaultKey, kdfOut }
+}
+
+/** Re-seal the local vaultkey record under a *different* vault key, reusing
+ * the salt/iterations already on disk and the caller's already-derived
+ * `kdfOut` — no passphrase prompt needed. Used when this device adopts a
+ * vault key it lost a first-writer-wins race for (see vault.ts's
+ * `ensureVaultKeyBlob`): the local copy must end up sealed under the winning
+ * key so the next unlock (offline or not) recovers the right one. */
+export async function resealVaultKey(kdfOut: Uint8Array, vaultKey: WasmDataKey): Promise<void> {
+  const existing = await get<KeyvaultRecord>('keyvault', 'vaultkey')
+  if (!existing) throw new Error('No vault found on this device.')
+  const record = await sealRecord(
+    kdfOut,
+    fromHex(existing.salt_hex),
+    existing.iterations,
+    AAD.vaultkey,
+    vaultKey.to_bytes(),
+  )
+  await put('keyvault', record, 'vaultkey')
 }
 
 /** Re-seal all three records under a new passphrase, without touching the

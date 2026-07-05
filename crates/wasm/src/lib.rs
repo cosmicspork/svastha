@@ -9,10 +9,11 @@
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 
-use svastha_core::envelope::{DataKey, Sealed};
+use svastha_core::envelope::{wrap_key, DataKey, Sealed, WrappedKey};
 use svastha_core::event::{Code, Event, EventKind, EventValue, Provenance, SignedEvent};
 use svastha_core::keys::Identity;
 use svastha_core::relay::{sign_request as relay_sign_request, AuthRequest};
+use x25519_dalek::PublicKey;
 
 /// Install a panic hook so a Rust panic shows a real message in the browser
 /// console instead of an opaque `unreachable`. Runs once on module load.
@@ -105,6 +106,15 @@ impl WasmIdentity {
         let request = AuthRequest::new(method, path, body, timestamp);
         relay_sign_request(&self.identity, &request).to_vec()
     }
+
+    /// Unwrap a data key that was wrapped to this identity's X25519 public key
+    /// (see [`WasmDataKey::wrap_to`]) — used to adopt the vault key found at
+    /// the relay's `vault.key` blob.
+    pub fn unwrap_key(&self, wrapped: &[u8]) -> Result<WasmDataKey, JsError> {
+        let wrapped = WrappedKey::from_bytes(wrapped).map_err(to_js)?;
+        let key = self.identity.unwrap_key(&wrapped).map_err(to_js)?;
+        Ok(WasmDataKey { key })
+    }
 }
 
 /// The event-content fields a caller supplies; the id is derived, not provided.
@@ -162,6 +172,17 @@ impl WasmDataKey {
     /// keyvault storage (wrapped under the passphrase-derived key).
     pub fn to_bytes(&self) -> Vec<u8> {
         self.key.to_bytes().to_vec()
+    }
+
+    /// Wrap this data key to a recipient's 32-byte X25519 public key (ECIES),
+    /// e.g. self-wrapping the vault key for storage at the relay's
+    /// `vault.key` blob — see `docs/ARCHITECTURE.md`, "Sync and backup".
+    pub fn wrap_to(&self, recipient_x25519_public: &[u8]) -> Result<Vec<u8>, JsError> {
+        let bytes: [u8; 32] = recipient_x25519_public
+            .try_into()
+            .map_err(|_| JsError::new("recipient public key must be 32 bytes"))?;
+        let recipient = PublicKey::from(bytes);
+        Ok(wrap_key(&recipient, &self.key).to_bytes())
     }
 }
 

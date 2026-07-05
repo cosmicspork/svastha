@@ -3,6 +3,10 @@
   import { initVault, unlock } from '../lib/keyvault'
   import { setSession } from '../lib/session.svelte'
   import { navigate } from '../lib/router.svelte'
+  import { RelayClient, checkRelayInfo, normalizeRelayUrl } from '../lib/relay'
+  import { connectRelay } from '../lib/vault'
+  import { pullAll, syncStatus } from '../lib/sync'
+  import { put } from '../lib/db'
 
   let { onCreated }: { onCreated: () => void } = $props()
 
@@ -89,6 +93,8 @@
   let restorePhrase = $state('')
   let restoreError = $state('')
   let restorePassphrase = $state('')
+  let restoreRelayUrl = $state('')
+  let restoreProgress = $state('')
   let restoreBusy = $state(false)
 
   async function submitRestore(e: SubmitEvent) {
@@ -109,18 +115,52 @@
         restoreError = "That doesn't look like a valid seed phrase — check the words and order."
         return
       }
+
+      // Relay URL is optional and skippable; validate it up front (before
+      // touching local storage) so a bad address fails without the user
+      // having to redo the passphrase step.
+      let relayUrl = ''
+      if (restoreRelayUrl.trim()) {
+        relayUrl = normalizeRelayUrl(restoreRelayUrl)
+        try {
+          await checkRelayInfo(relayUrl)
+        } catch (err) {
+          restoreError = err instanceof Error ? err.message : 'Could not connect to the relay.'
+          return
+        }
+      }
+
       await initVault(restored.mnemonic ?? phrase, restorePassphrase)
-      await finishOnboarding(restorePassphrase)
+      await finishOnboarding(restorePassphrase, relayUrl || undefined)
     } finally {
       restoreBusy = false
     }
   }
 
-  // Shared tail: re-derive the session from what was just sealed (guarantees it
-  // matches storage exactly), offer persistence, then hand off to the app.
-  async function finishOnboarding(pass: string) {
-    const { identity: sessionIdentity, vaultKey } = await unlock(pass)
-    setSession(sessionIdentity, vaultKey)
+  // Shared tail: re-derive the session from what was just sealed (guarantees
+  // it matches storage exactly), optionally connect to a relay and restore
+  // from it, offer persistence, then hand off to the app.
+  async function finishOnboarding(pass: string, relayUrl?: string) {
+    const { identity: sessionIdentity, vaultKey, kdfOut } = await unlock(pass)
+    setSession(sessionIdentity, vaultKey, kdfOut)
+
+    if (relayUrl) {
+      restoreProgress = 'Connecting to the relay…'
+      const client = new RelayClient(relayUrl, sessionIdentity)
+      await connectRelay(client) // adopts vault.key first — see vault.ts
+      await put('prefs', relayUrl, 'relayUrl')
+
+      const unsubscribe = syncStatus.subscribe((s) => {
+        restoreProgress = `Restoring your records — ${s.pulledCount} so far`
+      })
+      // connectRelay's syncInit already kicked off a background pull; this
+      // explicit, awaited one may re-process a few of the same ids (harmless
+      // — put/markDone are idempotent) but guarantees the spine is populated
+      // before navigating away.
+      await pullAll()
+      unsubscribe()
+      restoreProgress = ''
+    }
 
     if (navigator.storage?.persist) {
       const granted = await navigator.storage.persist()
@@ -240,13 +280,20 @@
       Passphrase
       <input type="password" bind:value={restorePassphrase} data-testid="restore-passphrase" />
     </label>
+    <label>
+      Relay URL <span class="muted">(optional — restores your records from backup)</span>
+      <input
+        bind:value={restoreRelayUrl}
+        placeholder="https://relay.example.com"
+        data-testid="restore-relay-url"
+      />
+    </label>
     {#if restoreError}
       <p class="error" data-testid="restore-error">{restoreError}</p>
     {/if}
-    <p class="muted">
-      Restore from backup arrives with sync — for now this recreates your identity
-      on this device.
-    </p>
+    {#if restoreProgress}
+      <p class="muted" data-testid="restore-progress">{restoreProgress}</p>
+    {/if}
     <button type="submit" class="primary" disabled={restoreBusy} data-testid="restore-submit">
       Restore
     </button>

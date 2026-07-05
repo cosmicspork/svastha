@@ -155,6 +155,64 @@ arrives with the native wrapper. The mnemonic remains the sole recovery root: it
 is the only material that reconstructs the identity if the passphrase and this
 device are both lost.
 
+## Sync and backup (web)
+
+Every signed event is sealed under the vault data key and pushed to the relay,
+so a second device (or a wiped one) restores the whole record from the mnemonic
+plus a relay URL. The relay's wire contract (`spec/README.md`) is unchanged by
+all of this: the conventions below are app-level agreements about what blob ids
+mean, invisible to the relay itself.
+
+**Blob namespaces.** Blob ids are client-chosen; the web client partitions them
+by prefix:
+
+| Blob id | Contents |
+|---|---|
+| `ev-{event_id_hex}` | one sealed `SignedEvent` (JSON) |
+| `vault.key` | the vault data key, wrapped to the owner's own X25519 key |
+| `doc-*` | reserved (provenance documents, later PR) |
+| `cur-*` | reserved (curation overlay, later PR) |
+
+**AAD = blob id.** Every blob sealed under the vault key uses the UTF-8 bytes
+of its own blob id as the AEAD associated data. The relay stores opaque
+ciphertext under ids it controls the routing of, so without this binding it
+could serve blob A's ciphertext under blob B's id undetected; with it, any such
+swap fails authentication at open time. For `ev-` blobs the embedded event id
+is additionally checked against the blob-id suffix after opening, and the event
+signature must verify — a malicious relay cannot inject or substitute events.
+
+**Self-wrapped vault key.** `vault.key` is the vault data key wrapped to the
+owner's own X25519 public key with the envelope's standard `wrap_key` — the
+same ECIES construction used for sharing, with the owner as recipient. A
+wrapped key is already end-to-end protected, so it is stored as-is with no
+extra sealing (it could not be sealed under the vault key anyway: it *is* how
+a restoring device obtains that key).
+
+**No manifest.** The log is append-only and events are content-addressed, so
+`GET /v0/blobs` plus a local diff converges on its own: anything remote and
+unknown locally is pulled; any local event absent from the remote list is
+pushed. A manifest would add nothing except a mutable thing to keep consistent.
+Listing is unpaginated today; pagination is a future hardening as logs grow.
+
+**Push and pull triggers.** Push happens on write: logging events enqueues
+their blobs in a local outbox (the IndexedDB `sync` store) and drains it
+immediately, with capped exponential backoff on failure and a pause while
+offline. Pull happens on unlock, every five minutes while unlocked, and when
+the tab becomes visible again; each pull also runs the reconcile diff above,
+which is what makes two devices restored from the same mnemonic converge after
+logging on both.
+
+**Vault-key reconciliation is first, always.** Connecting a relay runs the
+`vault.key` handshake before the sync engine starts: if the relay already holds
+one for this identity, the device unwraps and adopts it (re-sealing its local
+keyvault record under the adopted key); if not, the device publishes its own.
+Effectively first-writer-wins: whichever device publishes first is the key
+every later device adopts. If two fresh devices race the publish itself, the
+last `PUT` sticks (blobs are replace-on-put; there is no compare-and-swap) and
+the other adopts it on its next connect — acceptable for v1 because the
+enforced ordering (no event push before this handshake) guarantees no events
+are ever sealed under the discarded key.
+
 ## Native (later)
 
 The same web bundle wraps in Capacitor or Tauri (Tauri is Rust and composes with

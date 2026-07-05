@@ -2,7 +2,11 @@
   import { onMount } from 'svelte'
   import { initSvastha } from './lib/svastha'
   import { hasVault } from './lib/keyvault'
-  import { locked } from './lib/session.svelte'
+  import { locked, session } from './lib/session.svelte'
+  import { get } from './lib/db'
+  import { RelayClient } from './lib/relay'
+  import { connectRelay } from './lib/vault'
+  import { syncTeardown } from './lib/sync'
   import { route, navigate } from './lib/router.svelte'
   import Onboard from './routes/Onboard.svelte'
   import Unlock from './routes/Unlock.svelte'
@@ -25,6 +29,23 @@
     if (ready && route.path === '/' && !vaultExists) {
       hasVault().then((v) => (vaultExists = v))
     }
+  })
+
+  // Bring sync up whenever a session unlocks with a relay already configured
+  // (Onboard's restore-with-relay flow starts it itself), and tear it down on
+  // lock/logout — reads `locked()` reactively, so this reruns on exactly
+  // those transitions.
+  $effect(() => {
+    if (!ready || locked()) {
+      syncTeardown()
+      return
+    }
+    const identity = session.identity
+    get<string>('prefs', 'relayUrl').then((url) => {
+      if (url && identity) {
+        connectRelay(new RelayClient(url, identity))
+      }
+    })
   })
 </script>
 
