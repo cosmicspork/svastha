@@ -61,14 +61,16 @@
   {:else if locked()}
     <Unlock />
   {:else}
-    {#if route.path === '/settings' || route.path === '/share' || route.path === '/person/:ed' || route.path === '/import' || route.path === '/correlate'}
-      <button class="settings-nav" onclick={() => navigate('#/')} data-testid="nav-back">
-        ← Back
-      </button>
-    {:else}
-      <button class="settings-nav" onclick={() => navigate('#/settings')} data-testid="nav-settings">
-        Settings
-      </button>
+    {#if route.path !== '/log/:kind'}
+      {#if route.path === '/settings' || route.path === '/share' || route.path === '/person/:ed' || route.path === '/import' || route.path === '/correlate'}
+        <button class="settings-nav" onclick={() => navigate('#/')} data-testid="nav-back">
+          ← Back
+        </button>
+      {:else}
+        <button class="settings-nav" onclick={() => navigate('#/settings')} data-testid="nav-settings">
+          Settings
+        </button>
+      {/if}
     {/if}
 
     {#if route.path === '/log/:kind'}

@@ -39,13 +39,13 @@
 </script>
 
 <LogShell title="Meds" category="med" {buildDrafts} {favoriteLabel} {onPrefill} {onReset}>
-  <label>
+  <label class="field">
     Medication
     <input bind:value={name} autocomplete="off" placeholder="ibuprofen" data-testid="med-name" />
   </label>
 
   <div class="dose">
-    <label>
+    <label class="field">
       Dose (optional)
       <input
         bind:value={dose}
@@ -55,7 +55,7 @@
         data-testid="med-dose"
       />
     </label>
-    <label>
+    <label class="field">
       Unit
       <select bind:value={doseUnit} data-testid="med-dose-unit">
         {#each DOSE_UNITS as u (u)}
@@ -67,12 +67,6 @@
 </LogShell>
 
 <style>
-  label {
-    display: block;
-    font-size: var(--text-sm);
-    color: var(--muted);
-  }
-
   .dose {
     display: flex;
     gap: var(--space-3);

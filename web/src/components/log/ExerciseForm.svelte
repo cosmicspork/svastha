@@ -36,7 +36,7 @@
 </script>
 
 <LogShell title="Move" category="exercise" {buildDrafts} {favoriteLabel} {onPrefill} {onReset}>
-  <label>
+  <label class="field">
     Activity
     <input
       bind:value={activity}
@@ -46,7 +46,7 @@
     />
   </label>
 
-  <label class="minutes">
+  <label class="field minutes">
     Minutes (optional)
     <input
       bind:value={minutes}
@@ -59,12 +59,6 @@
 </LogShell>
 
 <style>
-  label {
-    display: block;
-    font-size: var(--text-sm);
-    color: var(--muted);
-  }
-
   .minutes input {
     max-width: 8rem;
     font-family: var(--font-data);
