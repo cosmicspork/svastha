@@ -9,6 +9,9 @@ import {
   EXERCISE_ACTIVITY,
   EXERCISE_DURATION,
   MINUTES,
+  MOOD,
+  MOOD_NOTE,
+  GRATITUDE,
 } from './codes'
 
 /** Wire names of `EventKind` (serde `snake_case`); see crates/core/src/event.rs. */
@@ -153,4 +156,35 @@ export function exerciseDrafts(activity: string, effectiveAt: string, minutes?: 
 
 export function noteDraft(body: string, effectiveAt: string): Draft {
   return { kind: 'document', effective_at: effectiveAt, value: text(body) }
+}
+
+// --- mindfulness ---
+
+/** A 1–5 mood score as a unitless quantity (an ordinal scale, not a
+ * measurement — no unit code applies), plus an optional text note sharing
+ * the timestamp. Grouping is presentational, same as the BP pair. */
+export function moodDraft(score: number, note: string, effectiveAt: string): Draft[] {
+  const drafts: Draft[] = [
+    { kind: 'observation', code: MOOD, effective_at: effectiveAt, value: quantity(String(score)) },
+  ]
+  const trimmed = note.trim()
+  if (trimmed) {
+    drafts.push({ kind: 'observation', code: MOOD_NOTE, effective_at: effectiveAt, value: text(trimmed) })
+  }
+  return drafts
+}
+
+/** One observation per gratitude item (matching food's "one event per item;
+ * a shared effective_at"). Trims and drops empties itself, unlike foodDrafts,
+ * since chip entry here has no un-chipped-pending-text special case. */
+export function gratitudeDrafts(items: string[], effectiveAt: string): Draft[] {
+  return items
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .map((item) => ({
+      kind: 'observation' as const,
+      code: GRATITUDE,
+      effective_at: effectiveAt,
+      value: text(item),
+    }))
 }

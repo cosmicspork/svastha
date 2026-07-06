@@ -83,14 +83,14 @@
     return mapUnit((new Date(atIso).getTime() - fromMs) / (toMs - fromMs))
   }
 
-  function radiusOf(severity: number | null): number {
+  function radiusOf(severity: number | null, max: number): number {
     if (severity === null) return 5
-    return 4 + (severity / 10) * 6 // 4..10
+    return 4 + (severity / max) * 6 // 4..10
   }
 
-  function opacityOf(severity: number | null): number {
+  function opacityOf(severity: number | null, max: number): number {
     if (severity === null) return 0.6
-    return 0.4 + (severity / 10) * 0.6 // 0.4..1
+    return 0.4 + (severity / max) * 0.6 // 0.4..1
   }
 
   function setPreset(days: number) {
@@ -184,12 +184,12 @@
               <circle
                 cx={xOf(point.atIso)}
                 cy="16"
-                r={radiusOf(point.severity)}
+                r={radiusOf(point.severity, lane.max)}
                 fill={point.severity !== null && point.severity >= 7 ? 'var(--flare)' : 'var(--person-a)'}
-                opacity={opacityOf(point.severity)}
+                opacity={opacityOf(point.severity, lane.max)}
                 tabindex="0"
                 role="button"
-                aria-label="{lane.name} at {point.atIso}{point.severity !== null ? `, severity ${point.severity}/10` : ''}"
+                aria-label="{lane.name} at {point.atIso}{point.severity !== null ? `, severity ${point.severity}/${lane.max}` : ''}"
                 data-testid="symptom-dot"
                 onclick={() => openSymptom(lane.name, point)}
                 onkeydown={(e) => onDotKeydown(e, lane.name, point)}
