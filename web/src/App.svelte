@@ -8,6 +8,7 @@
   import { connectRelay } from './lib/vault'
   import { syncTeardown } from './lib/sync'
   import { route, navigate } from './lib/router.svelte'
+  import { loadTheme, applyTheme } from './lib/theme'
   import Onboard from './routes/Onboard.svelte'
   import Unlock from './routes/Unlock.svelte'
   import Home from './routes/Home.svelte'
@@ -23,6 +24,7 @@
   let vaultExists = $state(false)
 
   onMount(async () => {
+    applyTheme(await loadTheme())
     await initSvastha()
     vaultExists = await hasVault()
     ready = true

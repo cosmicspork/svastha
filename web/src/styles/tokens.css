@@ -1,47 +1,56 @@
 /* Design tokens: the only place color, type, and spacing values are chosen.
    Everything else in the app references these custom properties. */
 
+/* Dark tints lighten each hue slightly — a straight value swap on a dark bg
+   would undersaturate and fail contrast, so accent hues get a touch more
+   lightness/chroma here, not just an inverted background. Each light-dark()
+   call below carries the light value first, the dark tint second; which one
+   resolves is controlled by `color-scheme`, below. */
 :root {
   color-scheme: light dark;
 
-  /* --- color: light --- */
-  --bg: #f2f5f1; /* porcelain */
-  --text: #22312c; /* ink */
-  --action: #3e6b4f; /* fern */
-  --person-a: #4a5899; /* indigo */
-  --person-b: #b0575f; /* madder */
-  --flare: #c98a2d; /* amber */
+  /* --- color: light / dark --- */
+  --bg: light-dark(#f2f5f1, #161d1a); /* porcelain / near-black */
+  --text: light-dark(#22312c, #dce4df); /* ink */
+  --action: light-dark(#3e6b4f, #5c9172); /* fern */
+  --person-a: light-dark(#4a5899, #7c89c4); /* indigo */
+  --person-b: light-dark(#b0575f, #d08890); /* madder */
+  --flare: light-dark(#c98a2d, #e0a84a); /* amber */
 
-  --surface: #fafcf9; /* card/panel bg, a hair lighter than --bg */
-  --muted: #5c6b64; /* secondary text, ink softened toward bg */
-  --border: #dde3da; /* hairlines, ink softened further toward bg */
+  --surface: light-dark(#fafcf9, #1e2622); /* card/panel bg, a hair lighter than --bg */
+  --muted: light-dark(#5c6b64, #93a39c); /* secondary text, ink softened toward bg */
+  --border: light-dark(#dde3da, #2c3733); /* hairlines, ink softened further toward bg */
 
-  --action-muted: #e3ece6; /* fern tint, e.g. hover/active surfaces */
-  --person-a-muted: #e4e6f1;
-  --person-b-muted: #f4e2e3;
-  --flare-muted: #f5e8d3;
+  --action-muted: light-dark(#e3ece6, #223229); /* fern tint, e.g. hover/active surfaces */
+  --person-a-muted: light-dark(#e4e6f1, #262b3c);
+  --person-b-muted: light-dark(#f4e2e3, #3a2528);
+  --flare-muted: light-dark(#f5e8d3, #3a3020);
 
-  --danger: #a33a3a;
-  --danger-muted: #f4e1e1;
+  --danger: light-dark(#a33a3a, #e07a7a);
+  --danger-muted: light-dark(#f4e1e1, #3a2223);
 
   /* Spine/chip category hues — deliberately distinct from --person-a/b so a
      category dot is never mistaken for the owner-hue spine rule. Placeholder
      palette; a design pass can retune the exact values without touching
      anything that reads them. */
-  --cat-vital: #3d6f91;
-  --cat-symptom: #8a4a6e;
-  --cat-med: #5c56a0;
-  --cat-food: #a98a2e;
-  --cat-exercise: #2f7f7a;
-  --cat-mind: #8a5f96;
-  --cat-note: #5c6b64;
-  --cat-clinical: #556074;
-  --cat-other: #7c8a83;
+  --cat-vital: light-dark(#3d6f91, #7fa8c8);
+  --cat-symptom: light-dark(#8a4a6e, #c98bab);
+  --cat-med: light-dark(#5c56a0, #a79bdb);
+  --cat-food: light-dark(#a98a2e, #d1b45e);
+  --cat-exercise: light-dark(#2f7f7a, #5fb3ac);
+  --cat-mind: light-dark(#8a5f96, #bd93c7);
+  --cat-note: light-dark(#5c6b64, #93a39c);
+  --cat-clinical: light-dark(#556074, #8b96ad);
+  --cat-other: light-dark(#7c8a83, #a9b3ac);
 
   /* --- elevation --- */
-  --scrim: rgba(34, 49, 44, 0.42);
-  --shadow-1: 0 1px 3px rgba(34, 49, 44, 0.1), 0 4px 14px rgba(34, 49, 44, 0.08);
-  --shadow-2: 0 2px 6px rgba(34, 49, 44, 0.14), 0 10px 28px rgba(34, 49, 44, 0.16);
+  --scrim: light-dark(rgba(34, 49, 44, 0.42), rgba(6, 10, 8, 0.55));
+  --shadow-1:
+    0 1px 3px light-dark(rgba(34, 49, 44, 0.1), rgba(0, 0, 0, 0.35)),
+    0 4px 14px light-dark(rgba(34, 49, 44, 0.08), rgba(0, 0, 0, 0.3));
+  --shadow-2:
+    0 2px 6px light-dark(rgba(34, 49, 44, 0.14), rgba(0, 0, 0, 0.45)),
+    0 10px 28px light-dark(rgba(34, 49, 44, 0.16), rgba(0, 0, 0, 0.45));
 
   /* --- type --- */
   --font-display: 'Young Serif', serif;
@@ -75,42 +84,14 @@
   --duration-base: 200ms;
 }
 
-/* Dark tints lighten each hue slightly — a straight value swap on a dark bg
-   would undersaturate and fail contrast, so accent hues get a touch more
-   lightness/chroma here, not just an inverted background. */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #161d1a;
-    --text: #dce4df;
-    --action: #5c9172;
-    --person-a: #7c89c4;
-    --person-b: #d08890;
-    --flare: #e0a84a;
+/* `color-scheme: light dark` (above) lets each light-dark() track the OS. An
+   explicit data-theme attribute (set by lib/theme.ts) overrides that per the
+   in-app preference — forcing `color-scheme` to a single value makes every
+   light-dark() resolve to just that side, regardless of the OS setting. */
+:root[data-theme='light'] {
+  color-scheme: light;
+}
 
-    --surface: #1e2622;
-    --muted: #93a39c;
-    --border: #2c3733;
-
-    --action-muted: #223229;
-    --person-a-muted: #262b3c;
-    --person-b-muted: #3a2528;
-    --flare-muted: #3a3020;
-
-    --danger: #e07a7a;
-    --danger-muted: #3a2223;
-
-    --cat-vital: #7fa8c8;
-    --cat-symptom: #c98bab;
-    --cat-med: #a79bdb;
-    --cat-food: #d1b45e;
-    --cat-exercise: #5fb3ac;
-    --cat-mind: #bd93c7;
-    --cat-note: #93a39c;
-    --cat-clinical: #8b96ad;
-    --cat-other: #a9b3ac;
-
-    --scrim: rgba(6, 10, 8, 0.55);
-    --shadow-1: 0 1px 3px rgba(0, 0, 0, 0.35), 0 4px 14px rgba(0, 0, 0, 0.3);
-    --shadow-2: 0 2px 6px rgba(0, 0, 0, 0.45), 0 12px 30px rgba(0, 0, 0, 0.45);
-  }
+:root[data-theme='dark'] {
+  color-scheme: dark;
 }
