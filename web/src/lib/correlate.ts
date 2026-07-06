@@ -6,6 +6,7 @@
 // their doc comments).
 import type { StoredEvent } from './events'
 import { categorize } from './category'
+import { MOOD } from './codes'
 import { isoToMillis, dayKey } from './time'
 
 type Ev = StoredEvent['event']
@@ -37,6 +38,10 @@ export interface SymptomLane {
    * use, so "the same symptom" reads identically in both views. */
   name: string
   points: SymptomPoint[]
+  /** Upper bound of this lane's severity scale — 10 for a 0-10 symptom
+   * severity, 5 for a 1-5 mood score. What Correlate.svelte's radiusOf/
+   * opacityOf divide by to normalize a dot's severity to 0..1. */
+  max: number
 }
 
 export type InputCategory = 'food' | 'med' | 'exercise'
@@ -66,6 +71,9 @@ export interface FlareSymptom {
 }
 
 const INPUT_CATEGORIES: InputCategory[] = ['food', 'med', 'exercise']
+
+const SYMPTOM_MAX = 10
+const MOOD_MAX = 5
 
 /** A day range beyond which per-event symptom points are downsampled to one
  * point per day (see `lanes` below) — a year of daily logging is ~365
@@ -106,6 +114,7 @@ export function lanes(events: StoredEvent[], fromIso: string, toIso: string): La
   const to = isoToMillis(toIso)
 
   const symptomGroups = new Map<string, SymptomPoint[]>()
+  const moodPoints: SymptomPoint[] = []
   const inputGroups = new Map<InputCategory, InputTick[]>()
 
   for (const { event } of events) {
@@ -119,6 +128,12 @@ export function lanes(events: StoredEvent[], fromIso: string, toIso: string): La
       const points = symptomGroups.get(name) ?? []
       points.push({ atIso: event.effective_at, severity: severityOf(event), eventId: event.id })
       symptomGroups.set(name, points)
+    } else if (category === 'mind') {
+      // Only the mood score charts — a mood note and gratitude items have no
+      // severity axis and aren't lanes or inputs.
+      if (event.code?.code === MOOD.code) {
+        moodPoints.push({ atIso: event.effective_at, severity: severityOf(event), eventId: event.id })
+      }
     } else if (category === 'food' || category === 'med' || category === 'exercise') {
       const label = labelOf(event)
       if (label === null) continue // e.g. an exercise duration observation, no name of its own
@@ -129,13 +144,14 @@ export function lanes(events: StoredEvent[], fromIso: string, toIso: string): La
   }
 
   const downsample = shouldDownsample(fromIso, toIso)
+  const sortByTime = (points: SymptomPoint[]) =>
+    (downsample ? downsampleToDaily(points) : points).slice().sort(
+      (a, b) => isoToMillis(a.atIso) - isoToMillis(b.atIso),
+    )
+
   const symptoms: SymptomLane[] = [...symptomGroups.entries()]
-    .map(([name, points]) => ({
-      name,
-      points: (downsample ? downsampleToDaily(points) : points).slice().sort(
-        (a, b) => isoToMillis(a.atIso) - isoToMillis(b.atIso),
-      ),
-    }))
+    .map(([name, points]) => ({ name, points: sortByTime(points), max: SYMPTOM_MAX }))
+    .concat(moodPoints.length > 0 ? [{ name: 'Mood', points: sortByTime(moodPoints), max: MOOD_MAX }] : [])
     .sort((a, b) => a.name.localeCompare(b.name))
 
   const inputs: InputLane[] = INPUT_CATEGORIES.filter((c) => inputGroups.has(c)).map((category) => ({

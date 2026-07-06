@@ -13,6 +13,10 @@ export const LOINC = 'http://loinc.org'
 export const SNOMED = 'http://snomed.info/sct'
 export const UCUM = 'http://unitsofmeasure.org'
 export const RXNORM = 'http://www.nlm.nih.gov/research/umls/rxnorm'
+/** App-local concepts with no LOINC/SNOMED equivalent worth forcing (mood,
+ * gratitude). Never leaves this app, so there's no external terminology to
+ * defer to. */
+export const SVASTHA = 'urn:svastha:codes'
 
 function loinc(code: string, display: string): Code {
   return { system: LOINC, code, display }
@@ -24,6 +28,10 @@ function snomed(code: string, display: string): Code {
 
 function ucum(code: string): Code {
   return { system: UCUM, code }
+}
+
+function svastha(code: string, display: string): Code {
+  return { system: SVASTHA, code, display }
 }
 
 // --- vitals ---
@@ -159,3 +167,9 @@ export const SYMPTOMS: SymptomDef[] = [
 export const EXERCISE_ACTIVITY = loinc('73985-4', 'Exercise activity')
 export const EXERCISE_DURATION = loinc('55411-3', 'Exercise duration')
 export const MINUTES = ucum('min')
+
+// --- mindfulness ---
+
+export const MOOD = svastha('mood', 'Mood')
+export const MOOD_NOTE = svastha('mood-note', 'Mood note')
+export const GRATITUDE = svastha('gratitude', 'Gratitude')

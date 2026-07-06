@@ -2,7 +2,7 @@
 // (effective_at, category): that is what re-pairs a BP reading's two
 // observations and a meal's per-item events into one visual entry, since the
 // builders deliberately stamp them with one shared timestamp.
-import { VITALS, BP_SYSTOLIC, BP_DIASTOLIC, EXERCISE_DURATION } from './codes'
+import { VITALS, BP_SYSTOLIC, BP_DIASTOLIC, EXERCISE_DURATION, MOOD, MOOD_NOTE } from './codes'
 import { categorize, type Category } from './category'
 import type { StoredEvent } from './events'
 import { dayKey, formatDay } from './time'
@@ -96,6 +96,33 @@ function formatExercise(events: Ev[]): { label: string; value: string } {
   return { label: activity ?? 'Exercise', value: q ? `${q.value} ${q.unit}`.trim() : '' }
 }
 
+/** Ordinal mood score -> the mockup's waxing-moon word. Single source: the
+ * form's button labels, its favorite label, and this timeline formatting all
+ * read off the same mapping. */
+export const MOOD_WORDS: Record<number, string> = {
+  1: 'rough',
+  2: 'low',
+  3: 'even',
+  4: 'good',
+  5: 'bright',
+}
+
+function formatMind(events: Ev[]): { label: string; value: string } {
+  const mood = events.find((e) => e.code?.code === MOOD.code)
+  if (mood) {
+    const q = quantityOf(mood)
+    const score = q ? Number(q.value) : NaN
+    const word = MOOD_WORDS[score] ?? q?.value ?? ''
+    const note = events.find((e) => e.code?.code === MOOD_NOTE.code)
+    const noteText = note ? textOf(note) : null
+    return { label: 'Mood', value: noteText ? `${word} — ${noteText}` : word }
+  }
+  // No mood observation in the group means it's a gratitude entry — every
+  // gratitude item shares an effective_at, same as a multi-item meal.
+  const items = events.map(textOf).filter((t): t is string => t !== null)
+  return { label: 'Gratitude', value: items.join(' · ') }
+}
+
 function formatGroup(
   category: Category,
   events: Ev[],
@@ -107,6 +134,8 @@ function formatGroup(
       return formatSymptoms(events)
     case 'exercise':
       return { ...formatExercise(events), flare: false }
+    case 'mind':
+      return { ...formatMind(events), flare: false }
     case 'med':
     case 'food':
     case 'note': {

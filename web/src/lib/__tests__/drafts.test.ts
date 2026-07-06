@@ -8,6 +8,8 @@ import {
   foodDrafts,
   exerciseDrafts,
   noteDraft,
+  moodDraft,
+  gratitudeDrafts,
   fromTemplates,
   toTemplate,
 } from '../drafts'
@@ -20,6 +22,9 @@ import {
   EXERCISE_DURATION,
   SYMPTOMS,
   VITALS,
+  MOOD,
+  MOOD_NOTE,
+  GRATITUDE,
 } from '../codes'
 
 const AT = '2026-07-04T08:30:00-05:00'
@@ -105,6 +110,40 @@ describe('noteDraft', () => {
     const draft = noteDraft('slept badly', AT)
     expect(draft.kind).toBe('document')
     expect(draft.value).toEqual({ text: 'slept badly' })
+  })
+})
+
+describe('moodDraft', () => {
+  it('emits a decimal-string mood quantity and no note observation when note is blank', () => {
+    const drafts = moodDraft(4, '', AT)
+    expect(drafts).toHaveLength(1)
+    expect(drafts[0].code).toEqual(MOOD)
+    expect(drafts[0].value).toEqual({ quantity: { value: '4', unit: null } })
+    expect(drafts.every((d) => d.effective_at === AT)).toBe(true)
+  })
+
+  it('adds a mood-note observation sharing effective_at when a note is given', () => {
+    const drafts = moodDraft(4, '  calm morning  ', AT)
+    expect(drafts).toHaveLength(2)
+    expect(drafts[1].code).toEqual(MOOD_NOTE)
+    expect(drafts[1].value).toEqual({ text: 'calm morning' })
+    expect(drafts[1].effective_at).toBe(AT)
+  })
+})
+
+describe('gratitudeDrafts', () => {
+  it('emits one observation per trimmed nonempty item, sharing effective_at', () => {
+    const drafts = gratitudeDrafts([' slow morning ', '', '  ', 'call with mom'], AT)
+    expect(drafts).toHaveLength(2)
+    expect(drafts.every((d) => d.code && d.code.system === GRATITUDE.system && d.code.code === GRATITUDE.code)).toBe(
+      true,
+    )
+    expect(drafts.map((d) => d.value)).toEqual([{ text: 'slow morning' }, { text: 'call with mom' }])
+    expect(drafts.every((d) => d.effective_at === AT)).toBe(true)
+  })
+
+  it('returns no drafts when every item is empty', () => {
+    expect(gratitudeDrafts(['', '   '], AT)).toEqual([])
   })
 })
 

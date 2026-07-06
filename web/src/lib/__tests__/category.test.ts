@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { categorize, CATEGORY_META, CATEGORIES } from '../category'
-import { LOINC, SNOMED, VITALS, BP_DIASTOLIC, EXERCISE_ACTIVITY, EXERCISE_DURATION } from '../codes'
+import { LOINC, SNOMED, VITALS, BP_DIASTOLIC, EXERCISE_ACTIVITY, EXERCISE_DURATION, MOOD, GRATITUDE } from '../codes'
 
 describe('categorize by kind', () => {
   it('maps non-observation kinds directly', () => {
@@ -30,6 +30,11 @@ describe('categorize observations', () => {
   it('classes the exercise LOINCs as exercise', () => {
     expect(categorize({ kind: 'observation', code: EXERCISE_ACTIVITY })).toBe('exercise')
     expect(categorize({ kind: 'observation', code: EXERCISE_DURATION })).toBe('exercise')
+  })
+
+  it('classes any svastha-system observation as mind', () => {
+    expect(categorize({ kind: 'observation', code: MOOD })).toBe('mind')
+    expect(categorize({ kind: 'observation', code: GRATITUDE })).toBe('mind')
   })
 
   it('classes SNOMED-coded observations as symptom', () => {

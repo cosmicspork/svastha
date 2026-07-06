@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { lanes, preceding, shouldDownsample } from '../correlate'
 import type { StoredEvent } from '../events'
-import { SNOMED, LOINC, UCUM } from '../codes'
+import { SNOMED, LOINC, UCUM, MOOD, MOOD_NOTE, GRATITUDE } from '../codes'
 
 let nextId = 0
 function ev(partial: Partial<StoredEvent['event']> & { effective_at: string }): StoredEvent {
@@ -55,6 +55,18 @@ function exerciseDurationEvent(effective_at: string, minutes: string): StoredEve
   })
 }
 
+function moodEvent(effective_at: string, score: number): StoredEvent {
+  return ev({ effective_at, code: MOOD, value: { quantity: { value: String(score), unit: null } } })
+}
+
+function moodNoteEvent(effective_at: string, note: string): StoredEvent {
+  return ev({ effective_at, code: MOOD_NOTE, value: { text: note } })
+}
+
+function gratitudeEvent(effective_at: string, item: string): StoredEvent {
+  return ev({ effective_at, code: GRATITUDE, value: { text: item } })
+}
+
 describe('lanes', () => {
   it('groups symptoms by code display name and reads severity off the quantity', () => {
     const events = [symptomEvent('2026-01-01T08:00:00+00:00', 8), symptomEvent('2026-01-01T20:00:00+00:00', 3)]
@@ -68,7 +80,11 @@ describe('lanes', () => {
     const events = [freeTextSymptomEvent('2026-01-01T08:00:00+00:00', 'Weird tingling')]
     const { symptoms } = lanes(events, '2026-01-01T00:00:00+00:00', '2026-01-02T00:00:00+00:00')
     expect(symptoms).toEqual([
-      { name: 'Weird tingling', points: [{ atIso: '2026-01-01T08:00:00+00:00', severity: null, eventId: events[0].event.id }] },
+      {
+        name: 'Weird tingling',
+        points: [{ atIso: '2026-01-01T08:00:00+00:00', severity: null, eventId: events[0].event.id }],
+        max: 10,
+      },
     ])
   })
 
@@ -114,6 +130,30 @@ describe('lanes', () => {
     const events = [ev({ effective_at: null as unknown as string, code: null, value: { text: 'nope' } })]
     const { symptoms, inputs } = lanes(events, '2026-01-01T00:00:00+00:00', '2026-01-02T00:00:00+00:00')
     expect(symptoms).toHaveLength(0)
+    expect(inputs).toHaveLength(0)
+  })
+
+  it('lanes mood observations as a Mood lane scaled to 5, leaving symptom lanes on a 10 scale', () => {
+    const events = [
+      symptomEvent('2026-01-01T08:00:00+00:00', 8),
+      moodEvent('2026-01-01T09:00:00+00:00', 4),
+      moodNoteEvent('2026-01-01T09:00:00+00:00', 'calm morning'),
+      gratitudeEvent('2026-01-01T10:00:00+00:00', 'slow morning'),
+    ]
+    const { symptoms, inputs } = lanes(events, '2026-01-01T00:00:00+00:00', '2026-01-02T00:00:00+00:00')
+
+    const headache = symptoms.find((s) => s.name === 'Headache')
+    expect(headache?.max).toBe(10)
+
+    const mood = symptoms.find((s) => s.name === 'Mood')
+    expect(mood?.max).toBe(5)
+    expect(mood?.points).toEqual([
+      { atIso: '2026-01-01T09:00:00+00:00', severity: 4, eventId: events[1].event.id },
+    ])
+
+    // Mood note and gratitude never become their own lane, nor an input tick.
+    expect(symptoms.some((s) => s.name === 'Mood note' || s.name === 'calm morning')).toBe(false)
+    expect(symptoms).toHaveLength(2)
     expect(inputs).toHaveLength(0)
   })
 
