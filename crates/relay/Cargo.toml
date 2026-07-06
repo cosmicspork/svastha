@@ -24,6 +24,8 @@ tempfile = "3"
 # CORS so a browser PWA on another origin can call the relay (auth is per-request
 # signatures, no cookies, so any origin is safe).
 tower-http = { version = "0.6", features = ["cors"] }
+# Render the landing page's QR as inline SVG (no raster/image dep needed).
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
 [dev-dependencies]
 # ServiceExt::oneshot drives the router in-process, no port binding.

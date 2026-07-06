@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { buildExchangeCode, parseExchangeCode, fingerprint, ExchangeCodeError } from '../exchange'
+import {
+  buildExchangeCode,
+  parseExchangeCode,
+  fingerprint,
+  deviceLinkUrl,
+  ExchangeCodeError,
+} from '../exchange'
 
 const ED = 'a'.repeat(64)
 const X25519 = 'b'.repeat(64)
@@ -68,5 +74,24 @@ describe('fingerprint', () => {
 
   it('differs for different keys', () => {
     expect(fingerprint(ED)).not.toBe(fingerprint(X25519))
+  })
+})
+
+describe('deviceLinkUrl', () => {
+  it('builds an onboard restore link with the relay URL as a query param', () => {
+    expect(deviceLinkUrl('https://app.example.com', 'https://relay.example.com')).toBe(
+      'https://app.example.com/#/onboard?relay=https%3A%2F%2Frelay.example.com',
+    )
+  })
+
+  it('percent-encodes query-string characters in the relay URL so nested params never leak through', () => {
+    const relayUrl = 'https://relay.example.com:8080/path?token=a&b=c'
+    const link = deviceLinkUrl('https://app.example.com', relayUrl)
+    expect(link).toBe(
+      `https://app.example.com/#/onboard?relay=${encodeURIComponent(relayUrl)}`,
+    )
+    // Round-trips back to the exact original relay URL.
+    const [, query] = link.split('?')
+    expect(new URLSearchParams(query).get('relay')).toBe(relayUrl)
   })
 })

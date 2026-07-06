@@ -7,10 +7,11 @@
 use axum::{
     body::Bytes,
     extract::{Path, State},
-    http::{header, HeaderName, StatusCode},
-    response::{IntoResponse, Response},
+    http::{header, HeaderMap, HeaderName, StatusCode},
+    response::{Html, IntoResponse, Response},
     Extension, Json,
 };
+use qrcode::{render::svg, QrCode};
 use serde::Serialize;
 use svastha_core::CONTRACT_VERSION;
 
@@ -37,6 +38,91 @@ pub async fn info() -> Json<Info> {
     Json(Info {
         contract_version: CONTRACT_VERSION,
     })
+}
+
+// --- landing page: relay → device QR linking (unauthenticated) ---
+
+/// The relay's self-describing landing page: states its zero-knowledge role
+/// and shows a QR carrying its own public address, so a phone's native camera
+/// app can open it directly — no in-app scanner, no new protocol, the QR just
+/// encodes a URL (see `docs/ARCHITECTURE.md`'s Relay section and
+/// `web/src/routes/Onboard.svelte` for the other half of the flow).
+const LANDING_TEMPLATE: &str = include_str!("landing.html");
+
+/// Serve the landing page. The relay's own address is derived from this
+/// request's headers, never configured, so it's always correct for whatever
+/// host or port the caller actually reached.
+pub async fn landing(State(state): State<AppState>, headers: HeaderMap) -> Html<String> {
+    let proto = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("http");
+    let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
+
+    // `Host` is attacker-influenced (a raw HTTP client can send anything), and
+    // it ends up both encoded into the QR and echoed as plain text below it
+    // (see `render_qr_card`) — so this is never allowed to be missing, and the
+    // text form is always HTML-escaped before being embedded.
+    let qr_card = match host {
+        Some(host) => {
+            let base_url = format!("{proto}://{host}");
+            let target = match &state.app_url {
+                // Device → device linking (Settings' "Link another device")
+                // lands the new device straight on restore with the relay
+                // prefilled; see `web/src/routes/Onboard.svelte`.
+                Some(app_url) => format!("{app_url}/#/onboard?relay={base_url}"),
+                None => base_url,
+            };
+            render_qr_card(&target)
+        }
+        // No `Host` header (unusual, but not impossible): there is no address
+        // to show, so skip the QR and say so in words rather than render a
+        // broken or empty one.
+        None => degenerate_card("this relay"),
+    };
+
+    let html = LANDING_TEMPLATE
+        .replace("{qr_card}", &qr_card)
+        .replace("{contract_version}", &CONTRACT_VERSION.to_string());
+    Html(html)
+}
+
+/// Render `target` as an inline SVG QR on a white card, with the same address
+/// repeated underneath as small selectable text (the page's own "or paste the
+/// address by hand" instruction needs something to paste). QR encoding can
+/// fail for a pathologically long `target` (an oversized `Host` header) —
+/// degrade to the same no-QR fallback as a missing `Host` rather than panic.
+fn render_qr_card(target: &str) -> String {
+    match QrCode::new(target.as_bytes()) {
+        Ok(code) => {
+            let svg = code
+                .render::<svg::Color>()
+                .min_dimensions(220, 220)
+                .dark_color(svg::Color("#1a231f"))
+                .light_color(svg::Color("#ffffff"))
+                .build();
+            format!(
+                r#"<div class="card">{svg}</div><p class="address">{}</p>"#,
+                escape_html(target)
+            )
+        }
+        Err(_) => degenerate_card(target),
+    }
+}
+
+fn degenerate_card(text: &str) -> String {
+    format!(r#"<p class="address">{}</p>"#, escape_html(text))
+}
+
+/// Minimal HTML-text escaping for the one dynamic value this page ever
+/// reflects: the caller's own `Host` header, echoed back as the paste-by-hand
+/// address. Defensive, not a formatting nicety — `Host` is attacker-supplied.
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 /// Store (or replace) a blob for the authenticated owner.

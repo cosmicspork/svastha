@@ -5,6 +5,10 @@
 //! - `SVASTHA_RELAY_MAX_SKEW_SECS` — auth replay window (default `300`).
 //! - `SVASTHA_RELAY_DATA_DIR` — durable blob, grant, and mailbox directory; if
 //!   unset, all three are kept in memory and lost on restart.
+//! - `SVASTHA_APP_URL` — the paired web app's own origin (e.g.
+//!   `https://app.example.com`), unset by default. When set, the landing
+//!   page's (`GET /`) QR encodes a device-link onboarding URL instead of just
+//!   the relay's own address; see [`svastha_relay::AppState::app_url`].
 //! - `RUST_LOG` — tracing filter (default `svastha_relay=info`).
 
 use std::sync::Arc;
@@ -29,6 +33,11 @@ async fn main() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(300);
+    // Trimmed once here so `routes::landing` never has to re-trim it per request.
+    let app_url = std::env::var("SVASTHA_APP_URL")
+        .ok()
+        .map(|s| s.trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty());
 
     let (store, grants, mailbox): (
         Arc<dyn BlobStore>,
@@ -54,7 +63,7 @@ async fn main() {
         }
     };
 
-    let app = app(store, grants, mailbox, max_skew_secs);
+    let app = app(store, grants, mailbox, max_skew_secs, app_url);
 
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
