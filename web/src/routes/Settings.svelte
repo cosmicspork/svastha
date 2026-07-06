@@ -9,6 +9,8 @@
   import { syncTeardown, syncStatus, pullAll } from '../lib/sync'
   import { navigate } from '../lib/router.svelte'
   import { loadTheme, setTheme, type ThemePref } from '../lib/theme'
+  import { dismissInstallNudge } from '../lib/install'
+  import InstallSheet from '../components/InstallSheet.svelte'
 
   /** Show a public key as spaced hex byte-groups, truncated — enough to eyeball
    * a match, not the full 64-char key. */
@@ -164,6 +166,17 @@
 
   function syncNow() {
     void pullAll()
+  }
+
+  // --- install instructions ---
+  let showInstallSheet = $state(false)
+
+  async function closeInstallSheet(): Promise<void> {
+    // Idempotent with the first-run nudge's pref write — reopening from here
+    // isn't itself a nudge, but writing the same "dismissed" flag again is
+    // harmless and keeps this component as dumb as the sheet it wraps.
+    await dismissInstallNudge()
+    showInstallSheet = false
   }
 </script>
 
@@ -366,7 +379,18 @@
 <section class="stack">
   <h2>About</h2>
   <p class="muted" data-testid="about-version">Trust contract v{version}</p>
+  <button
+    class="ghost"
+    onclick={() => (showInstallSheet = true)}
+    data-testid="install-instructions"
+  >
+    Install instructions
+  </button>
 </section>
+
+{#if showInstallSheet}
+  <InstallSheet onclose={closeInstallSheet} />
+{/if}
 
 <style>
   section {

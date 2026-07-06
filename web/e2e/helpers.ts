@@ -34,7 +34,21 @@ export async function onboardViaUI(page: Page, passphrase: string = PASSPHRASE):
   await page.getByTestId('set-passphrase-submit').click()
 
   await expect(page.getByTestId('empty-state')).toBeVisible()
+  await dismissInstallSheet(page)
   return words
+}
+
+/** First landing on Home shows the one-time install sheet (a test browser is
+ * never standalone), and its scrim would swallow the next click. Dismiss it if
+ * it appears; tolerate it not appearing (pref already persisted). */
+async function dismissInstallSheet(page: Page): Promise<void> {
+  const notNow = page.getByTestId('install-sheet-not-now')
+  try {
+    await notNow.click({ timeout: 3000 })
+  } catch {
+    return
+  }
+  await expect(notNow).toBeHidden()
 }
 
 /** Connect a relay through the Settings UI and land back on Home. Assumes an
@@ -63,6 +77,7 @@ export async function restoreViaUI(
   await page.getByTestId('restore-submit').click()
   // Unlocked-and-on-Home marker that works whether or not any records exist.
   await expect(page.getByTestId('nav-settings')).toBeVisible()
+  await dismissInstallSheet(page)
 }
 
 /** Open the bloom and pick a petal — the FAB must be expanded before a

@@ -12,15 +12,29 @@
     type PendingInvite,
   } from '../lib/shared'
   import Spine from '../components/Spine.svelte'
+  import InstallSheet from '../components/InstallSheet.svelte'
+  import { shouldNudgeInstall, dismissInstallNudge } from '../lib/install'
 
   let hue = $state<'a' | 'b'>('a')
   let shares = $state<Share[]>([])
+  let showInstallSheet = $state(false)
 
   onMount(async () => {
     const stored = await get<'a' | 'b'>('prefs', 'hue')
     if (stored) hue = stored
     shares = await listShares()
   })
+
+  // Separate from the above onMount so a slow shouldNudgeInstall() (an
+  // IndexedDB read) never delays the hue/shares load it has nothing to do with.
+  onMount(async () => {
+    if (await shouldNudgeInstall()) showInstallSheet = true
+  })
+
+  async function dismissAndClose(): Promise<void> {
+    await dismissInstallNudge()
+    showInstallSheet = false
+  }
 
   async function accept(invite: PendingInvite): Promise<void> {
     await acceptInvite(invite, hue === 'a' ? 'b' : 'a')
@@ -75,6 +89,10 @@
 </div>
 
 <Spine {hue} />
+
+{#if showInstallSheet}
+  <InstallSheet onclose={dismissAndClose} />
+{/if}
 
 <style>
   .invite {
