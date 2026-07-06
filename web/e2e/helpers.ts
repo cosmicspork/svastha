@@ -65,9 +65,16 @@ export async function restoreViaUI(
   await expect(page.getByTestId('nav-settings')).toBeVisible()
 }
 
+/** Open the bloom and pick a petal — the FAB must be expanded before a
+ * `log-{kind}` petal is clickable. */
+export async function openLog(page: Page, kind: string): Promise<void> {
+  await page.getByTestId('fab').click()
+  await page.getByTestId(`log-${kind}`).click()
+}
+
 /** Log a blood pressure reading through the quick-log UI (two events). */
 export async function logBP(page: Page, systolic: string, diastolic: string): Promise<void> {
-  await page.getByTestId('log-vitals').click()
+  await openLog(page, 'vitals')
   await page.getByTestId('bp-systolic').fill(systolic)
   await page.getByTestId('bp-diastolic').fill(diastolic)
   await page.getByTestId('save').click()
@@ -76,7 +83,7 @@ export async function logBP(page: Page, systolic: string, diastolic: string): Pr
 
 /** Log one food item through the quick-log UI (one event). */
 export async function logFood(page: Page, item: string): Promise<void> {
-  await page.getByTestId('log-food').click()
+  await openLog(page, 'food')
   await page.getByTestId('food-input').fill(item)
   await page.getByTestId('food-input').press('Enter')
   await page.getByTestId('save').click()

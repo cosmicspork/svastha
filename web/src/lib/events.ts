@@ -81,6 +81,22 @@ function templateKey(t: DraftTemplate): string {
   return `${t.kind}|${'text' in t.value ? t.value.text.toLowerCase() : JSON.stringify(t.value)}`
 }
 
+/** Per-category event counts over the last `days` days — the bloom's
+ * frequency ordering reads this so petals reflect recent habits, not
+ * once-off history from months ago. */
+export async function categoryLogCounts(days = 90): Promise<Partial<Record<Category, number>>> {
+  const events = await allEvents()
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000
+
+  const counts: Partial<Record<Category, number>> = {}
+  for (const { event } of events) {
+    if (!event.effective_at || new Date(event.effective_at).getTime() < cutoff) continue
+    const category = categorize(event)
+    counts[category] = (counts[category] ?? 0) + 1
+  }
+  return counts
+}
+
 /** Distinct recently-logged combos in a category, newest first — the source of
  * the recents chips. */
 export async function recentDrafts(category: Category, limit: number): Promise<DraftTemplate[]> {
