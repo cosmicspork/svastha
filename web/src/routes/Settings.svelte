@@ -8,6 +8,7 @@
   import { connectRelay } from '../lib/vault'
   import { syncTeardown, syncStatus, pullAll } from '../lib/sync'
   import { navigate } from '../lib/router.svelte'
+  import { loadTheme, setTheme, type ThemePref } from '../lib/theme'
 
   /** Show a public key as spaced hex byte-groups, truncated — enough to eyeball
    * a match, not the full 64-char key. */
@@ -67,6 +68,15 @@
   }
 
   // --- appearance ---
+  let theme = $state<ThemePref>('system')
+  onMount(async () => {
+    theme = await loadTheme()
+  })
+  async function pickTheme(pref: ThemePref) {
+    theme = pref
+    await setTheme(pref)
+  }
+
   let hue = $state<'a' | 'b'>('a')
   onMount(async () => {
     const stored = await get<'a' | 'b'>('prefs', 'hue')
@@ -75,6 +85,16 @@
   async function setHue(value: 'a' | 'b') {
     hue = value
     await put('prefs', value, 'hue')
+  }
+
+  let fabHand = $state<'right' | 'left'>('right')
+  onMount(async () => {
+    const stored = await get<'right' | 'left'>('prefs', 'fab-hand')
+    if (stored) fabHand = stored
+  })
+  async function setFabHand(value: 'right' | 'left') {
+    fabHand = value
+    await put('prefs', value, 'fab-hand')
   }
 
   // --- storage ---
@@ -210,23 +230,71 @@
 
 <section class="stack">
   <h2>Appearance</h2>
-  <div class="swatches">
-    <button
-      class="swatch"
-      style:background="var(--person-a)"
-      aria-pressed={hue === 'a'}
-      onclick={() => setHue('a')}
-      data-testid="hue-a"
-      aria-label="Indigo"
-    ></button>
-    <button
-      class="swatch"
-      style:background="var(--person-b)"
-      aria-pressed={hue === 'b'}
-      onclick={() => setHue('b')}
-      data-testid="hue-b"
-      aria-label="Madder"
-    ></button>
+  <div class="setrow">
+    <span class="l">Theme</span>
+    <div class="seg" style:width="13rem">
+      <button
+        aria-pressed={theme === 'light'}
+        onclick={() => pickTheme('light')}
+        data-testid="theme-light"
+      >
+        Light
+      </button>
+      <button
+        aria-pressed={theme === 'dark'}
+        onclick={() => pickTheme('dark')}
+        data-testid="theme-dark"
+      >
+        Dark
+      </button>
+      <button
+        aria-pressed={theme === 'system'}
+        onclick={() => pickTheme('system')}
+        data-testid="theme-system"
+      >
+        System
+      </button>
+    </div>
+  </div>
+  <div class="setrow">
+    <span class="l">Timeline accent<small>Colors the spine of your own record</small></span>
+    <div class="swatches">
+      <button
+        class="swatch"
+        style:background="var(--person-a)"
+        aria-pressed={hue === 'a'}
+        onclick={() => setHue('a')}
+        data-testid="hue-a"
+        aria-label="Indigo"
+      ></button>
+      <button
+        class="swatch"
+        style:background="var(--person-b)"
+        aria-pressed={hue === 'b'}
+        onclick={() => setHue('b')}
+        data-testid="hue-b"
+        aria-label="Madder"
+      ></button>
+    </div>
+  </div>
+  <div class="setrow">
+    <span class="l">Add button<small>Which thumb opens the bloom</small></span>
+    <div class="seg" style:width="10rem">
+      <button
+        aria-pressed={fabHand === 'right'}
+        onclick={() => setFabHand('right')}
+        data-testid="fab-hand-right"
+      >
+        Right
+      </button>
+      <button
+        aria-pressed={fabHand === 'left'}
+        onclick={() => setFabHand('left')}
+        data-testid="fab-hand-left"
+      >
+        Left
+      </button>
+    </div>
   </div>
 </section>
 
@@ -324,6 +392,26 @@
     display: block;
     font-size: var(--text-sm);
     color: var(--muted);
+  }
+
+  /* A settings row: a label (with optional muted caption) paired with its
+     control, e.g. the .seg theme picker or the hue swatches below. */
+  .setrow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-bottom: var(--space-3);
+  }
+
+  .setrow .l {
+    font-size: var(--text-sm);
+  }
+
+  .setrow .l small {
+    display: block;
+    color: var(--muted);
+    font-size: var(--text-xs);
   }
 
   .swatches {
