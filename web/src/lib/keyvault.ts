@@ -128,6 +128,10 @@ export async function unlock(passphrase: string): Promise<UnlockedSession> {
   const vaultKeyBytes = openRecord(vaultkeyRecord, kdfOut, AAD.vaultkey)
   const vaultKey = WasmDataKey.from_bytes(vaultKeyBytes)
 
+  // Public key material — already visible to any relay this device talks to — so storing it
+  // unwrapped in prefs lets the unlock screen show a fingerprint before the vault opens.
+  await put('prefs', identity.ed25519_public_hex, 'ed25519-pub')
+
   return { identity, vaultKey, kdfOut }
 }
 
