@@ -112,13 +112,15 @@
   function instantLog(templates: DraftTemplate[], label: string) {
     void saveDrafts(fromTemplates(templates, toLocalIso(new Date())), label, false)
   }
+
+  function cancel() {
+    navigate('#/')
+  }
 </script>
 
 <div class="head">
+  <span class="dot" style:background={`var(--cat-${category})`}></span>
   <h1>{title}</h1>
-  <button type="button" class="cancel" onclick={() => navigate('#/')} data-testid="log-cancel">
-    Cancel
-  </button>
 </div>
 
 {#key favoritesVersion}
@@ -152,21 +154,31 @@
   {#if error}
     <p class="error" data-testid="save-error">{error}</p>
   {/if}
+</form>
 
-  <div class="actions">
-    <button type="submit" class="primary" disabled={saving || !canSave} data-testid="save">
-      Save
-    </button>
+<div class="action-bar">
+  <div class="action-bar-inner">
+    <button type="button" class="ghost" onclick={cancel} data-testid="log-cancel">Cancel</button>
     <button
       type="button"
+      class="tonal"
       disabled={saving || !canSave}
       onclick={() => save(true)}
       data-testid="save-another"
     >
-      Save & log another
+      Save & another
+    </button>
+    <button
+      type="button"
+      class="primary"
+      disabled={saving || !canSave}
+      onclick={() => save(false)}
+      data-testid="save"
+    >
+      Save
     </button>
   </div>
-</form>
+</div>
 
 {#if toast}
   <div class="toast" role="status" data-testid="save-toast">
@@ -184,17 +196,19 @@
 <style>
   .head {
     display: flex;
-    align-items: baseline;
-    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-2);
   }
 
-  .cancel {
-    border: none;
-    background: none;
-    color: var(--muted);
-    min-height: auto;
-    min-width: auto;
-    padding: var(--space-1) 0;
+  .head h1 {
+    font-size: var(--text-xl);
+  }
+
+  .dot {
+    flex: none;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
   }
 
   .when {
@@ -208,12 +222,28 @@
     flex: 1;
   }
 
-  .actions {
-    display: flex;
-    gap: var(--space-3);
+  form.stack {
+    padding-bottom: 96px;
   }
 
-  .actions .primary {
+  .action-bar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+  }
+
+  .action-bar-inner {
+    max-width: 40rem;
+    margin: 0 auto;
+    display: flex;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4) calc(var(--space-3) + env(safe-area-inset-bottom));
+  }
+
+  .action-bar-inner .primary {
     flex: 1;
   }
 
@@ -221,7 +251,7 @@
     position: fixed;
     left: 50%;
     transform: translateX(-50%);
-    bottom: calc(var(--space-5) + env(safe-area-inset-bottom));
+    bottom: calc(84px + env(safe-area-inset-bottom));
     display: flex;
     align-items: center;
     gap: var(--space-3);
@@ -229,6 +259,6 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     padding: var(--space-2) var(--space-4);
-    box-shadow: 0 2px 12px rgb(0 0 0 / 0.12);
+    box-shadow: var(--shadow-1);
   }
 </style>

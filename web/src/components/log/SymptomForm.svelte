@@ -68,12 +68,12 @@
   </div>
 
   {#if selected}
-    <label class="severity">
+    <label class="field severity">
       Severity: <span class="data" data-testid="severity-value">{severity}</span>/10
       <input type="range" min="0" max="10" step="1" bind:value={severity} data-testid="severity" />
     </label>
   {:else}
-    <label>
+    <label class="field">
       Something else
       <input
         bind:value={freeText}
@@ -102,12 +102,6 @@
     border-color: var(--action);
     color: var(--action);
     background: var(--action-muted);
-  }
-
-  label {
-    display: block;
-    font-size: var(--text-sm);
-    color: var(--muted);
   }
 
   .severity input {

@@ -25,7 +25,7 @@
 </script>
 
 <LogShell title="Note" category="note" {buildDrafts} {favoriteLabel} {onPrefill} {onReset}>
-  <label>
+  <label class="field">
     Note
     <textarea
       bind:value={body}
@@ -34,11 +34,3 @@
     ></textarea>
   </label>
 </LogShell>
-
-<style>
-  label {
-    display: block;
-    font-size: var(--text-sm);
-    color: var(--muted);
-  }
-</style>

@@ -71,7 +71,7 @@
     </div>
   {/if}
 
-  <label>
+  <label class="field">
     Add items
     <input
       bind:value={pending}
@@ -84,12 +84,6 @@
 </LogShell>
 
 <style>
-  label {
-    display: block;
-    font-size: var(--text-sm);
-    color: var(--muted);
-  }
-
   .items {
     display: flex;
     flex-wrap: wrap;
