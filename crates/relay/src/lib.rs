@@ -41,21 +41,31 @@ pub struct AppState {
     pub grants: Arc<dyn GrantStore>,
     pub mailbox: Arc<dyn MailboxStore>,
     pub max_skew_secs: u64,
+    /// The web app's own origin (e.g. `https://app.example.com`), if this
+    /// relay is paired with a known app deployment. When set, the landing
+    /// page's QR (`routes::landing`) encodes a device-link onboarding URL
+    /// instead of just the relay's own address — see
+    /// `web/src/routes/Onboard.svelte`. Trimmed of any trailing `/` once at
+    /// startup (`SVASTHA_APP_URL` in `main.rs`) so handlers never re-trim it.
+    pub app_url: Option<String>,
 }
 
 /// Build the relay router. `max_skew_secs` is how far a request's signed
-/// timestamp may differ from the relay's clock (replay window).
+/// timestamp may differ from the relay's clock (replay window). `app_url` is
+/// the optional paired web app origin described on [`AppState::app_url`].
 pub fn app(
     store: Arc<dyn BlobStore>,
     grants: Arc<dyn GrantStore>,
     mailbox: Arc<dyn MailboxStore>,
     max_skew_secs: u64,
+    app_url: Option<String>,
 ) -> Router {
     let state = AppState {
         store,
         grants,
         mailbox,
         max_skew_secs,
+        app_url,
     };
 
     // Full paths (no `nest`): the auth middleware reconstructs the request path
@@ -92,6 +102,7 @@ pub fn app(
         ));
 
     Router::new()
+        .route("/", get(routes::landing))
         .route("/health", get(routes::health))
         .route("/v0/info", get(routes::info))
         .merge(authed)

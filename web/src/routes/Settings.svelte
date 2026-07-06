@@ -12,6 +12,7 @@
   import { dismissInstallNudge } from '../lib/install'
   import InstallSheet from '../components/InstallSheet.svelte'
   import { copySensitive } from '../lib/clipboard'
+  import { deviceLinkUrl, codeQrSvg } from '../lib/exchange'
 
   /** Show a public key as spaced hex byte-groups, truncated — enough to eyeball
    * a match, not the full 64-char key. */
@@ -176,6 +177,15 @@
   function syncNow() {
     void pullAll()
   }
+
+  // --- link another device (device → device QR linking) ---
+  // The new device's native camera opens this directly — no in-app scanner,
+  // no new relay protocol. It lands the new device on Onboard's restore tab
+  // with this relay prefilled (see `Onboard.svelte`'s `relay=` handling); the
+  // seed phrase itself is entered by hand there, never carried by the QR.
+  let showLinkDevice = $state(false)
+  const linkDeviceUrl = $derived(deviceLinkUrl(window.location.origin, relayUrlInput))
+  const linkDeviceQrSvg = $derived(showLinkDevice ? codeQrSvg(linkDeviceUrl) : '')
 
   // --- install instructions ---
   let showInstallSheet = $state(false)
@@ -380,6 +390,23 @@
       <button onclick={syncNow} data-testid="sync-now">Sync now</button>
       <button onclick={disconnect} data-testid="relay-disconnect">Disconnect</button>
     </div>
+    <button
+      class="ghost"
+      onclick={() => (showLinkDevice = !showLinkDevice)}
+      data-testid="link-device"
+    >
+      Link another device
+    </button>
+    {#if showLinkDevice}
+      <!-- App-generated URL, never user input — see exchange.ts's codeQrSvg doc comment. -->
+      <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+      <div class="qr" data-testid="link-device-qr">{@html linkDeviceQrSvg}</div>
+      <p class="data" data-testid="link-device-url">{linkDeviceUrl}</p>
+      <p class="muted">
+        Scan with the new device's camera. You'll enter your seed phrase there — it never travels
+        in this code.
+      </p>
+    {/if}
   {/if}
 </section>
 
@@ -462,6 +489,11 @@
   .swatches {
     display: flex;
     gap: var(--space-3);
+  }
+
+  .qr :global(svg) {
+    width: 200px;
+    height: 200px;
   }
 
   .swatch {

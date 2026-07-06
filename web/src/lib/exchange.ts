@@ -65,3 +65,13 @@ export function fingerprint(ed25519Hex: string): string {
 export function codeQrSvg(code: string): string {
   return renderSVG(code, { border: 1 })
 }
+
+/** Build a device-link URL: this app's own onboarding screen, on the restore
+ * tab, with a relay prefilled — what "Link another device" in Settings
+ * encodes as a QR for the new device's camera to open directly (no in-app
+ * scanner, no new relay protocol; see `Onboard.svelte`'s `relay=` handling
+ * and `docs/ARCHITECTURE.md`'s Relay section). The seed phrase itself is
+ * never part of this URL — it's entered by hand on the new device. */
+export function deviceLinkUrl(appOrigin: string, relayUrl: string): string {
+  return `${appOrigin}/#/onboard?relay=${encodeURIComponent(relayUrl)}`
+}

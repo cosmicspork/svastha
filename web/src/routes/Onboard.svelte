@@ -12,7 +12,32 @@
   let { onCreated }: { onCreated: () => void } = $props()
 
   type Tab = 'create' | 'restore'
-  const initialTab: Tab = window.location.hash.includes('tab=restore') ? 'restore' : 'create'
+  const hashParams = new URLSearchParams(window.location.hash.split('?')[1] ?? '')
+
+  // Device → device linking: Settings' "Link another device" QR encodes
+  // `#/onboard?relay={relay url}` (see `lib/exchange.ts`'s `deviceLinkUrl`).
+  // The new device's camera opens this directly — no in-app scanner. A
+  // malformed value is discarded rather than surfaced as an error: this
+  // param is just a convenience prefill, and the restore tab still works
+  // with the relay field left blank or typed by hand.
+  function parseLinkedRelay(relayParam: string | null): { url: string; hostname: string } | null {
+    if (!relayParam) return null
+    try {
+      const parsed = new URL(relayParam)
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        return { url: relayParam, hostname: parsed.hostname }
+      }
+    } catch {
+      // Not a valid URL — ignore the param entirely.
+    }
+    return null
+  }
+  const linkedRelay = parseLinkedRelay(hashParams.get('relay'))
+  const linkRelayUrl = linkedRelay?.url ?? ''
+  const linkRelayHostname = linkedRelay?.hostname ?? ''
+
+  const initialTab: Tab =
+    linkRelayHostname || hashParams.get('tab') === 'restore' ? 'restore' : 'create'
   let tab = $state<Tab>(initialTab)
 
   // --- create flow ---
@@ -102,7 +127,7 @@
   let restorePhrase = $state('')
   let restoreError = $state('')
   let restorePassphrase = $state('')
-  let restoreRelayUrl = $state('')
+  let restoreRelayUrl = $state(linkRelayUrl)
   let restoreProgress = $state('')
   let restoreBusy = $state(false)
 
@@ -286,6 +311,12 @@
     </form>
   {/if}
 {:else}
+  {#if linkRelayHostname}
+    <p class="muted" data-testid="link-intro">
+      Linking this device — your records will restore from {linkRelayHostname} once you enter your
+      seed phrase.
+    </p>
+  {/if}
   <form class="stack" onsubmit={submitRestore}>
     <p>Paste your 24-word seed phrase to recreate your identity on this device.</p>
     <label>

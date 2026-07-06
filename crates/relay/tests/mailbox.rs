@@ -192,6 +192,7 @@ async fn fs_mailbox_store_persists_across_router_rebuild() {
             Arc::new(MemoryGrantStore::new()),
             Arc::new(FsMailboxStore::new(dir).unwrap()),
             SKEW,
+            None,
         )
     };
 

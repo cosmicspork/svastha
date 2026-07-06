@@ -325,6 +325,7 @@ async fn fs_grant_store_persists_across_router_rebuild() {
             Arc::new(FsGrantStore::new(dir).unwrap()),
             Arc::new(MemoryMailboxStore::new()),
             SKEW,
+            None,
         )
     };
 
