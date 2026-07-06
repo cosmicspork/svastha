@@ -11,6 +11,7 @@
   import { loadTheme, setTheme, type ThemePref } from '../lib/theme'
   import { dismissInstallNudge } from '../lib/install'
   import InstallSheet from '../components/InstallSheet.svelte'
+  import { copySensitive } from '../lib/clipboard'
 
   /** Show a public key as spaced hex byte-groups, truncated — enough to eyeball
    * a match, not the full 64-char key. */
@@ -37,6 +38,14 @@
     } catch (err) {
       seedError = err instanceof WrongPassphraseError ? err.message : 'Could not verify that passphrase.'
     }
+  }
+
+  let seedCopied = $state(false)
+
+  async function copyRevealedMnemonic() {
+    await copySensitive(revealedMnemonic)
+    seedCopied = true
+    setTimeout(() => (seedCopied = false), 2500)
   }
 
   // --- change passphrase ---
@@ -194,6 +203,18 @@
   {#if revealedMnemonic}
     <p class="error">Anyone who sees this can restore your identity. Keep it private.</p>
     <p class="data" data-testid="revealed-mnemonic">{revealedMnemonic}</p>
+    <button
+      class="tonal"
+      style:width="100%"
+      onclick={copyRevealedMnemonic}
+      data-testid="copy-mnemonic-settings"
+    >
+      {seedCopied ? 'Copied — clears in 60 s' : 'Copy phrase'}
+    </button>
+    <p class="warnnote">
+      Paper is still the safest home for these words. If you copy, paste into a password manager
+      right away — the clipboard clears itself in 60 seconds.
+    </p>
   {:else if showingSeedForm}
     <form class="stack" onsubmit={revealSeed}>
       <label>
@@ -453,5 +474,14 @@
 
   .swatch[aria-pressed='true'] {
     border-color: var(--text);
+  }
+
+  /* Honest-tradeoff caption under the copy-phrase button (Onboard.svelte
+     repeats this verbatim for the create-flow words step). */
+  .warnnote {
+    font-size: var(--text-xs);
+    color: var(--muted);
+    border-left: 2px solid var(--flare);
+    padding-left: var(--space-3);
   }
 </style>

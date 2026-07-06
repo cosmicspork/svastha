@@ -7,6 +7,7 @@
   import { connectRelay } from '../lib/vault'
   import { pullAll, syncStatus } from '../lib/sync'
   import { put } from '../lib/db'
+  import { copySensitive } from '../lib/clipboard'
 
   let { onCreated }: { onCreated: () => void } = $props()
 
@@ -34,6 +35,14 @@
     await initSvastha()
     identity = WasmIdentity.generate()
     createStep = 'words'
+  }
+
+  let mnemonicCopied = $state(false)
+
+  async function copyMnemonic() {
+    await copySensitive(words.join(' '))
+    mnemonicCopied = true
+    setTimeout(() => (mnemonicCopied = false), 2500)
   }
 
   function pickConfirmPositions() {
@@ -221,6 +230,18 @@
           <li data-testid="mnemonic-word-{i + 1}">{word}</li>
         {/each}
       </ol>
+      <button
+        class="tonal"
+        style:width="100%"
+        onclick={copyMnemonic}
+        data-testid="copy-mnemonic"
+      >
+        {mnemonicCopied ? 'Copied — clears in 60 s' : 'Copy phrase'}
+      </button>
+      <p class="warnnote">
+        Paper is still the safest home for these words. If you copy, paste into a password manager
+        right away — the clipboard clears itself in 60 seconds.
+      </p>
       <button class="primary" onclick={pickConfirmPositions} data-testid="wrote-it-down">
         I wrote it down
       </button>
@@ -330,5 +351,14 @@
     display: block;
     font-size: var(--text-sm);
     color: var(--muted);
+  }
+
+  /* Honest-tradeoff caption under the copy-phrase button (Settings.svelte
+     repeats this verbatim for the seed reveal). */
+  .warnnote {
+    font-size: var(--text-xs);
+    color: var(--muted);
+    border-left: 2px solid var(--flare);
+    padding-left: var(--space-3);
   }
 </style>
