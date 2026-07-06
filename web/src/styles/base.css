@@ -93,6 +93,28 @@ button.primary:hover {
   filter: brightness(1.08);
 }
 
+button.tonal {
+  background: var(--action-muted);
+  border-color: transparent;
+}
+
+button.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+button.ghost:hover {
+  border-color: transparent;
+  color: var(--text);
+}
+
+button.danger-outline {
+  background: transparent;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
 input,
 textarea {
   min-height: 44px;
@@ -133,6 +155,52 @@ textarea:disabled {
   color: var(--danger);
 }
 
+/* A labelled form field: the <label class="field"> carries the muted caption
+   style; the control inside returns to body size and ink. Replaces the same
+   local rule previously copied into each log form. */
+.field {
+  display: block;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.field input,
+.field textarea,
+.field select {
+  margin-top: var(--space-2);
+  font-size: var(--text-base);
+  color: var(--text);
+}
+
+/* Segmented control: one selected segment among equals (theme picker,
+   mood/gratitude switch). Buttons inside reset the global button chrome. */
+.seg {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+}
+
+.seg button {
+  flex: 1;
+  min-height: 38px;
+  min-width: 0;
+  padding: 0 var(--space-3);
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.seg button[aria-pressed='true'] {
+  background: var(--action-muted);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--action);
+}
+
 /* --- category hues (spine dots/glyphs, chips) --- */
 .cat-vital {
   color: var(--cat-vital);
@@ -148,6 +216,9 @@ textarea:disabled {
 }
 .cat-exercise {
   color: var(--cat-exercise);
+}
+.cat-mind {
+  color: var(--cat-mind);
 }
 .cat-note {
   color: var(--cat-note);
