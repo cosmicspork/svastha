@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
-import { onboardViaUI, connectRelayViaUI, restoreViaUI, RELAY, PASSPHRASE } from './helpers'
+import { onboardViaUI, connectRelayViaUI, restoreViaUI, openLog, RELAY, PASSPHRASE } from './helpers'
 
 /** `datetime-local` value (`YYYY-MM-DDTHH:mm`) for the Earlier time control. */
 function localDatetimeInput(date: Date): string {
@@ -34,7 +34,7 @@ test('logging an input before a symptom surfaces it in Patterns, and a tag persi
   await onboardViaUI(page)
 
   // Food 30 hours ago, via the Earlier time control.
-  await page.getByTestId('log-food').click()
+  await openLog(page, 'food')
   await page.getByTestId('food-input').fill('peanut butter')
   await page.getByTestId('food-input').press('Enter')
   await page.getByTestId('time-earlier').click()
@@ -43,7 +43,7 @@ test('logging an input before a symptom surfaces it in Patterns, and a tag persi
   await expect(page.getByTestId('spine-entry').filter({ hasText: 'peanut butter' })).toBeVisible()
 
   // Headache, severity 8, now.
-  await page.getByTestId('log-symptom').click()
+  await openLog(page, 'symptom')
   await page.getByTestId('symptom-headache').click()
   await page.getByTestId('severity').fill('8')
   await page.getByTestId('save').click()
@@ -89,7 +89,7 @@ test('curation LWW: two devices tagging the same event converge on the later wri
   const words = await onboardViaUI(page)
   await connectRelayViaUI(page)
 
-  await page.getByTestId('log-symptom').click()
+  await openLog(page, 'symptom')
   await page.getByTestId('symptom-nausea').click()
   await page.getByTestId('save').click()
   await waitForPushed(page)

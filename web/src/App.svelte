@@ -17,7 +17,7 @@
   import Person from './routes/Person.svelte'
   import Import from './routes/Import.svelte'
   import Correlate from './routes/Correlate.svelte'
-  import BottomBar from './components/BottomBar.svelte'
+  import Bloom from './components/Bloom.svelte'
 
   let ready = $state(false)
   let vaultExists = $state(false)
@@ -88,8 +88,8 @@
     {/if}
   {/if}
 
-  {#if ready && vaultExists && !locked() && route.path !== '/person/:ed'}
-    <BottomBar />
+  {#if ready && vaultExists && !locked() && route.path !== '/person/:ed' && route.path !== '/log/:kind'}
+    <Bloom />
   {/if}
 </main>
 
@@ -97,7 +97,7 @@
   main {
     max-width: 40rem;
     margin: 0 auto;
-    padding: var(--space-5) var(--space-4) calc(var(--space-7) + 64px);
+    padding: var(--space-5) var(--space-4) calc(var(--space-7) + env(safe-area-inset-bottom));
     min-height: 100vh;
   }
 

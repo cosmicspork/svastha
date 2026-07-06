@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
-import { onboardViaUI, PASSPHRASE } from './helpers'
+import { onboardViaUI, openLog, PASSPHRASE } from './helpers'
 
 /** A spine entry containing `text`, scoped so assertions read naturally. */
 function entryWith(page: Page, text: string) {
@@ -10,7 +10,7 @@ test('quick-log flows land on the spine, grouped, flared, and persistent', async
   await onboardViaUI(page)
 
   // --- blood pressure: two signed events, one grouped spine entry ---
-  await page.getByTestId('log-vitals').click()
+  await openLog(page, 'vitals')
   await page.getByTestId('bp-systolic').fill('118')
   await page.getByTestId('bp-diastolic').fill('76')
   await page.getByTestId('save').click()
@@ -20,7 +20,7 @@ test('quick-log flows land on the spine, grouped, flared, and persistent', async
   await expect(entryWith(page, '118/76')).toContainText('Blood pressure')
 
   // --- symptom with severity 8: flare-marked ---
-  await page.getByTestId('log-symptom').click()
+  await openLog(page, 'symptom')
   await page.getByTestId('symptom-headache').click()
   await page.getByTestId('severity').fill('8')
   await page.getByTestId('save').click()
@@ -31,7 +31,7 @@ test('quick-log flows land on the spine, grouped, flared, and persistent', async
   await expect(headache).toHaveAttribute('data-flare', 'true')
 
   // --- food: two chips, one grouped entry ---
-  await page.getByTestId('log-food').click()
+  await openLog(page, 'food')
   await page.getByTestId('food-input').fill('oatmeal')
   await page.getByTestId('food-input').press('Enter')
   await page.getByTestId('food-input').fill('coffee')
