@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.0](https://github.com/cosmicspork/svastha/compare/v0.2.0...v0.3.0) (2026-07-06)
+
+
+### Features
+
+* qr linking via relay landing page and device link codes ([ee730e4](https://github.com/cosmicspork/svastha/commit/ee730e4d156585ab0caa3be3a29bb83f07302d18))
+* **web:** add design tokens and shared control styles ([b6e58d6](https://github.com/cosmicspork/svastha/commit/b6e58d682bd4557b3bc3886fd9d1a834ce4efb00))
+* **web:** in-app theme setting and honest appearance controls ([c858453](https://github.com/cosmicspork/svastha/commit/c858453264ad66a3e552149efe8a4650383502ed))
+* **web:** mindfulness logging with mood and gratitude ([dbe9f97](https://github.com/cosmicspork/svastha/commit/dbe9f9735900e63ad0342826c701d78097af5d0a))
+* **web:** move log form actions into fixed bottom bar ([f8b2993](https://github.com/cosmicspork/svastha/commit/f8b2993d0cfaa31d5d1a19fec3ad71a238017ddb))
+* **web:** one-time home screen install sheet ([e2d0325](https://github.com/cosmicspork/svastha/commit/e2d03252f5b642e03f9ef99c6d4cf55603857874))
+* **web:** replace bottom bar with frequency-ordered bloom fab ([1017ce9](https://github.com/cosmicspork/svastha/commit/1017ce98ee92364aa849c0881d6c4e1048a8aaf7))
+* **web:** seed phrase copy with clipboard auto-clear ([24e0046](https://github.com/cosmicspork/svastha/commit/24e004688277ce611e3e8efe0512b3ccfddc27cd))
+* **web:** unlock screen redesign with vault seal and fingerprint ([b38dcea](https://github.com/cosmicspork/svastha/commit/b38dceafdd06333aefef74dbad8d6029c3d24da9))
+
 ## [0.2.0](https://github.com/cosmicspork/svastha/compare/v0.1.0...v0.2.0) (2026-07-05)
 
 
