@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.0](https://github.com/cosmicspork/svastha/compare/v0.3.0...v0.4.0) (2026-07-10)
+
+
+### Features
+
+* **web:** keyvault master-key indirection with v1-&gt;v2 migration ([d683a0f](https://github.com/cosmicspork/svastha/commit/d683a0f8e42a83ebacfa286f51d81520fa478698))
+* **web:** passkey unlock via WebAuthn PRF ([bb00aa7](https://github.com/cosmicspork/svastha/commit/bb00aa77faee1338ffaa47d20c9c4e9a3408ed97))
+* **web:** unlock the vault with a passkey via WebAuthn PRF ([4cab034](https://github.com/cosmicspork/svastha/commit/4cab0345db313a072dd44c2e6eabc0f798a0e0c6))
+
+
+### Bug Fixes
+
+* **web:** iOS viewport/safe-area fixes and in-field unlock reveal ([de6f08d](https://github.com/cosmicspork/svastha/commit/de6f08da837bd997354fe6b7fe669c264b6be4b4))
+* **web:** mark onboarding passphrases as new-password for autofill ([ab9bb1d](https://github.com/cosmicspork/svastha/commit/ab9bb1d9b1e9d509349e7660591576dc3da0ad20))
+* **web:** offset iOS safe areas at the top and size the page to the visible viewport ([c0f2bf0](https://github.com/cosmicspork/svastha/commit/c0f2bf0f533a917456270086bfd1bd01d4687922))
+
 ## [0.3.0](https://github.com/cosmicspork/svastha/compare/v0.2.0...v0.3.0) (2026-07-06)
 
 
