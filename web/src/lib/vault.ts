@@ -38,15 +38,15 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
  * sealed under the key a device is about to discard.
  */
 export async function ensureVaultKeyBlob(relay: RelayClient): Promise<void> {
-  const { identity, vaultKey, kdfOut } = session
-  if (!identity || !vaultKey || !kdfOut) throw new Error('Session is locked.')
+  const { identity, vaultKey, wrapKey } = session
+  if (!identity || !vaultKey || !wrapKey) throw new Error('Session is locked.')
 
   const remote = await relay.getBlob(VAULT_KEY_BLOB_ID)
   if (remote) {
     const remoteKey = identity.unwrap_key(remote)
     if (!bytesEqual(remoteKey.to_bytes(), vaultKey.to_bytes())) {
       session.vaultKey = remoteKey
-      await resealVaultKey(kdfOut, remoteKey)
+      await resealVaultKey(wrapKey, remoteKey)
     }
     return
   }

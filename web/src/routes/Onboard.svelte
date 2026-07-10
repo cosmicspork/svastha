@@ -175,8 +175,8 @@
   // it matches storage exactly), optionally connect to a relay and restore
   // from it, offer persistence, then hand off to the app.
   async function finishOnboarding(pass: string, relayUrl?: string) {
-    const { identity: sessionIdentity, vaultKey, kdfOut } = await unlock(pass)
-    setSession(sessionIdentity, vaultKey, kdfOut)
+    const { identity: sessionIdentity, vaultKey, wrapKey } = await unlock(pass)
+    setSession(sessionIdentity, vaultKey, wrapKey)
 
     if (relayUrl) {
       restoreProgress = 'Connecting to the relay…'
