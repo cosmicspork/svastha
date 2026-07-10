@@ -59,6 +59,13 @@
   --space-6: 2rem;
   --space-7: 3rem;
 
+  /* --- layout --- */
+  /* Height of the fixed BottomBar's content, excluding the safe-area inset the
+     bar adds itself. Pages reserve this much (plus the inset) at the bottom so
+     content and the toast clear the bar consistently across notched and
+     non-notched devices. */
+  --bottombar-h: 64px;
+
   /* --- shape --- */
   --radius-sm: 0.375rem;
   --radius-lg: 0.75rem;

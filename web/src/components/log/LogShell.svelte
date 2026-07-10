@@ -221,7 +221,7 @@
     position: fixed;
     left: 50%;
     transform: translateX(-50%);
-    bottom: calc(var(--space-7) + 64px);
+    bottom: calc(var(--space-5) + var(--bottombar-h) + env(safe-area-inset-bottom));
     display: flex;
     align-items: center;
     gap: var(--space-3);

@@ -97,8 +97,19 @@
   main {
     max-width: 40rem;
     margin: 0 auto;
-    padding: var(--space-5) var(--space-4) calc(var(--space-7) + 64px);
+    /* Offset the top for the status bar/notch (viewport-fit=cover extends
+       content under it) and reserve the fixed BottomBar's height plus its own
+       safe-area inset at the bottom. Horizontal insets guard the landscape
+       notch. */
+    padding-top: calc(var(--space-5) + env(safe-area-inset-top));
+    padding-bottom: calc(var(--space-7) + var(--bottombar-h) + env(safe-area-inset-bottom));
+    padding-left: max(var(--space-4), env(safe-area-inset-left));
+    padding-right: max(var(--space-4), env(safe-area-inset-right));
+    /* dvh tracks the actual visible viewport; 100vh on iOS Safari is the taller
+       URL-bar-hidden height, which made the page render taller than the screen
+       and let the top scroll under the status bar. vh stays as the fallback. */
     min-height: 100vh;
+    min-height: 100dvh;
   }
 
   .settings-nav {
