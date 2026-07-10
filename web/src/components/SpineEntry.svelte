@@ -161,8 +161,14 @@
     padding: 0 var(--space-2);
   }
 
+  /* Values are often free text (mood notes, gratitude, joined vitals), so they
+     must wrap. min-width:0 lets the flex item shrink below its content width;
+     word-break:normal overrides .data's break-all so wrapping falls on spaces
+     first, with overflow-wrap catching any single unbreakable token. */
   .value {
-    white-space: nowrap;
+    min-width: 0;
+    word-break: normal;
+    overflow-wrap: anywhere;
   }
 
   .time {
