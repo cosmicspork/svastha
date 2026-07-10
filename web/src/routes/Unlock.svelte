@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { unlock, wipe, WrongPassphraseError } from '../lib/keyvault'
+  import { unlock, unlockWithPasskey, listPasskeys, wipe, WrongPassphraseError, PasskeyUnlockError } from '../lib/keyvault'
+  import { passkeysSupported, authenticate, PasskeyNotSupportedError } from '../lib/passkey'
   import { setSession } from '../lib/session.svelte'
   import { get } from '../lib/db'
   import Sheet from '../components/Sheet.svelte'
@@ -14,11 +15,15 @@
 
   let pubkeyHex = $state<string>()
   let hue = $state<'a' | 'b'>('a')
+  // Credential ids enrolled on this device; the passkey control shows only when
+  // the browser supports WebAuthn and at least one is enrolled.
+  let passkeyCredIds = $state<string[]>([])
 
   onMount(async () => {
     pubkeyHex = await get<string>('prefs', 'ed25519-pub')
     const storedHue = await get<'a' | 'b'>('prefs', 'hue')
     if (storedHue) hue = storedHue
+    if (passkeysSupported()) passkeyCredIds = (await listPasskeys()).map((p) => p.credId)
   })
 
   /** Show a public key as spaced hex byte-groups, truncated — enough to eyeball
@@ -48,11 +53,29 @@
     error = ''
     busy = true
     try {
-      const { identity, vaultKey, kdfOut } = await unlock(passphrase)
-      setSession(identity, vaultKey, kdfOut)
+      const { identity, vaultKey, wrapKey } = await unlock(passphrase)
+      setSession(identity, vaultKey, wrapKey)
     } catch (err) {
       error =
         err instanceof WrongPassphraseError
+          ? err.message
+          : 'Something went wrong opening your vault — try again.'
+    } finally {
+      busy = false
+    }
+  }
+
+  async function unlockWithPasskeyFlow() {
+    error = ''
+    busy = true
+    try {
+      const asserted = await authenticate(passkeyCredIds)
+      if (!asserted) return // user cancelled
+      const { identity, vaultKey, wrapKey } = await unlockWithPasskey(asserted.credId, asserted.secret)
+      setSession(identity, vaultKey, wrapKey)
+    } catch (err) {
+      error =
+        err instanceof PasskeyUnlockError || err instanceof PasskeyNotSupportedError
           ? err.message
           : 'Something went wrong opening your vault — try again.'
     } finally {
@@ -145,6 +168,18 @@
       Unlock
     </button>
   </form>
+
+  {#if passkeyCredIds.length}
+    <button
+      type="button"
+      class="tonal passkey"
+      disabled={busy}
+      onclick={unlockWithPasskeyFlow}
+      data-testid="unlock-passkey"
+    >
+      Unlock with passkey
+    </button>
+  {/if}
 
   <button type="button" class="ghost forgot" onclick={() => (showForgotSheet = true)} data-testid="forgot-passphrase">
     Forgot? Start over from your seed phrase
@@ -246,6 +281,11 @@
   .reveal svg {
     width: 1.25rem;
     height: 1.25rem;
+  }
+
+  .passkey {
+    width: 100%;
+    margin-top: var(--space-3);
   }
 
   .forgot {

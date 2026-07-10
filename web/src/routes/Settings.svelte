@@ -2,8 +2,22 @@
   import { onMount } from 'svelte'
   import { contract_version } from '../lib/svastha'
   import { session } from '../lib/session.svelte'
-  import { unlock, changePassphrase, WrongPassphraseError } from '../lib/keyvault'
+  import {
+    unlock,
+    changePassphrase,
+    WrongPassphraseError,
+    enrollPasskey as storePasskey,
+    listPasskeys,
+    removePasskey,
+    type PasskeyRecord,
+  } from '../lib/keyvault'
+  import {
+    passkeysSupported,
+    enrollPasskey as createPasskey,
+    PasskeyNotSupportedError,
+  } from '../lib/passkey'
   import { get, put, del } from '../lib/db'
+  import Sheet from '../components/Sheet.svelte'
   import { RelayClient, checkRelayInfo, normalizeRelayUrl } from '../lib/relay'
   import { connectRelay } from '../lib/vault'
   import { syncTeardown, syncStatus, pullAll } from '../lib/sync'
@@ -77,6 +91,50 @@
     } catch (err) {
       changeError = err instanceof WrongPassphraseError ? err.message : 'Could not change passphrase.'
     }
+  }
+
+  // --- passkeys (alternative unlock; see lib/passkey.ts + keyvault.ts) ---
+  const passkeysAvailable = passkeysSupported()
+  let passkeys = $state<PasskeyRecord[]>([])
+  let passkeyBusy = $state(false)
+  let passkeyError = $state('')
+  let confirmRemove = $state<PasskeyRecord | null>(null)
+
+  onMount(async () => {
+    if (passkeysAvailable) passkeys = await listPasskeys()
+  })
+
+  async function addPasskey() {
+    passkeyError = ''
+    const { identity, vaultKey, wrapKey } = session
+    if (!identity || !vaultKey || !wrapKey) return
+    passkeyBusy = true
+    try {
+      const created = await createPasskey(passkeys.map((p) => p.credId))
+      if (!created) return // user cancelled
+      const label = `Passkey · ${created.credId.slice(0, 6)}`
+      const mk = await storePasskey(
+        { identity, vaultKey, wrapKey },
+        created.secret,
+        { credId: created.credId, rpId: created.rpId, label },
+      )
+      // Migrating v1->v2 swaps the session's wrap key from kdfOut to MK, so a
+      // later relay-won key adoption reseals the right (canonical) record.
+      session.wrapKey = mk
+      passkeys = await listPasskeys()
+    } catch (err) {
+      passkeyError =
+        err instanceof PasskeyNotSupportedError ? err.message : 'Could not add a passkey — try again.'
+    } finally {
+      passkeyBusy = false
+    }
+  }
+
+  async function doRemovePasskey() {
+    if (!confirmRemove) return
+    await removePasskey(confirmRemove.credId)
+    confirmRemove = null
+    passkeys = await listPasskeys()
   }
 
   // --- appearance ---
@@ -273,6 +331,42 @@
 </section>
 
 <section class="stack">
+  <h2>Passkeys</h2>
+  {#if !passkeysAvailable}
+    <p class="muted" data-testid="passkey-unsupported">
+      This browser doesn't support passkeys. Your passphrase unlocks the vault.
+    </p>
+  {:else}
+    <p class="muted">
+      Unlock this device with Face ID, Touch ID, or a passkey from your password manager. Your
+      passphrase always still works, and your seed phrase is still the only way to recover.
+    </p>
+    {#if passkeys.length}
+      <ul class="passkeys" data-testid="passkey-list">
+        {#each passkeys as pk (pk.credId)}
+          <li>
+            <span class="data">{pk.label}</span>
+            <button class="ghost" onclick={() => (confirmRemove = pk)} data-testid="remove-passkey">
+              Remove
+            </button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+    {#if passkeyError}
+      <p class="error" data-testid="passkey-error">{passkeyError}</p>
+    {/if}
+    <button onclick={addPasskey} disabled={passkeyBusy} data-testid="add-passkey">
+      {passkeyBusy ? 'Follow the prompts…' : 'Add a passkey'}
+    </button>
+    <p class="hint">
+      Adding a passkey asks for two confirmations — once to create it, once to link it to your
+      vault.
+    </p>
+  {/if}
+</section>
+
+<section class="stack">
   <h2>Appearance</h2>
   <div class="setrow">
     <span class="l">Theme</span>
@@ -440,6 +534,22 @@
   <InstallSheet onclose={closeInstallSheet} />
 {/if}
 
+{#if confirmRemove}
+  <Sheet onclose={() => (confirmRemove = null)}>
+    <h2>Remove this passkey?</h2>
+    <p>
+      This device won't unlock with it anymore. Your passphrase still works. The passkey itself
+      stays in your password manager until you delete it there.
+    </p>
+    <div class="row">
+      <button class="ghost" onclick={() => (confirmRemove = null)}>Cancel</button>
+      <button class="danger-outline" onclick={doRemovePasskey} data-testid="confirm-remove-passkey">
+        Remove
+      </button>
+    </div>
+  </Sheet>
+{/if}
+
 <style>
   section {
     margin-top: var(--space-6);
@@ -489,6 +599,38 @@
   .swatches {
     display: flex;
     gap: var(--space-3);
+  }
+
+  .passkeys {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .passkeys li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  .hint {
+    font-size: var(--text-xs);
+    color: var(--muted);
+  }
+
+  /* Confirm-sheet action row (matches Unlock.svelte's forgot sheet). */
+  .row {
+    display: flex;
+    gap: var(--space-2);
+    margin-top: var(--space-4);
+  }
+
+  .row button {
+    flex: 1;
   }
 
   .qr :global(svg) {
