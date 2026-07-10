@@ -109,10 +109,24 @@
         />
         <button
           type="button"
+          class="reveal ghost"
           onclick={() => (showPassphrase = !showPassphrase)}
+          aria-label={showPassphrase ? 'Hide passphrase' : 'Show passphrase'}
+          aria-pressed={showPassphrase}
           data-testid="toggle-passphrase-visibility"
         >
-          {showPassphrase ? 'Hide' : 'Show'}
+          {#if showPassphrase}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c6.5 0 10 7 10 7a13.2 13.2 0 0 1-1.67 2.36M6.6 6.6C3.9 8.2 2 11 2 11s3.5 7 10 7a9 9 0 0 0 4.4-1.1" />
+              <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+              <path d="m2 2 20 20" />
+            </svg>
+          {:else}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+          {/if}
         </button>
       </div>
     </label>
@@ -206,8 +220,32 @@
   }
 
   .pass-row {
-    display: flex;
-    gap: var(--space-2);
+    position: relative;
+  }
+
+  /* Leave room for the reveal button so the passphrase never runs under it. */
+  .pass-row input {
+    padding-right: 2.75rem;
+  }
+
+  /* In-field icon button: full field height (≥44px tap target via the input's
+     min-height) but visually just the eye glyph. */
+  .reveal {
+    position: absolute;
+    top: 0;
+    right: 0;
+    height: 100%;
+    width: 2.75rem;
+    min-height: 0;
+    min-width: 0;
+    padding: 0;
+    display: grid;
+    place-items: center;
+  }
+
+  .reveal svg {
+    width: 1.25rem;
+    height: 1.25rem;
   }
 
   .forgot {
