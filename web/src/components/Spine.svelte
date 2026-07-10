@@ -265,8 +265,12 @@
     background: var(--spine-color);
   }
 
-  /* The empty state keeps the original static tick (no .day-head wrapper). */
+  /* The empty state keeps the original static tick (no .day-head wrapper), so
+     its containing block is .spine's padding box (left edge at 0), not the
+     content-indented .day-head. The default -space-5 offset would push it off
+     the left of the viewport; -3px centers it on the rule instead. */
   .spine > .tick {
+    left: -3px;
     top: var(--space-2);
     transform: none;
   }
