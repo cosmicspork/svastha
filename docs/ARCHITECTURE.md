@@ -248,6 +248,39 @@ arrives with the native wrapper. The mnemonic remains the sole recovery root: it
 is the only material that reconstructs the identity if the passphrase and this
 device are both lost.
 
+The unlock secret is just an opaque 32 bytes, so an alternative source of those
+bytes is a drop-in — this is what lets a **passkey** unlock the vault without any
+change to the trust contract (the envelope, event schema, and relay protocol are
+untouched; passkeys touch only local at-rest wrapping). A platform passkey
+derives a stable 32-byte secret via the WebAuthn **PRF extension** (user
+verification required — the PRF output is UV-scoped, so relaxing it would change
+the secret), HKDF'd for domain separation. A passkey is always an *alternative*,
+never a replacement: the passphrase remains a valid unlock and the mnemonic
+remains the sole recovery root.
+
+Adding a passkey needs more than a second wrapping of the vault key, because the
+vault key is periodically resealed when a device adopts a relay-won key (see
+"Vault-key reconciliation" below) — a second independent copy would drift stale
+and could seal events under a discarded key. So a device with any passkey moves
+to a **master-key (MK) indirection** (an on-disk `format` marker, `v1` → `v2`): a
+random per-device MK seals one canonical copy of the mnemonic/vault-key/check
+records, and every unlock method (the passphrase, each passkey) stores MK wrapped
+under its own secret. Adopting a relay-won key reseals the single canonical copy,
+so no method ever drifts. New vaults are born `v1`; a device migrates to `v2` the
+first time it enrolls a passkey.
+
+The migration is strictly additive until one commit point so a crash can never
+brick the vault: write the MK-sealed canonicals at *new* store keys plus the
+`mk:*` wraps, flip the `format` marker (the commit), then delete the `v1`
+records. A crash before the flip leaves `v1` intact and re-derivable from the
+passphrase; a crash after leaves a working `v2` vault plus stale `v1` records the
+`v2` path ignores and clears on the next unlock. This additive-then-commit-then-
+delete pattern is the required shape for any future keyvault format bump. Every
+record carries its own AEAD associated data, and the passkey wraps bind the
+credential id into theirs. The at-rest keyvault format lives entirely in the web
+client (`web/src/lib/keyvault.ts`); it is below the wire contract, so it needs no
+`spec/` or `CONTRACT_VERSION` change.
+
 ## Sync and backup (web)
 
 Every signed event is sealed under the vault data key and pushed to the relay,
