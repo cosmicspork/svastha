@@ -249,12 +249,22 @@
       <p>Set a passphrase to lock your seed phrase on this device.</p>
       <label>
         Passphrase
-        <input type="password" bind:value={passphrase} data-testid="passphrase" />
+        <input
+          type="password"
+          bind:value={passphrase}
+          autocomplete="new-password"
+          data-testid="passphrase"
+        />
       </label>
       <p class="muted" data-testid="passphrase-strength">Strength: {strength}</p>
       <label>
         Confirm passphrase
-        <input type="password" bind:value={passphraseConfirm} data-testid="passphrase-confirm" />
+        <input
+          type="password"
+          bind:value={passphraseConfirm}
+          autocomplete="new-password"
+          data-testid="passphrase-confirm"
+        />
       </label>
       {#if passphraseError}
         <p class="error" data-testid="passphrase-error">{passphraseError}</p>
@@ -278,7 +288,12 @@
     </label>
     <label>
       Passphrase
-      <input type="password" bind:value={restorePassphrase} data-testid="restore-passphrase" />
+      <input
+        type="password"
+        bind:value={restorePassphrase}
+        autocomplete="new-password"
+        data-testid="restore-passphrase"
+      />
     </label>
     <label>
       Relay URL <span class="muted">(optional — restores your records from backup)</span>
