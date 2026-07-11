@@ -20,7 +20,17 @@
   import Sheet from '../components/Sheet.svelte'
   import { RelayClient, checkRelayInfo, normalizeRelayUrl } from '../lib/relay'
   import { connectRelay } from '../lib/vault'
-  import { syncTeardown, syncStatus, pullAll, type ProvenanceRecord } from '../lib/sync'
+  import {
+    syncTeardown,
+    syncStatus,
+    pullAll,
+    listLocalBlobIds,
+    sealLocalBlob,
+    applySealedBlob,
+    enqueue,
+    drain,
+    type ProvenanceRecord,
+  } from '../lib/sync'
   import { navigate } from '../lib/router.svelte'
   import { loadTheme, setTheme, type ThemePref } from '../lib/theme'
   import { dismissInstallNudge } from '../lib/install'
@@ -29,7 +39,18 @@
   import { deviceLinkUrl, codeQrSvg } from '../lib/exchange'
   import { allEvents } from '../lib/events'
   import type { CurationRecord } from '../lib/curation'
-  import { buildPlaintextExport, provenanceMeta, plaintextExportFilename, downloadJson } from '../lib/export'
+  import {
+    buildPlaintextExport,
+    provenanceMeta,
+    plaintextExportFilename,
+    downloadJson,
+    buildEncryptedExport,
+    encryptedExportFilename,
+    parseEncryptedExport,
+    importEncryptedExport,
+    type ImportSummary,
+  } from '../lib/export'
+  import { fromHex } from '../lib/hex'
 
   /** Show a public key as spaced hex byte-groups, truncated — enough to eyeball
    * a match, not the full 64-char key. */
@@ -282,6 +303,87 @@
       exportError = err instanceof Error ? err.message : 'Could not build the export.'
     } finally {
       exportBusy = false
+    }
+  }
+
+  // --- encrypted backup (see lib/export.ts: the same sealed blobs the relay
+  // stores, packaged into one file; importable, unlike the plaintext export) ---
+  let exportEncBusy = $state(false)
+  let exportEncError = $state('')
+
+  async function doExportEncrypted() {
+    exportEncError = ''
+    const { identity, vaultKey } = session
+    if (!identity || !vaultKey) {
+      exportEncError = 'Unlock your vault first.'
+      return
+    }
+    exportEncBusy = true
+    try {
+      const now = new Date()
+      const built = await buildEncryptedExport({
+        ids: await listLocalBlobIds(),
+        seal: (id) => sealLocalBlob(id, vaultKey),
+        // Self-wrap idiom from vault.ts's ensureVaultKeyBlob — the same bytes
+        // the relay's vault.key blob holds.
+        wrappedVaultKey: vaultKey.wrap_to(fromHex(identity.x25519_public_hex)),
+        contractVersion: version,
+        now,
+      })
+      downloadJson(encryptedExportFilename(now), JSON.stringify(built))
+    } catch (err) {
+      exportEncError = err instanceof Error ? err.message : 'Could not build the backup.'
+    } finally {
+      exportEncBusy = false
+    }
+  }
+
+  // --- restore from backup ---
+  let importBusy = $state(false)
+  let importError = $state('')
+  let importResult = $state('')
+
+  function summarizeImport(s: ImportSummary): string {
+    const ev = `${s.events.new} new event${s.events.new === 1 ? '' : 's'} (${s.events.duplicate} already present)`
+    const docs = `${s.docs.new} document${s.docs.new === 1 ? '' : 's'}`
+    const cur = `${s.curation.merged} curation record${s.curation.merged === 1 ? '' : 's'} merged`
+    let line = `Imported ${ev}, ${docs}, ${cur}.`
+    if (s.staleVaultKey) line += ' Backup used an older vault key.'
+    if (s.failed.length) {
+      line += ` ${s.failed.length} blob${s.failed.length === 1 ? '' : 's'} could not be imported.`
+    }
+    return line
+  }
+
+  async function onBackupFile(e: Event) {
+    const input = e.target as HTMLInputElement
+    const file = input.files?.[0]
+    if (!file) return
+    importError = ''
+    importResult = ''
+    const { identity, vaultKey } = session
+    if (!identity || !vaultKey) {
+      importError = 'Unlock your vault first.'
+      input.value = ''
+      return
+    }
+    importBusy = true
+    try {
+      const parsed = parseEncryptedExport(await file.text())
+      const summary = await importEncryptedExport(parsed, {
+        unwrapKey: (wrapped) => identity.unwrap_key(wrapped),
+        sessionKeyBytes: vaultKey.to_bytes(),
+        keyBytes: (k) => (k as unknown as { to_bytes(): Uint8Array }).to_bytes(),
+        apply: applySealedBlob,
+        enqueue,
+        drain,
+      })
+      importResult = summarizeImport(summary)
+    } catch (err) {
+      importError = err instanceof Error ? err.message : 'Could not import that backup.'
+    } finally {
+      importBusy = false
+      input.value = '' // let the same file be re-selected
     }
   }
 </script>
@@ -540,10 +642,20 @@
 </section>
 
 <section class="stack">
-  <h2>Export</h2>
+  <h2>Export & backup</h2>
+
+  <button onclick={doExportEncrypted} disabled={exportEncBusy} data-testid="export-encrypted">
+    {exportEncBusy ? 'Preparing…' : 'Download encrypted backup'}
+  </button>
+  <p class="muted">Encrypted with your vault key — only your seed phrase can open it.</p>
+  {#if exportEncError}
+    <p class="error" data-testid="export-encrypted-error">{exportEncError}</p>
+  {/if}
+
   <p class="muted">
-    Exports your events, tags, and notes as unencrypted JSON. Does not include the original
-    imported documents.
+    You can also export your events, tags, and notes as <strong>unencrypted</strong> JSON — a
+    one-way export for reading elsewhere, not a backup you can restore. Does not include the
+    original imported documents.
   </p>
   <button
     class="tonal"
@@ -552,6 +664,28 @@
   >
     Export unencrypted JSON…
   </button>
+
+  <h3>Restore from backup</h3>
+  <p class="muted">
+    Import an encrypted backup. Records already on this device are skipped automatically.
+  </p>
+  <label class="file-picker" class:busy={importBusy}>
+    {importBusy ? 'Importing…' : 'Choose backup file'}
+    <input
+      class="visually-hidden"
+      type="file"
+      accept=".json"
+      disabled={importBusy}
+      onchange={onBackupFile}
+      data-testid="import-backup-input"
+    />
+  </label>
+  {#if importResult}
+    <p data-testid="import-backup-result">{importResult}</p>
+  {/if}
+  {#if importError}
+    <p class="error" data-testid="import-backup-error">{importError}</p>
+  {/if}
 </section>
 
 {#if relayConnected}
@@ -667,6 +801,41 @@
   .swatches {
     display: flex;
     gap: var(--space-3);
+  }
+
+  /* Sub-heading within a section (Restore, under Export & backup). */
+  h3 {
+    font-size: var(--text-sm);
+    margin: var(--space-2) 0 0;
+  }
+
+  /* A file <input> wrapped in a label, styled to read as a tonal button — the
+     hidden-input picker pattern Import.svelte uses, dressed up as a control. */
+  .file-picker {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    padding: var(--space-2) var(--space-4);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: var(--action-muted);
+    cursor: pointer;
+    align-self: flex-start;
+  }
+
+  .file-picker.busy {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
   }
 
   .passkeys {

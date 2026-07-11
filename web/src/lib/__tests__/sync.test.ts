@@ -9,6 +9,9 @@ import {
   pullAll,
   configure,
   registerCodec,
+  applySealedBlob,
+  sealLocalBlob,
+  listLocalBlobIds,
   syncStatus,
   BACKOFF_SCHEDULE_MS,
   type BlobClient,
@@ -290,5 +293,134 @@ describe('drain backoff', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// --- single-blob primitives (the file-import path reuses these) ---
+
+/** A SealKey that records the AAD of every open/seal call, so a test can prove
+ * a blob was (or wasn't) opened and that the AAD is the blob id's UTF-8 bytes.
+ * Passthrough like `passthroughSealKey`, so a doc-/cur- round trip works. */
+function recordingSealKey(): SealKey & { openAads: Uint8Array[]; sealAads: Uint8Array[] } {
+  const openAads: Uint8Array[] = []
+  const sealAads: Uint8Array[] = []
+  return {
+    openAads,
+    sealAads,
+    seal(plaintext, aad) {
+      sealAads.push(aad)
+      return plaintext
+    },
+    open(sealed, aad) {
+      openAads.push(aad)
+      return sealed
+    },
+  }
+}
+
+/** Local sha256 hex — computed inline rather than imported from curation.ts,
+ * because importing that module runs its top-level `registerCodec(cur-)` side
+ * effect, which would break the 'ignores unregistered prefix' test above. */
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', bytes as BufferSource)
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+function utf8(s: string): Uint8Array {
+  return new TextEncoder().encode(s)
+}
+
+describe('applySealedBlob', () => {
+  it("returns 'unknown' for an id with no registered codec, without opening", async () => {
+    const key = recordingSealKey()
+    expect(await applySealedBlob('vault.key', utf8('anything'), key)).toBe('unknown')
+    expect(key.openAads).toHaveLength(0)
+  })
+
+  it("returns 'duplicate' for an already-stored immutable id WITHOUT opening it", async () => {
+    await put('events', fakeStoredEvent('evt-dup'))
+    const key = recordingSealKey()
+
+    const outcome = await applySealedBlob('ev-evt-dup', utf8('ignored ciphertext'), key)
+
+    expect(outcome).toBe('duplicate')
+    expect(key.openAads).toHaveLength(0) // the localHas shortcut skipped the open
+  })
+
+  it("round-trips a doc- blob to 'new' + a stored provenance record, binding AAD to the id", async () => {
+    const bytes = new Uint8Array([9, 8, 7, 200])
+    const sha = await sha256Hex(bytes)
+    const id = `doc-${sha}`
+    const envelope = JSON.stringify({ name: 'D.xml', bytes: btoa(String.fromCharCode(...bytes)) })
+    const key = recordingSealKey()
+
+    const outcome = await applySealedBlob(id, utf8(envelope), key)
+
+    expect(outcome).toBe('new')
+    expect(await dbGet('provenance', sha)).toMatchObject({ sha256: sha, name: 'D.xml' })
+    // AAD is the UTF-8 bytes of the blob id.
+    expect(key.openAads).toHaveLength(1)
+    expect(key.openAads[0]).toEqual(utf8(id))
+  })
+
+  it("applies a cur- blob to 'merged', LWW-merging over an older local record", async () => {
+    const { curationBlobIdForKey } = await import('../curation')
+    const key = 'tag:evt-lww'
+    const id = await curationBlobIdForKey(key)
+    await put('curation', { key, value: { tags: ['old'] }, updated_at: 100, author: 'aaa' })
+
+    const remote = { key, value: { tags: ['new'] }, updated_at: 200, author: 'aaa' }
+    const outcome = await applySealedBlob(id, utf8(JSON.stringify(remote)), passthroughSealKey())
+
+    expect(outcome).toBe('merged')
+    expect(await dbGet<{ value: unknown }>('curation', key)).toMatchObject({ value: { tags: ['new'] } })
+  })
+})
+
+describe('sealLocalBlob', () => {
+  it('returns null when nothing local backs the id', async () => {
+    expect(await sealLocalBlob('ev-absent', passthroughSealKey())).toBeNull()
+    expect(await sealLocalBlob('doc-absent', passthroughSealKey())).toBeNull()
+  })
+
+  it('seals a stored provenance blob with AAD = the blob id', async () => {
+    await put('provenance', {
+      sha256: 'abc',
+      name: 'D.xml',
+      bytes: new Uint8Array([1, 2, 3]),
+      importedAt: new Date().toISOString(),
+    })
+    const key = recordingSealKey()
+
+    const sealed = await sealLocalBlob('doc-abc', key)
+
+    expect(sealed).not.toBeNull()
+    expect(key.sealAads).toHaveLength(1)
+    expect(key.sealAads[0]).toEqual(utf8('doc-abc'))
+    // Passthrough seal returns the plaintext — the codec's name+base64 envelope.
+    const envelope = JSON.parse(new TextDecoder().decode(sealed!)) as { name: string }
+    expect(envelope.name).toBe('D.xml')
+  })
+})
+
+describe('listLocalBlobIds', () => {
+  it('lists an ev- per event, a doc- per provenance record, and a cur- per curation key', async () => {
+    await put('events', fakeStoredEvent('evt-a'))
+    await put('provenance', {
+      sha256: 'sha-a',
+      name: 'D.xml',
+      bytes: new Uint8Array([1]),
+      importedAt: new Date().toISOString(),
+    })
+    await put('curation', { key: 'tag:evt-a', value: { tags: ['x'] }, updated_at: 1, author: 'aaa' })
+
+    const ids = await listLocalBlobIds()
+    const { curationBlobIdForKey } = await import('../curation')
+
+    expect(ids).toContain('ev-evt-a')
+    expect(ids).toContain('doc-sha-a')
+    expect(ids).toContain(await curationBlobIdForKey('tag:evt-a'))
+    // vault.key is not a codec, so it is never enumerated.
+    expect(ids).not.toContain('vault.key')
   })
 })

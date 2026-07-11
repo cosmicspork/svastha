@@ -339,6 +339,19 @@ the other adopts it on its next connect — acceptable for v1 because the
 enforced ordering (no event push before this handshake) guarantees no events
 are ever sealed under the discarded key.
 
+**Export files.** The encrypted export is a single JSON container of the same
+sealed blobs the relay stores — same namespaces, same AAD = blob id binding —
+plus the self-wrapped vault key. Importing it therefore runs the identical
+open/verify/LWW path as a relay pull and dedupes by content id automatically:
+`ev-`/`doc-` blobs land as new or are skipped as duplicates, `cur-` blobs merge
+by LWW. Import requires the same seed — the wrapped vault key must unwrap, which
+only the owning identity can do — and blobs open under the file's own key, so a
+backup made before a relay-won key adoption still restores (a differing session
+key is reported, never a rejection). The plaintext export is one-way out and can
+never be imported (it carries no sealed bytes). The container is app-level
+packaging of bytes the wire contract already defines, sitting below it like the
+`vault.key` blob does, so it needs no `spec/` or `CONTRACT_VERSION` change.
+
 ## Native (later)
 
 The same web bundle wraps in Capacitor or Tauri (Tauri is Rust and composes with

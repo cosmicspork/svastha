@@ -18,6 +18,7 @@ import { verify_event } from './svastha'
 import type { StoredEvent } from './events'
 import { writable } from 'svelte/store'
 import { checkMailboxForInvites, pullShared, teardownSharing } from './shared'
+import { bytesToBase64, base64ToBytes } from './base64'
 
 /** The relay surface this engine needs — narrower than `RelayClient` so
  * tests can supply an in-memory fake without fighting `RelayClient`'s
@@ -133,24 +134,6 @@ function provenanceIdFromBlobId(blobId: string): string {
   return blobId.slice('doc-'.length)
 }
 
-/** Chunked to avoid blowing the call stack on `String.fromCharCode(...bytes)`
- * for a multi-megabyte C-CDA document. */
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = ''
-  const chunkSize = 0x8000
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
-  }
-  return btoa(binary)
-}
-
-function base64ToBytes(b64: string): Uint8Array {
-  const binary = atob(b64)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-  return bytes
-}
-
 /** Duplicated from import.ts's own `sha256Hex` rather than imported: import.ts
  * imports enqueue/drain from this module, and this module importing back from
  * import.ts would make the two circular. */
@@ -206,6 +189,59 @@ export function idsToPush(
   return localEventIds
     .map(eventBlobId)
     .filter((blobId) => !remoteIds.has(blobId) && !doneIds.has(blobId))
+}
+
+// --- single-blob open/seal primitives ---
+//
+// The verify+store and load+seal steps of a pull/push, factored out of
+// `pullAll`/`pushOne` so a file import (export.ts) can run each sealed blob
+// through the exact same codec path a relay pull uses — same open, same
+// embedded-id/signature checks, same LWW merge — without going through the
+// outbox (which would mark applied ids `done` and wrongly suppress a later
+// push of imported blobs). `aad`/`codecFor`/`codecs` stay private; these are
+// the sanctioned entry points.
+
+export type ApplyOutcome = 'new' | 'duplicate' | 'merged' | 'unknown'
+
+/** Open one sealed blob (AAD = its id) and apply it through its codec's
+ * verify+store path — the same path `pullAll` uses. Does NOT touch the outbox.
+ * An immutable id already applied locally is a `duplicate` (opened bytes are
+ * redundant, so it's skipped without opening); a mutable id is always opened
+ * and re-merged (`merged`); anything else opened is `new`. Errors (bad open,
+ * failed signature, hash mismatch) propagate. */
+export async function applySealedBlob(id: string, sealed: Uint8Array, key: SealKey): Promise<ApplyOutcome> {
+  const codec = codecFor(id)
+  if (!codec) return 'unknown'
+  if (!codec.mutable && (await codec.localHas(id))) return 'duplicate'
+  const plaintext = key.open(sealed, aad(id))
+  await codec.remoteApply(id, plaintext)
+  return codec.mutable ? 'merged' : 'new'
+}
+
+/** Load one blob's local plaintext through its codec and seal it (AAD = id) —
+ * `pushOne` minus the relay PUT. Null when nothing local exists under the id
+ * (no codec, or the codec has no local record). */
+export async function sealLocalBlob(id: string, key: SealKey): Promise<Uint8Array | null> {
+  const codec = codecFor(id)
+  const plaintext = codec ? await codec.localLoad(id) : null
+  if (!plaintext) return null
+  return key.seal(plaintext, aad(id))
+}
+
+/** Every blob id representable from this device's local data: an `ev-` per
+ * event, a `doc-` per provenance record, a `cur-` per curation key. `vault.key`
+ * is deliberately excluded — it is not a codec (it is the wrapped key itself,
+ * carried separately by the export container). */
+export async function listLocalBlobIds(): Promise<string[]> {
+  const events = (await getAll<StoredEvent>('events')).map((e) => eventBlobId(e.event.id))
+  const docs = (await getAll<ProvenanceRecord>('provenance')).map((p) => `doc-${p.sha256}`)
+  // Dynamic import for the same reason `configure` above imports curation.ts
+  // dynamically: curation.ts statically imports this module, so a static
+  // import back would form a cycle.
+  const { curationBlobIdForKey } = await import('./curation')
+  const curationRecords = await getAll<{ key: string }>('curation')
+  const curation = await Promise.all(curationRecords.map((r) => curationBlobIdForKey(r.key)))
+  return [...events, ...docs, ...curation]
 }
 
 // --- status surface ---
@@ -351,15 +387,13 @@ export async function drain(): Promise<void> {
 }
 
 async function pushOne(blobId: string): Promise<void> {
-  const codec = codecFor(blobId)
-  const plaintext = codec ? await codec.localLoad(blobId) : null
-  if (!plaintext) {
+  const sealed = await sealLocalBlob(blobId, vaultKey!)
+  if (!sealed) {
     // Nothing to push — deleted locally, or an id with no registered codec.
     // Mark it done so it isn't retried forever.
     await markDone(blobId)
     return
   }
-  const sealed = vaultKey!.seal(plaintext, aad(blobId))
   await relayClient!.putBlob(blobId, sealed)
   await markDone(blobId)
 }
@@ -388,7 +422,9 @@ export async function pullAll(): Promise<void> {
       // id: "already have it" and "have the latest version of it" are the
       // same fact there. For a mutable id they're not (someone else may have
       // PUT a newer value over the same id), so always fetch and let the
-      // codec's own remoteApply (LWW merge, for cur-) decide.
+      // codec's own remoteApply (LWW merge, for cur-) decide. This mirrors
+      // `applySealedBlob`'s own duplicate check, but is kept here too so a
+      // duplicate skips the `getBlob` round trip entirely.
       if (!codec.mutable && (await codec.localHas(id))) {
         // Already have it (e.g. logged before sync was configured) — record
         // done without a redundant round trip.
@@ -397,8 +433,7 @@ export async function pullAll(): Promise<void> {
       }
       const blob = await relayClient.getBlob(id)
       if (!blob) continue
-      const plaintext = vaultKey.open(blob, aad(id))
-      await codec.remoteApply(id, plaintext)
+      await applySealedBlob(id, blob, vaultKey)
       await markDone(id)
       syncStatus.update((s) => ({ ...s, pulledCount: s.pulledCount + 1 }))
     } catch (err) {
