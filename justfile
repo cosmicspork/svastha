@@ -1,5 +1,9 @@
 # Svastha tasks. Run `just` to list.
 
+# Recipes read `.env` (relay-run's SVASTHA_RELAY_ADDR, decrypt's
+# SVASTHA_MNEMONIC/SVASTHA_RELAY_URL, etc.) — see .env.example.
+set dotenv-load
+
 default:
     @just --list
 
@@ -44,6 +48,14 @@ clippy:
 e2e:
     cargo build -p svastha-relay
     cd web && bun install && bunx playwright install chromium && bun run e2e
+
+# --- dev tooling ---
+
+# pull this identity's relay blobs and decrypt into SVASTHA_DECRYPT_OUT
+# (default private/decrypt — gitignored PHI). Wipes the out dir each run.
+# Needs SVASTHA_MNEMONIC and SVASTHA_RELAY_URL; see .env.example.
+decrypt:
+    cargo run -p svastha-devtool
 
 # --- aggregate ---
 
