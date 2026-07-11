@@ -122,7 +122,7 @@ registerCodec(eventsCodec)
 // under the vault key" shape as every other namespace here instead of
 // inventing a framing just for this one.
 
-interface ProvenanceRecord {
+export interface ProvenanceRecord {
   sha256: string
   name: string
   bytes: Uint8Array

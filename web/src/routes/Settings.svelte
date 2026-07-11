@@ -16,17 +16,20 @@
     enrollPasskey as createPasskey,
     PasskeyNotSupportedError,
   } from '../lib/passkey'
-  import { get, put, del } from '../lib/db'
+  import { get, put, del, getAll } from '../lib/db'
   import Sheet from '../components/Sheet.svelte'
   import { RelayClient, checkRelayInfo, normalizeRelayUrl } from '../lib/relay'
   import { connectRelay } from '../lib/vault'
-  import { syncTeardown, syncStatus, pullAll } from '../lib/sync'
+  import { syncTeardown, syncStatus, pullAll, type ProvenanceRecord } from '../lib/sync'
   import { navigate } from '../lib/router.svelte'
   import { loadTheme, setTheme, type ThemePref } from '../lib/theme'
   import { dismissInstallNudge } from '../lib/install'
   import InstallSheet from '../components/InstallSheet.svelte'
   import { copySensitive } from '../lib/clipboard'
   import { deviceLinkUrl, codeQrSvg } from '../lib/exchange'
+  import { allEvents } from '../lib/events'
+  import type { CurationRecord } from '../lib/curation'
+  import { buildPlaintextExport, provenanceMeta, plaintextExportFilename, downloadJson } from '../lib/export'
 
   /** Show a public key as spaced hex byte-groups, truncated — enough to eyeball
    * a match, not the full 64-char key. */
@@ -254,6 +257,32 @@
     // harmless and keeps this component as dumb as the sheet it wraps.
     await dismissInstallNudge()
     showInstallSheet = false
+  }
+
+  // --- plaintext export (see lib/export.ts's module doc comment: one-way
+  // out, no matching import path) ---
+  let showExportConfirm = $state(false)
+  let exportBusy = $state(false)
+  let exportError = $state('')
+
+  async function doExportPlaintext() {
+    exportError = ''
+    exportBusy = true
+    try {
+      const [events, curation, provenance] = await Promise.all([
+        allEvents(),
+        getAll<CurationRecord>('curation'),
+        getAll<ProvenanceRecord>('provenance'),
+      ])
+      const now = new Date()
+      const built = buildPlaintextExport(events, curation, provenanceMeta(provenance), version, now)
+      downloadJson(plaintextExportFilename(now), JSON.stringify(built, null, 2))
+      showExportConfirm = false
+    } catch (err) {
+      exportError = err instanceof Error ? err.message : 'Could not build the export.'
+    } finally {
+      exportBusy = false
+    }
   }
 </script>
 
@@ -510,6 +539,21 @@
   <button onclick={() => navigate('#/import')} data-testid="nav-import">Import records</button>
 </section>
 
+<section class="stack">
+  <h2>Export</h2>
+  <p class="muted">
+    Exports your events, tags, and notes as unencrypted JSON. Does not include the original
+    imported documents.
+  </p>
+  <button
+    class="tonal"
+    onclick={() => (showExportConfirm = true)}
+    data-testid="export-plaintext"
+  >
+    Export unencrypted JSON…
+  </button>
+</section>
+
 {#if relayConnected}
   <section class="stack">
     <h2>Sharing</h2>
@@ -545,6 +589,30 @@
       <button class="ghost" onclick={() => (confirmRemove = null)}>Cancel</button>
       <button class="danger-outline" onclick={doRemovePasskey} data-testid="confirm-remove-passkey">
         Remove
+      </button>
+    </div>
+  </Sheet>
+{/if}
+
+{#if showExportConfirm}
+  <Sheet onclose={() => (showExportConfirm = false)}>
+    <h2>Export your records unencrypted?</h2>
+    <p>
+      The downloaded file will contain your <strong>unencrypted medical data</strong>, readable by
+      anyone who gets hold of it. Store it carefully and delete it when you're done with it.
+    </p>
+    {#if exportError}
+      <p class="error" data-testid="export-plaintext-error">{exportError}</p>
+    {/if}
+    <div class="row">
+      <button class="ghost" onclick={() => (showExportConfirm = false)}>Cancel</button>
+      <button
+        class="danger-outline"
+        onclick={doExportPlaintext}
+        disabled={exportBusy}
+        data-testid="confirm-export-plaintext"
+      >
+        {exportBusy ? 'Exporting…' : 'Export'}
       </button>
     </div>
   </Sheet>
