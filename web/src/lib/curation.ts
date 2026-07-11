@@ -78,6 +78,13 @@ async function keyToBlobId(key: string): Promise<string> {
   return curationBlobId(await sha256Hex(new TextEncoder().encode(key)))
 }
 
+/** The `cur-` blob id for a curation key — exported so sync.ts's
+ * `listLocalBlobIds` can enumerate curation blobs without duplicating the
+ * key-hashing logic (it can't reach the module-private `keyToBlobId`). */
+export function curationBlobIdForKey(key: string): Promise<string> {
+  return keyToBlobId(key)
+}
+
 /**
  * Reverse map (blob id -> curation key). There is no second index store for
  * this — curation records top out in the hundreds even for a heavily-tagged,
