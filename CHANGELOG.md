@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.5.0](https://github.com/cosmicspork/svastha/compare/v0.4.0...v0.5.0) (2026-07-11)
+
+
+### Features
+
+* **web:** encrypted export and import with automatic dedupe ([4785440](https://github.com/cosmicspork/svastha/commit/478544074273cf8cbbb5b6b053e31fa471e07b01))
+* **web:** encrypted export and import with automatic dedupe ([ebb13a8](https://github.com/cosmicspork/svastha/commit/ebb13a81da87f99fbff25ae85487338562929427))
+* **web:** unencrypted JSON export from Settings ([3d80288](https://github.com/cosmicspork/svastha/commit/3d80288d56611eb423ad38e35d98a256913e815a))
+* **web:** unencrypted JSON export from Settings ([5c64c25](https://github.com/cosmicspork/svastha/commit/5c64c25cfb38910c90bbda152ba4abb46ca3803c))
+
+
+### Bug Fixes
+
+* **web:** wrap long spine values to stop mobile horizontal overflow ([8baff97](https://github.com/cosmicspork/svastha/commit/8baff970422a4492121bdaa7f03026088d5ac426))
+* **web:** wrap long spine values to stop mobile horizontal overflow ([5ded627](https://github.com/cosmicspork/svastha/commit/5ded6272df3bf254175c2c6becc5b9120c9b407f))
+
 ## [0.4.0](https://github.com/cosmicspork/svastha/compare/v0.3.0...v0.4.0) (2026-07-10)
 
 
