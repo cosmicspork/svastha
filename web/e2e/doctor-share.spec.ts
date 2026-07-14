@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { onboardViaUI, connectRelayViaUI, logBP, RELAY } from './helpers'
+import { onboardViaUI, connectRelayViaUI, logBP, logFood, RELAY } from './helpers'
 
 // Owner-side doctor share, end to end against the live relay: log an event,
 // mint a share through the real UI, then confirm the relay serves the sealed
@@ -76,4 +76,65 @@ test('create a doctor share and fetch the sealed bundle from the relay', async (
   await expect(page.getByTestId(`share-status-${token}`)).toHaveText('revoked')
   const afterRevoke = await page.request.get(`${RELAY}/v0/share/${token}`, { failOnStatusCode: false })
   expect(afterRevoke.status()).toBe(410)
+})
+
+// The create half above and share-recipient.spec.ts's cold-load half were each
+// written on their own branch, so neither could exercise the seam: a real
+// share minted through the UI, opened by a browser that never ran Svastha, and
+// reading data it actually decrypted. This is that seam, plus revocation
+// closing the door on an already-open recipient tab.
+test('doctor share: create in one browser, read decrypted data in a fresh one, then revoke closes the door', async ({
+  browser,
+}) => {
+  const ownerContext = await browser.newContext()
+  const ownerPage = await ownerContext.newPage()
+  await onboardViaUI(ownerPage)
+  await connectRelayViaUI(ownerPage)
+
+  // Two events of different kinds so the shared bundle is more than the BP
+  // pair alone.
+  await logBP(ownerPage, '128', '82')
+  await logFood(ownerPage, 'oatmeal')
+
+  await ownerPage.evaluate(() => {
+    window.location.hash = '#/share'
+  })
+  await ownerPage.getByTestId('open-doctor-share').click()
+  await ownerPage.getByTestId('share-create').click()
+
+  await expect(ownerPage.getByTestId('share-link')).toBeVisible()
+  const link = (await ownerPage.getByTestId('share-link').innerText()).trim()
+  const token = link.split('/#/s/')[1].split('.')[0]
+
+  // A fresh context, standing in for the doctor's browser: it has never run
+  // Svastha and holds no vault of its own.
+  const doctorContext = await browser.newContext()
+  const doctorPage = await doctorContext.newPage()
+  await doctorPage.goto(link)
+
+  await expect(doctorPage.getByRole('heading', { name: 'Shared medical record' })).toBeVisible({
+    timeout: 15_000,
+  })
+  // The BP (2 events) plus the food log (1 event): all three verify.
+  await expect(doctorPage.getByTestId('share-verify')).toContainText('3 records verified')
+  await expect(doctorPage.getByTestId('clinician-summary')).toContainText('128/82')
+
+  // Cold load: nothing vault-like ever booted in the doctor's tab.
+  await expect(doctorPage.getByTestId('generate-mnemonic')).toHaveCount(0)
+  await expect(doctorPage.getByTestId('nav-settings')).toHaveCount(0)
+
+  // Owner revokes from the manage list (step back from the result screen
+  // first, same as the create-only test above).
+  await ownerPage.getByTestId('share-another').click()
+  await ownerPage.getByTestId(`revoke-${token}`).click()
+  await expect(ownerPage.getByTestId(`share-status-${token}`)).toHaveText('revoked')
+
+  // The doctor's already-open tab, reloaded, now gets the honest
+  // expired-or-withdrawn state instead of data.
+  await doctorPage.reload()
+  await expect(doctorPage.getByTestId('share-error')).toBeVisible({ timeout: 15_000 })
+  await expect(doctorPage.getByTestId('share-error')).toContainText('expired or was withdrawn')
+
+  await ownerContext.close()
+  await doctorContext.close()
 })
