@@ -21,6 +21,7 @@
     type Share,
     type PendingInvite,
   } from '../lib/shared'
+  import DoctorShareSheet from '../components/DoctorShareSheet.svelte'
 
   /** Local-only label for a grantee — display convenience, never sent to the
    * relay (which sees only the public key). Keyed by hex Ed25519 key. */
@@ -29,6 +30,7 @@
   let relayUrl = $state('')
   let relay = $state<RelayClient | null>(null)
   let hue = $state<'a' | 'b'>('a')
+  let showDoctorShare = $state(false)
 
   // --- my code ---
   let displayName = $state('')
@@ -245,6 +247,17 @@
       <p data-testid="share-done">Shared. They'll see an invite next time they sync.</p>
     {/if}
 
+    <div class="doctor-share">
+      <h2>Share with a doctor</h2>
+      <p class="muted">
+        Hand a clinician a link (or QR) to part of your record, sealed under a one-off key. No
+        Svastha account needed on their end, and it expires on its own.
+      </p>
+      <button class="primary" onclick={() => (showDoctorShare = true)} data-testid="open-doctor-share">
+        Create a doctor link
+      </button>
+    </div>
+
     {#if grantees.length > 0}
       <h2>Active grants</h2>
       <ul class="grant-list">
@@ -284,7 +297,17 @@
   {/if}
 </section>
 
+{#if showDoctorShare && relay}
+  <DoctorShareSheet {relay} {relayUrl} onclose={() => (showDoctorShare = false)} />
+{/if}
+
 <style>
+  .doctor-share {
+    margin-top: var(--space-6);
+    padding-top: var(--space-5);
+    border-top: 1px solid var(--border);
+  }
+
   section {
     margin-top: var(--space-6);
   }

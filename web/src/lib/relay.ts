@@ -175,7 +175,36 @@ export class RelayClient {
     return true
   }
 
-  private fetch(method: string, path: string, body?: Uint8Array): Promise<Response> {
+  // --- shares: sealed bundles a doctor fetches by an unguessable bearer token ---
+
+  /** Upload (or replace) a sealed share bundle under `token`, tagged with the
+   * owner's desired expiry (Unix seconds) in the `svastha-share-expires` header.
+   * The relay clamps the expiry and never sees the per-share key that decrypts
+   * the bundle — it rides the link's URL fragment. The expiry header is advisory
+   * metadata, deliberately outside the signed request preimage (see
+   * `spec/README.md`'s "Shares"), so it is added after signing. */
+  async putShare(token: string, sealed: Uint8Array, expiresAt: number): Promise<void> {
+    const res = await this.fetch('PUT', `/v0/share/${token}`, sealed, {
+      'svastha-share-expires': String(expiresAt),
+    })
+    if (!res.ok) throw new Error(`putShare ${token}: ${res.status}`)
+  }
+
+  /** Revoke a share; resolves to whether one existed for this owner. A `404`
+   * (never existed, or not this identity's share) resolves `false`. */
+  async deleteShare(token: string): Promise<boolean> {
+    const res = await this.fetch('DELETE', `/v0/share/${token}`)
+    if (res.status === 404) return false
+    if (!res.ok) throw new Error(`deleteShare ${token}: ${res.status}`)
+    return true
+  }
+
+  private fetch(
+    method: string,
+    path: string,
+    body?: Uint8Array,
+    extraHeaders?: Record<string, string>,
+  ): Promise<Response> {
     const payload = body ?? new Uint8Array()
     const timestamp = Math.floor(Date.now() / 1000)
     const signature = this.identity.sign_request(method, path, payload, BigInt(timestamp))
@@ -185,6 +214,7 @@ export class RelayClient {
         'svastha-public-key': this.identity.ed25519_public_hex,
         'svastha-timestamp': String(timestamp),
         'svastha-signature': toHex(signature),
+        ...extraHeaders,
       },
     }
     // GET/DELETE carry no body; fetch rejects a body on those methods. The cast
