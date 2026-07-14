@@ -334,7 +334,9 @@ so only someone handed the link can probe it, and the distinction materially
 improves the recipient's error message** ("this share ended" versus "no such
 link"). `DELETE` is owner-only: a caller who is not the stored owner receives the
 same `404` as a token that never existed, the non-leak posture the `/v0/shared/*`
-routes use for unauthorized access.
+routes use for unauthorized access. A token, once used, is **bound to its
+creating owner** — live or tombstoned — so a `PUT` by any other authenticated
+identity also answers `404` rather than replacing (or squatting on) the share.
 
 Revoke and expiry both drop the bundle bytes and leave a small **tombstone**
 (token, owner, reason — `expired` or `revoked` — and timestamp) so the `410`/`404`

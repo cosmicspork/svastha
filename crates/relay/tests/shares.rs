@@ -170,6 +170,78 @@ async fn wrong_owner_delete_is_not_found() {
 }
 
 #[tokio::test]
+async fn wrong_owner_put_over_live_share_is_not_found() {
+    let app = router();
+    let alice = Identity::from_seed(b"alice");
+    let mallory = Identity::from_seed(b"mallory");
+
+    let put = app
+        .clone()
+        .oneshot(signed(&alice, "PUT", &share_path(TOKEN), b"secret", now()))
+        .await
+        .unwrap();
+    assert_eq!(put.status(), StatusCode::NO_CONTENT);
+
+    // Mallory is authenticated but the token is bound to Alice: 404, same
+    // non-leak posture as the wrong-owner DELETE.
+    let hijack = app
+        .clone()
+        .oneshot(signed(
+            &mallory,
+            "PUT",
+            &share_path(TOKEN),
+            b"mallory bundle",
+            now(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(hijack.status(), StatusCode::NOT_FOUND);
+
+    // Alice's original bundle is untouched and still served.
+    let get = app.oneshot(unauth_get(TOKEN)).await.unwrap();
+    assert_eq!(get.status(), StatusCode::OK);
+    assert_eq!(body_bytes(get).await, b"secret");
+}
+
+#[tokio::test]
+async fn wrong_owner_put_over_tombstoned_share_is_not_found() {
+    let app = router();
+    let alice = Identity::from_seed(b"alice");
+    let mallory = Identity::from_seed(b"mallory");
+
+    let put = app
+        .clone()
+        .oneshot(signed(&alice, "PUT", &share_path(TOKEN), b"secret", now()))
+        .await
+        .unwrap();
+    assert_eq!(put.status(), StatusCode::NO_CONTENT);
+    let revoke = app
+        .clone()
+        .oneshot(signed(&alice, "DELETE", &share_path(TOKEN), b"", now()))
+        .await
+        .unwrap();
+    assert_eq!(revoke.status(), StatusCode::NO_CONTENT);
+
+    // The tombstone still binds the token to Alice — Mallory cannot squat on it.
+    let squat = app
+        .clone()
+        .oneshot(signed(
+            &mallory,
+            "PUT",
+            &share_path(TOKEN),
+            b"mallory bundle",
+            now(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(squat.status(), StatusCode::NOT_FOUND);
+
+    // The token still answers 410 (revoked), not Mallory's content.
+    let get = app.oneshot(unauth_get(TOKEN)).await.unwrap();
+    assert_eq!(get.status(), StatusCode::GONE);
+}
+
+#[tokio::test]
 async fn over_cap_put_is_rejected() {
     let app = router();
     let alice = Identity::from_seed(b"alice");

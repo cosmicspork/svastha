@@ -502,8 +502,12 @@ fn now_secs() -> u64 {
 /// body is the opaque ciphertext; the per-share key that decrypts it never
 /// reaches the relay (it rides the link's URL fragment). The owner's desired
 /// expiry arrives in the [`SHARE_EXPIRES_HEADER`] and is clamped to
-/// [`SHARE_MAX_TTL_SECS`]. Create-or-replace: a second PUT under the same token
-/// overwrites the bundle (and revives a tombstoned token).
+/// [`SHARE_MAX_TTL_SECS`]. Create-or-replace, but only for the token's creating
+/// owner: a second PUT by the same identity overwrites the bundle (and revives
+/// a tombstoned token), while any other authenticated identity — say, a share
+/// recipient who also holds a relay account — gets the same `404` as
+/// [`delete_share`]'s wrong-owner branch, so it can neither hijack a live token
+/// nor squat on a tombstoned one.
 pub async fn put_share(
     State(state): State<AppState>,
     Extension(owner): Extension<Owner>,
@@ -516,6 +520,12 @@ pub async fn put_share(
     }
     if body.len() > SHARE_MAX_BODY {
         return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    // A token, once used, is bound to its creating owner — live or tombstoned.
+    match state.shares.owner(&token) {
+        Ok(Some((stored, _))) if stored != owner.0 => return Err(StatusCode::NOT_FOUND),
+        Ok(_) => {}
+        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
     let now = now_secs();
     let ceiling = now.saturating_add(SHARE_MAX_TTL_SECS);
