@@ -11,6 +11,12 @@
 //! the wrapped vault key that makes a grant useful). Neither reveals vault
 //! contents; see `docs/ARCHITECTURE.md`, "Vaults and grants".
 //!
+//! It also holds [`share::ShareStore`]: sealed bundles an owner uploads for a
+//! doctor (or anyone) to fetch by an unguessable bearer token, with a
+//! relay-clamped expiry and revocation. The bundle is opaque ciphertext like
+//! everything else — the per-share key rides the link's URL fragment and never
+//! reaches the relay. `GET /v0/share/{token}` is the one unauthenticated read.
+//!
 //! [`app`] builds the router for a given set of stores; the binary
 //! ([`main`](../main.rs)) wires it to in-memory (or filesystem) stores and
 //! `axum::serve`.
@@ -19,6 +25,7 @@ pub mod auth;
 pub mod grants;
 pub mod mailbox;
 pub mod routes;
+pub mod share;
 pub mod store;
 
 use std::sync::Arc;
@@ -33,6 +40,7 @@ use tower_http::cors::CorsLayer;
 
 use grants::GrantStore;
 use mailbox::MailboxStore;
+use share::ShareStore;
 use store::BlobStore;
 
 /// Shared handler state: the stores and the auth freshness window.
@@ -41,6 +49,7 @@ pub struct AppState {
     pub store: Arc<dyn BlobStore>,
     pub grants: Arc<dyn GrantStore>,
     pub mailbox: Arc<dyn MailboxStore>,
+    pub shares: Arc<dyn ShareStore>,
     pub max_skew_secs: u64,
     /// The web app's own origin (e.g. `https://app.example.com`), if this
     /// relay is paired with a known app deployment. When set, the landing
@@ -58,6 +67,7 @@ pub fn app(
     store: Arc<dyn BlobStore>,
     grants: Arc<dyn GrantStore>,
     mailbox: Arc<dyn MailboxStore>,
+    shares: Arc<dyn ShareStore>,
     max_skew_secs: u64,
     app_url: Option<String>,
 ) -> Router {
@@ -65,6 +75,7 @@ pub fn app(
         store,
         grants,
         mailbox,
+        shares,
         max_skew_secs,
         app_url,
     };
@@ -97,6 +108,12 @@ pub fn app(
             get(routes::get_mailbox).delete(routes::delete_mailbox),
         )
         .route("/v0/mailbox/{recipient}/{id}", put(routes::put_mailbox))
+        // Uploading and revoking a share are owner-authenticated; the read
+        // (`GET`, below) is not, so it lives on the public router instead.
+        .route(
+            "/v0/share/{token}",
+            put(routes::put_share).delete(routes::delete_share),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,
@@ -106,6 +123,10 @@ pub fn app(
         .route("/", get(routes::landing))
         .route("/health", get(routes::health))
         .route("/v0/info", get(routes::info))
+        // The one unauthenticated read: a doctor with the link fetches the
+        // sealed bundle by its bearer token. Merged with the authed PUT/DELETE
+        // on the same path (disjoint methods), so only the read skips auth.
+        .route("/v0/share/{token}", get(routes::get_share))
         .merge(authed)
         .with_state(state)
         // Without this, axum's implicit 2 MB default caps request bodies before

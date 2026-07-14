@@ -9,6 +9,7 @@ use axum::http::{Request, StatusCode};
 use svastha_relay::app;
 use svastha_relay::grants::MemoryGrantStore;
 use svastha_relay::mailbox::MemoryMailboxStore;
+use svastha_relay::share::MemoryShareStore;
 use svastha_relay::store::MemoryStore;
 use tower::ServiceExt;
 
@@ -20,6 +21,7 @@ fn router(app_url: Option<String>) -> axum::Router {
         Arc::new(MemoryStore::new()),
         Arc::new(MemoryGrantStore::new()),
         Arc::new(MemoryMailboxStore::new()),
+        Arc::new(MemoryShareStore::new()),
         SKEW,
         app_url,
     )

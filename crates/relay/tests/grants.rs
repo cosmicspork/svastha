@@ -9,6 +9,7 @@ use svastha_core::keys::Identity;
 use svastha_relay::app;
 use svastha_relay::grants::FsGrantStore;
 use svastha_relay::mailbox::MemoryMailboxStore;
+use svastha_relay::share::MemoryShareStore;
 use svastha_relay::store::MemoryStore;
 use tower::ServiceExt;
 
@@ -324,6 +325,7 @@ async fn fs_grant_store_persists_across_router_rebuild() {
             Arc::new(MemoryStore::new()),
             Arc::new(FsGrantStore::new(dir).unwrap()),
             Arc::new(MemoryMailboxStore::new()),
+            Arc::new(MemoryShareStore::new()),
             SKEW,
             None,
         )
