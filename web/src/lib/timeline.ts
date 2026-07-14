@@ -2,10 +2,31 @@
 // (effective_at, category): that is what re-pairs a BP reading's two
 // observations and a meal's per-item events into one visual entry, since the
 // builders deliberately stamp them with one shared timestamp.
-import { VITALS, BP_SYSTOLIC, BP_DIASTOLIC, EXERCISE_DURATION, MOOD, MOOD_NOTE } from './codes'
+import {
+  VITALS,
+  BP_SYSTOLIC,
+  BP_DIASTOLIC,
+  EXERCISE_DURATION,
+  MOOD,
+  MOOD_NOTE,
+  shortenSystem,
+  type Code,
+} from './codes'
 import { categorize, type Category } from './category'
+import type { EventKind } from './drafts'
 import type { StoredEvent } from './events'
 import { dayKey, formatDay } from './time'
+
+/** The first event's raw provenance/coding, carried through for the spine
+ * row's inline detail panel (SpineEntry). A group can fold several events
+ * (a BP pair, a multi-item meal); the panel shows the shared fields of the
+ * first, so only the first event's metadata travels here. */
+export interface EntryDetail {
+  kind: EventKind
+  code: Code | null
+  source: string
+  sourceDoc: string | null
+}
 
 export interface TimelineEntry {
   effective_at: string
@@ -14,6 +35,13 @@ export interface TimelineEntry {
   /** Formatted measurement, rendered in --font-data; '' when the label says it
    * all (a note, a meal). */
   value: string
+  /** A single muted secondary slot for the coded/clinical rows whose label
+   * degraded to the bare kind word, or that carry context the label can't
+   * (a shortened coding, or the provenance source). Undefined when the label
+   * already says everything. */
+  hint?: string
+  /** First-event provenance/coding for the inline detail panel. */
+  detail: EntryDetail
   /** Symptom severity >= 7 — the amber correlation marker. */
   flare: boolean
   /** Every raw event id folded into this entry (a BP pair, a multi-item meal,
@@ -41,6 +69,12 @@ function quantityOf(e: Ev): { value: string; unit: string } | null {
   return null
 }
 
+/** `value unit`, unit-optional — the one place a Quantity becomes a string, so
+ * vitals and the clinical/other rows render measurements identically. */
+function renderQuantity(q: { value: string; unit: string }): string {
+  return `${q.value} ${q.unit}`.trim()
+}
+
 function textOf(e: Ev): string | null {
   return e.value && 'text' in e.value ? e.value.text : null
 }
@@ -63,7 +97,7 @@ function formatVitals(events: Ev[]): { label: string; value: string } {
     if (!q) continue
     parts.push({
       label: VITAL_LABELS.get(e.code?.code ?? '') ?? e.code?.display ?? 'Vital',
-      value: `${q.value} ${q.unit}`.trim(),
+      value: renderQuantity(q),
     })
   }
   if (parts.length === 0) return { label: 'Vitals', value: '' }
@@ -93,7 +127,7 @@ function formatExercise(events: Ev[]): { label: string; value: string } {
   const activity = events.map(textOf).find((t) => t !== null)
   const duration = events.find((e) => e.code?.code === EXERCISE_DURATION.code)
   const q = duration ? quantityOf(duration) : null
-  return { label: activity ?? 'Exercise', value: q ? `${q.value} ${q.unit}`.trim() : '' }
+  return { label: activity ?? 'Exercise', value: q ? renderQuantity(q) : '' }
 }
 
 /** Ordinal mood score -> the mockup's waxing-moon word. Single source: the
@@ -126,7 +160,7 @@ function formatMind(events: Ev[]): { label: string; value: string } {
 function formatGroup(
   category: Category,
   events: Ev[],
-): Omit<TimelineEntry, 'effective_at' | 'category' | 'eventIds'> {
+): Omit<TimelineEntry, 'effective_at' | 'category' | 'eventIds' | 'detail'> {
   switch (category) {
     case 'vital':
       return { ...formatVitals(events), flare: false }
@@ -148,13 +182,26 @@ function formatGroup(
       return { label: texts.join(', '), value: '', flare: false }
     }
     default: {
+      // Encounters, conditions, immunizations, procedures, and uncoded
+      // observations. The source often sends no display name, so the label can
+      // degrade to the bare kind word — the hint then carries the coding or
+      // provenance the label dropped.
       const first = events[0]
       const coded = first.value && 'coded' in first.value ? first.value.coded : null
-      return {
-        label: first.code?.display ?? coded?.display ?? first.kind.replace(/_/g, ' '),
-        value: textOf(first) ?? '',
-        flare: false,
-      }
+      const humanKind = first.kind.replace(/_/g, ' ')
+      const label = first.code?.display ?? coded?.display ?? humanKind
+      const q = quantityOf(first)
+      const value = textOf(first) ?? (q ? renderQuantity(q) : '')
+
+      // First match wins: a shortened coding is the more precise anchor; the
+      // provenance source is the fallback when the event carries no code.
+      const coding = first.code ? `${shortenSystem(first.code.system)} ${first.code.code}` : null
+      const source = first.provenance.source
+      let hint: string | undefined
+      if (coding && coding !== label) hint = coding
+      else if (source && source !== 'self' && source !== label) hint = source
+
+      return { label, value, hint, flare: false }
     }
   }
 }
@@ -178,10 +225,17 @@ export function buildTimeline(events: StoredEvent[], filter: Category | 'all'): 
   for (const group of sorted) {
     const key = dayKey(group.effective_at)
     const day = days.get(key) ?? { day: key, label: formatDay(key), entries: [] }
+    const first = group.events[0]
     day.entries.push({
       effective_at: group.effective_at,
       category: group.category,
       eventIds: group.events.map((e) => e.id),
+      detail: {
+        kind: first.kind,
+        code: first.code,
+        source: first.provenance.source,
+        sourceDoc: first.provenance.source_doc,
+      },
       ...formatGroup(group.category, group.events),
     })
     days.set(key, day)

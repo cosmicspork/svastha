@@ -18,6 +18,23 @@ export const RXNORM = 'http://www.nlm.nih.gov/research/umls/rxnorm'
  * defer to. */
 export const SVASTHA = 'urn:svastha:codes'
 
+/** Well-known terminology system URIs -> the short label a clinician reads
+ * ("LOINC 4548-4"). Imported events carry the full system URI; this is the only
+ * place that maps one to its familiar acronym, so the spine hint and the
+ * provenance stub agree. Unknown systems fall back to the raw URI. */
+const SYSTEM_LABELS: Record<string, string> = {
+  [LOINC]: 'LOINC',
+  [SNOMED]: 'SNOMED',
+  [RXNORM]: 'RxNorm',
+  'http://hl7.org/fhir/sid/icd-10-cm': 'ICD-10-CM',
+  'http://www.ama-assn.org/go/cpt': 'CPT',
+  'http://hl7.org/fhir/sid/cvx': 'CVX',
+}
+
+export function shortenSystem(system: string): string {
+  return SYSTEM_LABELS[system] ?? system
+}
+
 function loinc(code: string, display: string): Code {
   return { system: LOINC, code, display }
 }
