@@ -1,6 +1,7 @@
 <script lang="ts">
   import { CATEGORY_META } from '../lib/category'
-  import { formatTime } from '../lib/time'
+  import { shortenSystem } from '../lib/codes'
+  import { formatTime, formatDay, dayKey } from '../lib/time'
   import type { TimelineEntry } from '../lib/timeline'
   import TagEditor from './TagEditor.svelte'
 
@@ -32,6 +33,15 @@
   const meta = $derived(CATEGORY_META[entry.category])
   const primaryEventId = $derived(entry.eventIds[0])
   let editingTags = $state(false)
+
+  // The inline provenance panel is available in both modes (a share recipient
+  // wants exactly this), unlike tags/hide which stay owner-only.
+  let expanded = $state(false)
+  const stubId = $derived(`stub-${primaryEventId}`)
+  const detail = $derived(entry.detail)
+  const humanKind = $derived(detail.kind.replace(/_/g, ' '))
+  const recordedDay = $derived(formatDay(dayKey(entry.effective_at)))
+  const recordedTime = $derived(formatTime(entry.effective_at))
 </script>
 
 {#if hidden}
@@ -63,15 +73,31 @@
       class="dot"
       style:background={entry.flare ? 'var(--flare)' : `var(--cat-${entry.category})`}
     ></span>
-    <span class="glyph {meta.hueClass}" aria-hidden="true">{meta.glyph}</span>
-    <span class="label">{entry.label}</span>
-    {#each tags as tag (tag)}
-      <span class="tag-chip" data-testid="spine-entry-tag">#{tag}</span>
-    {/each}
-    {#if entry.value}
-      <span class="value data">{entry.value}</span>
-    {/if}
-    <span class="time muted">{formatTime(entry.effective_at)}</span>
+    <!-- The whole row toggles the detail panel. The tag/hide controls stay
+         siblings (below), never nested, so a tap on them can't also be a tap
+         on this button. -->
+    <button
+      type="button"
+      class="row-trigger"
+      aria-expanded={expanded}
+      aria-controls={stubId}
+      onclick={() => (expanded = !expanded)}
+      data-testid="spine-entry-trigger"
+    >
+      <span class="glyph {meta.hueClass}" aria-hidden="true">{meta.glyph}</span>
+      <span class="label">{entry.label}</span>
+      {#each tags as tag (tag)}
+        <span class="tag-chip" data-testid="spine-entry-tag">#{tag}</span>
+      {/each}
+      {#if entry.hint}
+        <span class="hint muted" data-testid="spine-entry-hint">{entry.hint}</span>
+      {/if}
+      {#if entry.value}
+        <span class="value data">{entry.value}</span>
+      {/if}
+      <span class="time muted">{recordedTime}</span>
+      <span class="chevron" class:open={expanded} aria-hidden="true">›</span>
+    </button>
     {#if editable}
       <button
         type="button"
@@ -94,6 +120,60 @@
       </button>
     {/if}
   </div>
+  <!-- Always in the DOM (so aria-controls resolves and the grid-rows expand
+       animates); collapsed to 0fr until open. -->
+  <div class="stub-wrap" class:open={expanded}>
+    <div class="stub-inner">
+      <dl
+        id={stubId}
+        class="stub"
+        style:border-left-color={`var(--cat-${entry.category})`}
+        data-testid="spine-entry-stub"
+      >
+        <div class="stub-row">
+          <dt>Recorded</dt>
+          <dd>
+            {recordedDay}{#if recordedTime}, {recordedTime}{:else}
+              <em class="muted">no time in source</em>{/if}
+          </dd>
+        </div>
+        <div class="stub-row">
+          <dt>Kind</dt>
+          <dd>{humanKind}</dd>
+        </div>
+        {#if detail.code}
+          <div class="stub-row">
+            <dt>Code</dt>
+            <dd class="code data">
+              {shortenSystem(detail.code.system)}
+              {detail.code.code}
+              {#if detail.code.display}{detail.code.display}{:else}<em class="muted"
+                  >no display name in source</em
+                >{/if}
+            </dd>
+          </div>
+        {/if}
+        {#if entry.value}
+          <div class="stub-row">
+            <dt>Result</dt>
+            <dd class="data">{entry.value}</dd>
+          </div>
+        {/if}
+        {#if detail.source}
+          <div class="stub-row">
+            <dt>Source</dt>
+            <dd>{detail.source}</dd>
+          </div>
+        {/if}
+        {#if detail.sourceDoc}
+          <div class="stub-row">
+            <dt>Document</dt>
+            <dd class="doc data">{detail.sourceDoc}</dd>
+          </div>
+        {/if}
+      </dl>
+    </div>
+  </div>
   {#if editingTags}
     <div class="tag-editor-row">
       <TagEditor
@@ -108,15 +188,47 @@
   .entry {
     position: relative;
     display: flex;
-    align-items: baseline;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-    padding: var(--space-1) 0;
+    align-items: center;
+    gap: var(--space-1);
   }
 
   .entry.flare {
     box-shadow: inset 2px 0 0 var(--flare);
     padding-left: var(--space-2);
+  }
+
+  /* The trigger carries the old row layout (baseline-aligned, wrapping) and
+     resets the global button chrome; the 44px min-height is the touch target. */
+  .row-trigger {
+    flex: 1;
+    min-width: 0;
+    min-height: 44px;
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding: var(--space-1) 0;
+    border: none;
+    background: none;
+    color: inherit;
+    text-align: left;
+  }
+
+  .hint {
+    flex: none;
+    font-size: var(--text-xs);
+  }
+
+  .chevron {
+    flex: none;
+    color: var(--muted);
+    font-size: var(--text-sm);
+    line-height: 1;
+    transition: transform var(--duration-base) ease;
+  }
+
+  .chevron.open {
+    transform: rotate(90deg);
   }
 
   .hidden-row {
@@ -191,6 +303,61 @@
 
   .tag-editor-row {
     padding: var(--space-2) 0 var(--space-3);
+  }
+
+  /* Height-only expand: animating grid-template-rows 0fr->1fr needs no fixed
+     height. The base.css reduced-motion kill-switch drops the transition. */
+  .stub-wrap {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows var(--duration-base) ease;
+  }
+
+  .stub-wrap.open {
+    grid-template-rows: 1fr;
+  }
+
+  .stub-inner {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .stub {
+    margin: var(--space-1) 0 var(--space-3);
+    padding: var(--space-3);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    background: color-mix(in srgb, var(--surface) 55%, var(--bg));
+    border: 1px solid var(--border);
+    /* left rule is the category hue (color set inline); the widened side only */
+    border-left-width: 2px;
+    border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+    font-family: var(--font-body);
+  }
+
+  .stub-row {
+    display: flex;
+    gap: var(--space-3);
+  }
+
+  .stub dt {
+    flex: none;
+    width: 6rem;
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+  }
+
+  .stub dd {
+    margin: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .stub .data {
+    font-size: var(--text-sm);
   }
 
   @keyframes enter {
