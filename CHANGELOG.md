@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1](https://github.com/cosmicspork/svastha/compare/v0.5.0...v0.5.1) (2026-07-14)
+
+
+### Bug Fixes
+
+* **relay:** lift axum default body limit to MAX_BODY ([d970972](https://github.com/cosmicspork/svastha/commit/d970972aa085bbaaea60e07f63a17620a4207896))
+* **relay:** lift axum default body limit to MAX_BODY ([e7822dd](https://github.com/cosmicspork/svastha/commit/e7822dd4c49ad24248deb3b5ddcc160f77e199cd))
+
 ## [0.5.0](https://github.com/cosmicspork/svastha/compare/v0.4.0...v0.5.0) (2026-07-11)
 
 
