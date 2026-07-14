@@ -15,6 +15,7 @@ use svastha_core::relay::{sign_request, AuthRequest};
 use svastha_relay::app;
 use svastha_relay::grants::MemoryGrantStore;
 use svastha_relay::mailbox::MemoryMailboxStore;
+use svastha_relay::share::MemoryShareStore;
 use svastha_relay::store::MemoryStore;
 
 pub const SKEW: u64 = 300;
@@ -34,6 +35,7 @@ pub fn router() -> axum::Router {
         Arc::new(MemoryStore::new()),
         Arc::new(MemoryGrantStore::new()),
         Arc::new(MemoryMailboxStore::new()),
+        Arc::new(MemoryShareStore::new()),
         SKEW,
         None,
     )

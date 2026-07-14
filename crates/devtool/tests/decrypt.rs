@@ -12,6 +12,7 @@ use svastha_core::keys::Identity;
 use svastha_devtool::{run, Config, RelayHttp};
 use svastha_relay::grants::MemoryGrantStore;
 use svastha_relay::mailbox::MemoryMailboxStore;
+use svastha_relay::share::MemoryShareStore;
 use svastha_relay::store::MemoryStore;
 
 /// BIP39's canonical all-zero-entropy test mnemonic — a well-known, publicly
@@ -38,6 +39,7 @@ fn spawn_relay() -> String {
                 Arc::new(MemoryStore::new()),
                 Arc::new(MemoryGrantStore::new()),
                 Arc::new(MemoryMailboxStore::new()),
+                Arc::new(MemoryShareStore::new()),
                 300,
                 None,
             );

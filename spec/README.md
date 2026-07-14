@@ -15,7 +15,7 @@ non-Rust reimplementation or an auditor can validate against the same bytes.
 negotiate on it so independently deployed and self-hosted pieces can coexist.
 
 Status: key derivation, the encryption envelope, the event schema, and the relay
-wire protocol (auth handshake, blob endpoints, grants, and mailbox) are
+wire protocol (auth handshake, blob endpoints, grants, mailbox, and shares) are
 specified below.
 
 ## Key derivation
@@ -291,9 +291,74 @@ already-verified auth identity — not a claim the client makes about itself —
 which the receiving client then binds to whatever identity the payload itself
 claims to be from, so a mismatch is detectable.
 
+### Shares
+
+A **share** lets a record owner hand a subset of their history to a doctor (or
+anyone) who has no Svastha identity. The owner builds the subset client-side,
+re-encrypts it under a fresh per-share key, and uploads the result as one sealed
+**bundle**; the recipient opens a link and fetches the bundle by an unguessable
+bearer **token**. The relay stays zero-knowledge: the bundle is opaque
+ciphertext like every other byte it holds, and the per-share key that decrypts
+it travels only in the link's URL *fragment* (`#…`), which browsers never send
+to the server — so it never reaches the relay.
+
+| Method & path | Auth | Body | Success | Notes |
+|---|---|---|---|---|
+| `PUT /v0/share/{token}` | yes | sealed bundle | `204` / `413` | create or replace; expiry via the `Svastha-Share-Expires` header, clamped |
+| `GET /v0/share/{token}` | — | — | `200` octets / `410` / `404` | **unauthenticated** fetch by bearer token |
+| `DELETE /v0/share/{token}` | yes | — | `204` / `404` | revoke; the caller must be the stored owner |
+
+`{token}` reuses the blob `{id}` charset rule (`[A-Za-z0-9._-]`, never `.` or
+`..`) and must **additionally be ≥ 22 chars** — about 128 bits of entropy over
+that 64-symbol alphabet when the client fills it from a CSPRNG — because the read
+path is unauthenticated, so the token *is* the credential. A shorter or
+malformed token is `400`.
+
+**Expiry.** The owner's desired expiry rides the `Svastha-Share-Expires` request
+header (Unix seconds). The relay **clamps** it to at most **30 days** from now,
+and defaults to that ceiling if the header is absent or unparseable. (The client
+picks a shorter default — 7 days — which is a client concern.) The header is
+advisory metadata, not part of the signed request preimage; the clamp is what
+bounds how long an unauthenticated bearer link can keep working.
+
+**Size cap.** The bundle is capped at **8 MiB** (→ `413`), distinct from and
+below the 16 MiB blob `MAX_BODY`: a share is a re-encrypted subset built for one
+recipient, not a whole vault, so it gets its own, tighter ceiling.
+
+**Status codes.** `GET` answers `200` for a valid share; `410 Gone` for an
+expired share (lazily detected on access — the relay deletes the bundle bytes
+and leaves a tombstone) or a revoked one; and `404` for a token that never
+existed. **This `410`/`404` distinction deliberately diverges from the grants'
+two-404 non-leak rule: a share token is an unguessable ≥128-bit bearer secret,
+so only someone handed the link can probe it, and the distinction materially
+improves the recipient's error message** ("this share ended" versus "no such
+link"). `DELETE` is owner-only: a caller who is not the stored owner receives the
+same `404` as a token that never existed, the non-leak posture the `/v0/shared/*`
+routes use for unauthorized access. A token, once used, is **bound to its
+creating owner** — live or tombstoned — so a `PUT` by any other authenticated
+identity also answers `404` rather than replacing (or squatting on) the share.
+
+Revoke and expiry both drop the bundle bytes and leave a small **tombstone**
+(token, owner, reason — `expired` or `revoked` — and timestamp) so the `410`/`404`
+split survives after the content is gone; tombstones older than 90 days are
+swept. The relay has no periodic-task machinery, so expiry is caught lazily on
+`GET` and a sweep also runs on startup. Both expiry and revocation stop *future*
+fetches only — neither can recall a bundle a recipient already pulled, and the
+client is responsible for saying so.
+
+**What the relay learns.** For a share it sees that the token exists, the owner's
+identity (from the authenticated `PUT`/`DELETE`), the bundle's byte size, its
+timestamps (created, expiry, and any revocation), and fetch traffic (that some
+bearer hit the link, and when). It never learns the bundle's content, its scope
+(which events the owner chose to include), or the recipient's identity — the
+recipient authenticates with nothing, and the decryption key never reaches the
+relay.
+
 The relay is stateless and keyless: it never decrypts, holds no user keys, and
 ships as a single static binary for self-hosting. All of the above — blobs,
-grants, and mailbox — reuse the one auth handshake; server-side semantics
-(the two-404 non-leak rule, the mailbox cap, method routing) are pinned by the
-relay's integration tests rather than by test vectors, since none of it changes
-the signed bytes.
+grants, mailbox, and shares — reuse the one auth handshake, except the share
+*read*, the system's only unauthenticated endpoint (its bearer token stands in
+for auth). Server-side semantics (the two-404 non-leak rule and the share read's
+deliberate `410`/`404` exception to it, the mailbox and share caps, the expiry
+clamp, method routing) are pinned by the relay's integration tests rather than by
+test vectors, since none of it changes the signed bytes.

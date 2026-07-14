@@ -11,6 +11,7 @@ use svastha_core::relay::{sign_request, AuthRequest};
 use svastha_relay::app;
 use svastha_relay::grants::MemoryGrantStore;
 use svastha_relay::mailbox::MemoryMailboxStore;
+use svastha_relay::share::MemoryShareStore;
 use svastha_relay::store::FsStore;
 use tower::ServiceExt;
 
@@ -247,6 +248,7 @@ async fn filesystem_store_persists_across_restart() {
         Arc::new(FsStore::new(dir.path()).unwrap()),
         Arc::new(MemoryGrantStore::new()),
         Arc::new(MemoryMailboxStore::new()),
+        Arc::new(MemoryShareStore::new()),
         SKEW,
         None,
     );
@@ -261,6 +263,7 @@ async fn filesystem_store_persists_across_restart() {
         Arc::new(FsStore::new(dir.path()).unwrap()),
         Arc::new(MemoryGrantStore::new()),
         Arc::new(MemoryMailboxStore::new()),
+        Arc::new(MemoryShareStore::new()),
         SKEW,
         None,
     );

@@ -3,8 +3,8 @@
 //!
 //! - `SVASTHA_RELAY_ADDR` — listen address (default `127.0.0.1:8080`).
 //! - `SVASTHA_RELAY_MAX_SKEW_SECS` — auth replay window (default `300`).
-//! - `SVASTHA_RELAY_DATA_DIR` — durable blob, grant, and mailbox directory; if
-//!   unset, all three are kept in memory and lost on restart.
+//! - `SVASTHA_RELAY_DATA_DIR` — durable blob, grant, mailbox, and share
+//!   directory; if unset, all are kept in memory and lost on restart.
 //! - `SVASTHA_APP_URL` — the paired web app's own origin (e.g.
 //!   `https://app.example.com`), unset by default. When set, the landing
 //!   page's (`GET /`) QR encodes a device-link onboarding URL instead of just
@@ -12,12 +12,24 @@
 //! - `RUST_LOG` — tracing filter (default `svastha_relay=info`).
 
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use svastha_relay::app;
 use svastha_relay::grants::{FsGrantStore, GrantStore, MemoryGrantStore};
 use svastha_relay::mailbox::{FsMailboxStore, MailboxStore, MemoryMailboxStore};
+use svastha_relay::routes::SHARE_TOMBSTONE_MAX_AGE_SECS;
+use svastha_relay::share::{FsShareStore, MemoryShareStore, ShareStore};
 use svastha_relay::store::{BlobStore, FsStore, MemoryStore};
 use tracing_subscriber::EnvFilter;
+
+/// The four relay stores, each behind a trait object so the same wiring backs
+/// both the in-memory and filesystem builds.
+type Stores = (
+    Arc<dyn BlobStore>,
+    Arc<dyn GrantStore>,
+    Arc<dyn MailboxStore>,
+    Arc<dyn ShareStore>,
+);
 
 #[tokio::main]
 async fn main() {
@@ -39,31 +51,46 @@ async fn main() {
         .map(|s| s.trim_end_matches('/').to_string())
         .filter(|s| !s.is_empty());
 
-    let (store, grants, mailbox): (
-        Arc<dyn BlobStore>,
-        Arc<dyn GrantStore>,
-        Arc<dyn MailboxStore>,
-    ) = match std::env::var("SVASTHA_RELAY_DATA_DIR") {
+    let (store, grants, mailbox, shares): Stores = match std::env::var("SVASTHA_RELAY_DATA_DIR") {
         Ok(dir) => {
             let store = FsStore::new(&dir).expect("create data directory");
             let grants = FsGrantStore::new(&dir).expect("create data directory");
             let mailbox = FsMailboxStore::new(&dir).expect("create data directory");
+            let shares = FsShareStore::new(&dir).expect("create data directory");
             tracing::info!(data_dir = %dir, "durable filesystem store");
-            (Arc::new(store), Arc::new(grants), Arc::new(mailbox))
+            (
+                Arc::new(store),
+                Arc::new(grants),
+                Arc::new(mailbox),
+                Arc::new(shares),
+            )
         }
         Err(_) => {
             tracing::warn!(
-                    "SVASTHA_RELAY_DATA_DIR unset; using in-memory store (blobs, grants, and mailbox lost on restart)"
+                    "SVASTHA_RELAY_DATA_DIR unset; using in-memory store (blobs, grants, mailbox, and shares lost on restart)"
                 );
             (
                 Arc::new(MemoryStore::new()),
                 Arc::new(MemoryGrantStore::new()),
                 Arc::new(MemoryMailboxStore::new()),
+                Arc::new(MemoryShareStore::new()),
             )
         }
     };
 
-    let app = app(store, grants, mailbox, max_skew_secs, app_url);
+    // The relay has no periodic-task machinery, so shares are swept once at
+    // startup (lapsed shares tombstoned, aged-out tombstones dropped); expiry is
+    // otherwise caught lazily on the read path. A durable relay that runs for
+    // months still stays tidy across restarts.
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if let Err(e) = shares.sweep(now, SHARE_TOMBSTONE_MAX_AGE_SECS) {
+        tracing::warn!(error = %e, "share sweep on startup failed");
+    }
+
+    let app = app(store, grants, mailbox, shares, max_skew_secs, app_url);
 
     let listener = tokio::net::TcpListener::bind(&addr)
         .await

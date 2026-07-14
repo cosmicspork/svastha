@@ -4,6 +4,8 @@
 //! or mailbox items except where a grant explicitly says otherwise (the
 //! `/v0/shared/*` handlers).
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use axum::{
     body::Bytes,
     extract::{Path, State},
@@ -16,12 +18,41 @@ use serde::Serialize;
 use svastha_core::CONTRACT_VERSION;
 
 use crate::auth::Owner;
+use crate::share::{ShareState, TombstoneReason};
 use crate::AppState;
 
 /// Maximum mailbox item size: it carries one wrapped vault key plus a small
 /// JSON envelope, never anything larger, so a low cap keeps the mailbox from
 /// becoming a general-purpose (spammable) blob store.
 pub const MAILBOX_MAX_BODY: usize = 4096;
+
+/// Maximum sealed share-bundle size (8 MiB). Distinct from (and below) the
+/// global [`crate::auth::MAX_BODY`] blob cap: a share is a re-encrypted subset
+/// of a record built for one recipient, not a whole vault, so it gets its own,
+/// tighter ceiling without touching the blob contract.
+pub const SHARE_MAX_BODY: usize = 8 * 1024 * 1024;
+
+/// Hard ceiling on a share's lifetime: the relay clamps any requested expiry to
+/// at most this far in the future (30 days). The client picks a shorter default
+/// (7 days); that is a client concern. The clamp bounds how long an
+/// unauthenticated bearer link can keep working.
+pub const SHARE_MAX_TTL_SECS: u64 = 30 * 24 * 60 * 60;
+
+/// How long a tombstone (the marker left by expiry or revocation) is retained
+/// before [`crate::share::ShareStore::sweep`] deletes it (90 days). Long enough
+/// that a recipient hitting a stale link still gets `410 Gone` rather than a
+/// confusing `404` well after the share ended.
+pub const SHARE_TOMBSTONE_MAX_AGE_SECS: u64 = 90 * 24 * 60 * 60;
+
+/// Request header carrying the owner's desired share expiry as Unix seconds. It
+/// is advisory — the relay clamps it to [`SHARE_MAX_TTL_SECS`] and defaults to
+/// that ceiling if the header is absent or unparseable.
+pub const SHARE_EXPIRES_HEADER: &str = "svastha-share-expires";
+
+/// A share token is a bearer secret, so beyond the blob-id charset it must be
+/// long enough to be unguessable: ≥ 22 chars of the `[A-Za-z0-9._-]` alphabet
+/// is ≈ 128 bits of entropy when the client fills it with a CSPRNG.
+const MIN_SHARE_TOKEN_LEN: usize = 22;
 
 /// Liveness probe (unauthenticated).
 pub async fn health() -> &'static str {
@@ -447,6 +478,134 @@ pub async fn delete_mailbox(
     match state.mailbox.delete(&caller.0, &id) {
         Ok(true) => StatusCode::NO_CONTENT,
         Ok(false) => StatusCode::NOT_FOUND,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+// --- shares: sealed bundles fetched by an unguessable bearer token ---
+
+/// A share token reuses the blob-id charset but must additionally be long enough
+/// to be unguessable (see [`MIN_SHARE_TOKEN_LEN`]) — the read path is
+/// unauthenticated, so the token *is* the credential.
+fn valid_share_token(token: &str) -> bool {
+    token.len() >= MIN_SHARE_TOKEN_LEN && valid_id(token)
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Upload (or replace) a sealed share bundle for the authenticated owner. The
+/// body is the opaque ciphertext; the per-share key that decrypts it never
+/// reaches the relay (it rides the link's URL fragment). The owner's desired
+/// expiry arrives in the [`SHARE_EXPIRES_HEADER`] and is clamped to
+/// [`SHARE_MAX_TTL_SECS`]. Create-or-replace, but only for the token's creating
+/// owner: a second PUT by the same identity overwrites the bundle (and revives
+/// a tombstoned token), while any other authenticated identity — say, a share
+/// recipient who also holds a relay account — gets the same `404` as
+/// [`delete_share`]'s wrong-owner branch, so it can neither hijack a live token
+/// nor squat on a tombstoned one.
+pub async fn put_share(
+    State(state): State<AppState>,
+    Extension(owner): Extension<Owner>,
+    Path(token): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<StatusCode, StatusCode> {
+    if !valid_share_token(&token) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if body.len() > SHARE_MAX_BODY {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    // A token, once used, is bound to its creating owner — live or tombstoned.
+    match state.shares.owner(&token) {
+        Ok(Some((stored, _))) if stored != owner.0 => return Err(StatusCode::NOT_FOUND),
+        Ok(_) => {}
+        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+    let now = now_secs();
+    let ceiling = now.saturating_add(SHARE_MAX_TTL_SECS);
+    let requested = headers
+        .get(SHARE_EXPIRES_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(ceiling);
+    let expires_at = requested.min(ceiling);
+    state
+        .shares
+        .put(&token, owner.0, body.to_vec(), now, expires_at)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Fetch a share bundle by token. **This is the system's only unauthenticated
+/// read**, deliberately: the recipient is a doctor with a link, not a Svastha
+/// identity. Because the token is itself a ≥128-bit bearer secret, only someone
+/// handed the link can probe it, so — unlike the grants' two-404 non-leak rule —
+/// this endpoint distinguishes gone from never-existed to give a better error:
+/// `200` live, `410 Gone` for an expired (detected and tombstoned lazily here)
+/// or revoked share, `404` for a token that never existed. See `spec/README.md`.
+pub async fn get_share(State(state): State<AppState>, Path(token): Path<String>) -> Response {
+    if !valid_share_token(&token) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    match state.shares.get(&token) {
+        Ok(ShareState::Missing) => StatusCode::NOT_FOUND.into_response(),
+        Ok(ShareState::Tombstone { .. }) => StatusCode::GONE.into_response(),
+        Ok(ShareState::Live { expires_at, .. }) if expires_at <= now_secs() => {
+            // Lazy expiry: drop the bundle bytes and leave a tombstone so this
+            // and later fetches answer 410, not 404, and stop serving content.
+            let _ = state
+                .shares
+                .tombstone(&token, TombstoneReason::Expired, now_secs());
+            StatusCode::GONE.into_response()
+        }
+        Ok(ShareState::Live { sealed_bundle, .. }) => (
+            [(header::CONTENT_TYPE, "application/octet-stream")],
+            sealed_bundle,
+        )
+            .into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+/// Revoke a share: the authenticated caller must be the stored owner. A mismatch
+/// answers `404`, the same as a token that never existed — a stranger who
+/// somehow guessed the token learns nothing about whether it exists (the same
+/// non-leak posture as the grants' unauthorized-access `404`). Revoking drops
+/// the bundle bytes and leaves a `revoked` tombstone; revocation only stops
+/// *future* fetches and cannot recall what was already pulled (the client says
+/// so). `204` on success, `404` if the token never existed.
+pub async fn delete_share(
+    State(state): State<AppState>,
+    Extension(owner): Extension<Owner>,
+    Path(token): Path<String>,
+) -> StatusCode {
+    if !valid_share_token(&token) {
+        return StatusCode::BAD_REQUEST;
+    }
+    match state.shares.owner(&token) {
+        Ok(None) => StatusCode::NOT_FOUND,
+        // Not the caller's share → indistinguishable from "never existed".
+        Ok(Some((stored, _))) if stored != owner.0 => StatusCode::NOT_FOUND,
+        Ok(Some((_, is_live))) => {
+            if is_live {
+                match state
+                    .shares
+                    .tombstone(&token, TombstoneReason::Revoked, now_secs())
+                {
+                    Ok(_) => StatusCode::NO_CONTENT,
+                    Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                }
+            } else {
+                // Already tombstoned (expired or a prior revoke): revoke is idempotent.
+                StatusCode::NO_CONTENT
+            }
+        }
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
