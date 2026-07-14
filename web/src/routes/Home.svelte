@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { get } from '../lib/db'
+  import { get, put } from '../lib/db'
   import { navigate } from '../lib/router.svelte'
   import { fingerprint } from '../lib/exchange'
   import {
@@ -12,18 +12,30 @@
     type PendingInvite,
   } from '../lib/shared'
   import Spine from '../components/Spine.svelte'
+  import ClinicianSummary from '../components/ClinicianSummary.svelte'
   import InstallSheet from '../components/InstallSheet.svelte'
   import { shouldNudgeInstall, dismissInstallNudge } from '../lib/install'
 
   let hue = $state<'a' | 'b'>('a')
   let shares = $state<Share[]>([])
   let showInstallSheet = $state(false)
+  // Timeline (the chronological spine) vs. Summary (the clinician handoff
+  // shape). Persisted as a shared UI preference so it carries across the own
+  // record and shared-person screens (see Person.svelte).
+  let view = $state<'timeline' | 'summary'>('timeline')
 
   onMount(async () => {
     const stored = await get<'a' | 'b'>('prefs', 'hue')
     if (stored) hue = stored
+    const storedView = await get<'timeline' | 'summary'>('prefs', 'person-view')
+    if (storedView) view = storedView
     shares = await listShares()
   })
+
+  async function setView(next: 'timeline' | 'summary') {
+    view = next
+    await put('prefs', next, 'person-view')
+  }
 
   // Separate from the above onMount so a slow shouldNudgeInstall() (an
   // IndexedDB read) never delays the hue/shares load it has nothing to do with.
@@ -88,7 +100,20 @@
   </button>
 </div>
 
-<Spine {hue} />
+<div class="seg view-toggle" role="group" aria-label="Record view" data-testid="home-view-toggle">
+  <button aria-pressed={view === 'timeline'} onclick={() => setView('timeline')} data-testid="view-timeline">
+    Timeline
+  </button>
+  <button aria-pressed={view === 'summary'} onclick={() => setView('summary')} data-testid="view-summary">
+    Summary
+  </button>
+</div>
+
+{#if view === 'timeline'}
+  <Spine {hue} />
+{:else}
+  <ClinicianSummary />
+{/if}
 
 {#if showInstallSheet}
   <InstallSheet onclose={dismissAndClose} />
@@ -111,6 +136,10 @@
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-1);
+    margin-bottom: var(--space-4);
+  }
+
+  .view-toggle {
     margin-bottom: var(--space-4);
   }
 
