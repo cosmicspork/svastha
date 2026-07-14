@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.6.0](https://github.com/cosmicspork/svastha/compare/v0.5.1...v0.6.0) (2026-07-14)
+
+
+### Features
+
+* **relay:** share token store and endpoints ([358ce12](https://github.com/cosmicspork/svastha/commit/358ce12b0cbdef9bc298edf7531aee64aaacf533))
+* **relay:** share token store and endpoints ([c66dc6e](https://github.com/cosmicspork/svastha/commit/c66dc6e6aa2fa685c90ee272e6fc7c54dd05dfc0))
+* **web:** clinician summary derivation ([0e03db8](https://github.com/cosmicspork/svastha/commit/0e03db89b7c05af8f250345b8813b8a4beb72458))
+* **web:** clinician summary view ([ed35b7c](https://github.com/cosmicspork/svastha/commit/ed35b7c08fa446f8196e9509dd40fbaae288ceab))
+* **web:** clinician summary view and toggle ([edd0c25](https://github.com/cosmicspork/svastha/commit/edd0c255357ba0a77e52fe2d2bcae9d4b18f1587))
+* **web:** doctor share creation with QR link ([17e1c2b](https://github.com/cosmicspork/svastha/commit/17e1c2b0492c75d4d8008f698946b39850c3c006))
+* **web:** doctor share creation with QR link ([a017ca4](https://github.com/cosmicspork/svastha/commit/a017ca420713bba57809b7e743b86d11d3b52af5))
+* **web:** expand spine rows into an inline provenance panel ([e72101b](https://github.com/cosmicspork/svastha/commit/e72101b77f66f3d4a751eb0343cae64c2f399ee9))
+* **web:** share recipient view ([829933a](https://github.com/cosmicspork/svastha/commit/829933a97b8d86ad063aae051d08deead7f13c16))
+* **web:** share recipient view ([8940c4b](https://github.com/cosmicspork/svastha/commit/8940c4bd57b4b615361ad429a0af2e5e736b0dd3))
+* **web:** show event details on spine rows ([fbca9d1](https://github.com/cosmicspork/svastha/commit/fbca9d15a04da1119c138bbf7abd80a2a3075af2))
+* **web:** spine entry overflow menu ([79952ac](https://github.com/cosmicspork/svastha/commit/79952ac25cc93f7584612f5bf4f609ce92f01098))
+* **web:** spine entry overflow menu ([190eff2](https://github.com/cosmicspork/svastha/commit/190eff262ba5b177ab45b003ecded6c4ed3b450c))
+
+
+### Bug Fixes
+
+* **relay:** bind share tokens to their creating owner ([992a1f3](https://github.com/cosmicspork/svastha/commit/992a1f3f93751d77cad51a4cb2986a94688fe5c2))
+* **web:** format quantity values and coding hints on clinical spine rows ([87826d5](https://github.com/cosmicspork/svastha/commit/87826d56fe1daaf04e116105c0b85bcb9be54ff0))
+
 ## [0.5.1](https://github.com/cosmicspork/svastha/compare/v0.5.0...v0.5.1) (2026-07-14)
 
 
