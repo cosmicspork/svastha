@@ -11,7 +11,7 @@ describe('MIGRATIONS', () => {
     const db = await openDb()
     expect(db.version).toBe(MIGRATIONS.length)
     expect([...db.objectStoreNames].sort()).toEqual(
-      ['curation', 'events', 'keyvault', 'prefs', 'provenance', 'shared_events', 'shares', 'sync'].sort(),
+      ['curation', 'doctor_shares', 'events', 'keyvault', 'prefs', 'provenance', 'shared_events', 'shares', 'sync'].sort(),
     )
 
     const tx = db.transaction('events', 'readonly')

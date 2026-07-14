@@ -40,6 +40,14 @@ export const MIGRATIONS: ((db: IDBDatabase, tx: IDBTransaction) => void)[] = [
     const curation = db.createObjectStore('curation', { keyPath: 'key' })
     curation.createIndex('updated_at', 'updated_at')
   },
+  // v4: doctor shares (see lib/doctorShare.ts) — device-local records of the
+  // sealed bundles this device uploaded to the relay for a clinician, keyed by
+  // the share's bearer token. Holds the per-share key so an active share's
+  // link/QR can be re-shown until expiry; this store never syncs (cross-device
+  // manage is deferred by design).
+  (db) => {
+    db.createObjectStore('doctor_shares', { keyPath: 'token' })
+  },
 ]
 
 function requestToPromise<T>(req: IDBRequest<T>): Promise<T> {
