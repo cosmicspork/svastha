@@ -62,7 +62,10 @@ export interface TimelineDay {
 
 type Ev = StoredEvent['event']
 
-function quantityOf(e: Ev): { value: string; unit: string } | null {
+/** Pull a Quantity's value/unit out of an event, or null for a non-quantity.
+ * Exported so summary.ts formats measurements exactly as the spine does rather
+ * than re-deriving the shape. */
+export function quantityOf(e: Ev): { value: string; unit: string } | null {
   if (e.value && 'quantity' in e.value) {
     return { value: e.value.quantity.value, unit: e.value.quantity.unit?.code ?? '' }
   }
@@ -70,8 +73,9 @@ function quantityOf(e: Ev): { value: string; unit: string } | null {
 }
 
 /** `value unit`, unit-optional — the one place a Quantity becomes a string, so
- * vitals and the clinical/other rows render measurements identically. */
-function renderQuantity(q: { value: string; unit: string }): string {
+ * vitals and the clinical/other rows render measurements identically. Exported
+ * for summary.ts, which renders the same measurements in the clinician view. */
+export function renderQuantity(q: { value: string; unit: string }): string {
   return `${q.value} ${q.unit}`.trim()
 }
 
