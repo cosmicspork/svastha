@@ -3,6 +3,7 @@
   import { shortenSystem } from '../lib/codes'
   import { formatTime, formatDay, dayKey } from '../lib/time'
   import type { TimelineEntry } from '../lib/timeline'
+  import Menu, { type MenuItem } from './Menu.svelte'
   import TagEditor from './TagEditor.svelte'
 
   let {
@@ -42,6 +43,20 @@
   const humanKind = $derived(detail.kind.replace(/_/g, ' '))
   const recordedDay = $derived(formatDay(dayKey(entry.effective_at)))
   const recordedTime = $derived(formatTime(entry.effective_at))
+
+  // The overflow menu: a discoverable, screen-reader-friendly second entry
+  // point to the same detail/tag toggles the row and `#` button own, with the
+  // destructive hide demoted behind an explicit label.
+  const actions = $derived<MenuItem[]>([
+    { label: expanded ? 'Hide details' : 'View details', onSelect: () => (expanded = !expanded) },
+    { label: 'Edit tags', onSelect: () => (editingTags = !editingTags) },
+    {
+      label: 'Hide entry',
+      danger: true,
+      separatorBefore: true,
+      onSelect: () => onToggleHidden?.(primaryEventId, true),
+    },
+  ])
 </script>
 
 {#if hidden}
@@ -109,15 +124,9 @@
       >
         #
       </button>
-      <button
-        type="button"
-        class="hide-toggle"
-        aria-label="Hide entry"
-        onclick={() => onToggleHidden?.(primaryEventId, true)}
-        data-testid="spine-entry-hide"
-      >
-        ⋯
-      </button>
+      <Menu label="Entry actions" items={actions} triggerTestId="spine-entry-menu">
+        {#snippet trigger()}⋯{/snippet}
+      </Menu>
     {/if}
   </div>
   <!-- Always in the DOM (so aria-controls resolves and the grid-rows expand
@@ -289,8 +298,7 @@
     font-size: var(--text-xs);
   }
 
-  .tag-toggle,
-  .hide-toggle {
+  .tag-toggle {
     flex: none;
     min-height: auto;
     min-width: auto;
