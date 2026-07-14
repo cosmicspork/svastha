@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { onboardViaUI, openLog } from './helpers'
+import { logFood, onboardViaUI, openLog } from './helpers'
 
 // A long free-text mood note used to overflow the spine on narrow phones: the
 // value span was `white-space: nowrap`, so it pushed the page wider than the
@@ -25,4 +25,18 @@ test('spine does not overflow horizontally with a long free-text value', async (
   }))
   expect(overflow.doc).toBeLessThanOrEqual(0)
   expect(overflow.body).toBeLessThanOrEqual(0)
+})
+
+// The ⋯ overflow menu opens to a WAI-ARIA menu and its danger item hides the
+// entry (the action the bare ⋯ used to perform on a single tap).
+test('overflow menu opens and hides an entry', async ({ page }) => {
+  await onboardViaUI(page)
+  await logFood(page, 'oatmeal')
+
+  await page.getByTestId('spine-entry-menu').click()
+  await expect(page.getByRole('menuitem', { name: 'View details' })).toBeVisible()
+
+  await page.getByRole('menuitem', { name: 'Hide entry' }).click()
+  await expect(page.getByTestId('spine-entry-hidden')).toBeVisible()
+  await expect(page.getByTestId('spine-entry').filter({ hasText: 'oatmeal' })).toHaveCount(0)
 })
