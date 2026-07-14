@@ -39,6 +39,14 @@ describe('matchRoute', () => {
     })
   })
 
+  it('captures the whole share fragment as one segment', () => {
+    const frag = 'abcdefghijklmnopqrstuvwxyz.AAAA-_.aHR0cA'
+    expect(matchRoute(`#/s/${frag}`)).toEqual({
+      path: '/s/:frag',
+      params: { frag },
+    })
+  })
+
   it('falls back to home for an unknown route', () => {
     expect(matchRoute('#/nope')).toEqual({ path: '/', params: {} })
     expect(matchRoute('#/log/a/b')).toEqual({ path: '/', params: {} })

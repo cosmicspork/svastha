@@ -19,14 +19,21 @@
   import Import from './routes/Import.svelte'
   import Correlate from './routes/Correlate.svelte'
   import Bloom from './components/Bloom.svelte'
+  import ShareView from './components/ShareView.svelte'
 
   let ready = $state(false)
   let vaultExists = $state(false)
 
+  // A share link (`#/s/…`) is a cold, account-less entry point: it must NOT
+  // touch the vault at all — no `hasVault` read, no onboarding, no unlock, no
+  // sync — so the normal boot is gated behind this. ShareView keeps everything
+  // in memory for the tab's life. Read once at mount: a share is a fresh tab.
+  const isShare = route.path === '/s/:frag'
+
   onMount(async () => {
     applyTheme(await loadTheme())
     await initSvastha()
-    vaultExists = await hasVault()
+    if (!isShare) vaultExists = await hasVault()
     ready = true
   })
 
@@ -42,6 +49,7 @@
   // lock/logout — reads `locked()` reactively, so this reruns on exactly
   // those transitions.
   $effect(() => {
+    if (isShare) return
     if (!ready || locked()) {
       syncTeardown()
       return
@@ -56,7 +64,13 @@
 </script>
 
 <main>
-  {#if !ready}
+  {#if isShare}
+    {#if ready}
+      <ShareView />
+    {:else}
+      <p class="muted" data-testid="loading">Loading…</p>
+    {/if}
+  {:else if !ready}
     <p class="muted" data-testid="loading">Loading…</p>
   {:else if !vaultExists}
     <Onboard onCreated={() => (vaultExists = true)} />
