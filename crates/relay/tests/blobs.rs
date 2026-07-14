@@ -200,6 +200,41 @@ async fn invalid_id_is_bad_request() {
 }
 
 #[tokio::test]
+async fn blob_above_axum_default_limit_round_trips() {
+    // Sealed medical documents routinely exceed axum's implicit 2 MB default
+    // body limit; the contract is MAX_BODY (16 MiB).
+    let app = router();
+    let alice = Identity::from_seed(b"alice");
+    let blob = vec![0x5a; 3 * 1024 * 1024];
+
+    let put = app
+        .clone()
+        .oneshot(signed(&alice, "PUT", "/v0/blobs/big", &blob, now()))
+        .await
+        .unwrap();
+    assert_eq!(put.status(), StatusCode::NO_CONTENT);
+
+    let get = app
+        .oneshot(signed(&alice, "GET", "/v0/blobs/big", b"", now()))
+        .await
+        .unwrap();
+    assert_eq!(get.status(), StatusCode::OK);
+    assert_eq!(body_bytes(get).await, blob);
+}
+
+#[tokio::test]
+async fn blob_above_max_body_is_rejected() {
+    let alice = Identity::from_seed(b"alice");
+    let blob = vec![0x5a; svastha_relay::auth::MAX_BODY + 1];
+
+    let put = router()
+        .oneshot(signed(&alice, "PUT", "/v0/blobs/huge", &blob, now()))
+        .await
+        .unwrap();
+    assert_eq!(put.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
 async fn filesystem_store_persists_across_restart() {
     let dir = tempfile::tempdir().unwrap();
     let alice = Identity::from_seed(b"alice");

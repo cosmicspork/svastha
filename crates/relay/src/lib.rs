@@ -24,6 +24,7 @@ pub mod store;
 use std::sync::Arc;
 
 use axum::{
+    extract::DefaultBodyLimit,
     middleware,
     routing::{get, put},
     Router,
@@ -107,6 +108,10 @@ pub fn app(
         .route("/v0/info", get(routes::info))
         .merge(authed)
         .with_state(state)
+        // Without this, axum's implicit 2 MB default caps request bodies before
+        // `auth::require_auth` ever reads them, and blobs between 2 MB and
+        // `MAX_BODY` are rejected 413 despite the 16 MiB contract.
+        .layer(DefaultBodyLimit::max(auth::MAX_BODY))
         // Outermost, so even rejections (401) carry CORS headers and the browser
         // can read them. Any origin is safe: auth is a per-request signature with
         // no cookies, so a hostile origin gains nothing.
