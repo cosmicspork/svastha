@@ -1116,14 +1116,14 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "svastha"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "svastha-core",
 ]
 
 [[package]]
 name = "svastha-core"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "bip39",
  "chacha20poly1305",
@@ -1160,7 +1160,7 @@ dependencies = [
 
 [[package]]
 name = "svastha-import"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "roxmltree",
  "serde",
@@ -1171,14 +1171,14 @@ dependencies = [
 
 [[package]]
 name = "svastha-node"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "svastha-core",
 ]
 
 [[package]]
 name = "svastha-relay"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "axum",
  "hex",
@@ -1196,7 +1196,7 @@ dependencies = [
 
 [[package]]
 name = "svastha-wasm"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "console_error_panic_hook",
  "hex",
