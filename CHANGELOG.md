@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.7.0](https://github.com/cosmicspork/svastha/compare/v0.6.0...v0.7.0) (2026-07-15)
+
+
+### Features
+
+* **core:** add Attachment event value for captured documents ([b88b67f](https://github.com/cosmicspork/svastha/commit/b88b67f711771608010761279ddb9c9413e66cef))
+* **devtool:** add headless re-import subcommand ([3589502](https://github.com/cosmicspork/svastha/commit/3589502c0becac003303d17b410f573c0f7bf701))
+* **devtool:** headless re-import subcommand ([c8c4ac1](https://github.com/cosmicspork/svastha/commit/c8c4ac1f07657666a29ce4b13496590dfc42e213))
+* import narrative visit notes and nest them under their encounter ([8912f54](https://github.com/cosmicspork/svastha/commit/8912f54946f8221bfa5d223d9487f06b168fce2d))
+* **import:** map C-CDA narrative prose sections to note events ([67f6291](https://github.com/cosmicspork/svastha/commit/67f6291dcfe5a05e350693d9ed1c716b5953af7a))
+* paper record attachments ([e2632d5](https://github.com/cosmicspork/svastha/commit/e2632d5aaa20552a2b16ccab94fb8e5430c3f60d))
+* **web:** add code dictionary settings controls ([21ee5b7](https://github.com/cosmicspork/svastha/commit/21ee5b73653bc01be089e947f856220aeabb8d6b))
+* **web:** capture paper records from the log bloom ([727994b](https://github.com/cosmicspork/svastha/commit/727994bf9046ffc04ff86697dfeab4d22b858e2e))
+* **web:** full-screen viewer for captured paper records ([bea54c2](https://github.com/cosmicspork/svastha/commit/bea54c26b5247bb562df1cdd19386dbae1f94d59))
+* **web:** generate offline clinical code dictionaries ([a26b79a](https://github.com/cosmicspork/svastha/commit/a26b79a0c008a376b13ba71b09c5977c5652e6f0))
+* **web:** include captured paper records in doctor shares ([89ed8bf](https://github.com/cosmicspork/svastha/commit/89ed8bf4fce5d81258d28ec676e785870dfbcf57))
+* **web:** nest imported visit notes under their encounter on the spine ([cd18b15](https://github.com/cosmicspork/svastha/commit/cd18b1586f4893a840d90579f91c82dc51d1dff3))
+* **web:** optional offline code dictionary ([3868ae6](https://github.com/cosmicspork/svastha/commit/3868ae68fc55437fc692a24b063bb0b58ae7d487))
+* **web:** resolve display names for null-display coded events ([96dddfd](https://github.com/cosmicspork/svastha/commit/96dddfd593d1ccf6395934deccf063caa1a19f5e))
+* **web:** resolve display names for null-display coded events ([000ea49](https://github.com/cosmicspork/svastha/commit/000ea493bf87353f887b0d6b75cd5e0fdbf5553a))
+* **web:** resolve labels from the offline code dictionary ([1aeaa6d](https://github.com/cosmicspork/svastha/commit/1aeaa6deed6be31f08cbb8e600fda9b7c2133c9a))
+* **web:** show the release version in Settings About ([04ccf8a](https://github.com/cosmicspork/svastha/commit/04ccf8ab65afbe8cb25216111b4569fdd5435580))
+* **web:** show the release version in Settings About ([f9494d5](https://github.com/cosmicspork/svastha/commit/f9494d50a991acf73cb63ebf74be86dc9155b633))
+* **web:** store and load the offline code dictionary ([90e3f75](https://github.com/cosmicspork/svastha/commit/90e3f7568d69adf2b6b3f57eb4ab22704561bb7c))
+* **web:** store and sync captured-document attachments ([6d8dfd9](https://github.com/cosmicspork/svastha/commit/6d8dfd96d0abe8c1cbc72f6e880bfdb197ef8e07))
+* **web:** warn when an imported document is too large to sync ([7af3de7](https://github.com/cosmicspork/svastha/commit/7af3de73d34d86f745f5f187e59e639c4780d254))
+
+
+### Bug Fixes
+
+* **web:** keep a summary document's notes standalone across visit days ([5a7008f](https://github.com/cosmicspork/svastha/commit/5a7008f8cb1c26c0cc03d58f15af4455e1d6cee6))
+* **web:** pin passkeys to the platform authenticator and surface ceremony failures ([fef08c0](https://github.com/cosmicspork/svastha/commit/fef08c0c1594aedffec52008f25cb3eccae828fa))
+* **web:** pin passkeys to the platform authenticator and surface ceremony failures ([bf056c9](https://github.com/cosmicspork/svastha/commit/bf056c98f37b1f79589474b70a1863ee29fddc37))
+* **web:** spine row titles for imported meds and stable chevron layout ([fd8bb79](https://github.com/cosmicspork/svastha/commit/fd8bb79d0b02a4044cf0dbe96eb20e43842caa72))
+* **web:** spine row titles for imported meds and stable chevron layout ([d8402f8](https://github.com/cosmicspork/svastha/commit/d8402f8d43a0b6b001eeaea13fe45c5a42a51048))
+
 ## [0.6.0](https://github.com/cosmicspork/svastha/compare/v0.5.1...v0.6.0) (2026-07-14)
 
 
