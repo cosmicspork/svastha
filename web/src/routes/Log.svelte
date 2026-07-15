@@ -6,6 +6,7 @@
   import ExerciseForm from '../components/log/ExerciseForm.svelte'
   import NoteForm from '../components/log/NoteForm.svelte'
   import MindfulnessForm from '../components/log/MindfulnessForm.svelte'
+  import PaperRecordForm from '../components/log/PaperRecordForm.svelte'
 
   let { kind }: { kind: string } = $props()
 </script>
@@ -24,6 +25,8 @@
   <NoteForm />
 {:else if kind === 'mind'}
   <MindfulnessForm />
+{:else if kind === 'paper'}
+  <PaperRecordForm />
 {:else}
   <p class="muted" data-testid="log-unknown">Nothing to log under “{kind}”.</p>
 {/if}
