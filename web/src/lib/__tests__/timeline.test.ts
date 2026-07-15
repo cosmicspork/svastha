@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildTimeline } from '../timeline'
+import { dayKey } from '../time'
 import type { StoredEvent } from '../events'
 import { MOOD, MOOD_NOTE, GRATITUDE, LOINC, UCUM } from '../codes'
 
@@ -209,6 +210,26 @@ describe('buildTimeline: visit-note nesting (decision C2)', () => {
     expect(days[0].entries.filter((e) => e.category === 'clinical').every((e) => e.notes.length === 0)).toBe(
       true,
     )
+  })
+
+  it('leaves a note standalone when its source doc matches only encounters on other days', () => {
+    // A longitudinal summary holds many encounters; its own narrative dated to
+    // none of them belongs to no single visit and must not be filed under an
+    // arbitrary one (which would move it off its own date).
+    const days = buildTimeline(
+      [
+        encounter('2026-03-01T09:00:00+00:00', 'summaryCcd'),
+        encounter('2026-03-05T09:00:00+00:00', 'summaryCcd'),
+        note('2026-03-10T00:00:00+00:00', 'Summary-level plan prose.', 'summaryCcd', 'Plan of Care'),
+      ],
+      'all',
+    )
+    const allEntries = days.flatMap((d) => d.entries)
+    expect(allEntries).toHaveLength(3)
+    const noteRow = allEntries.find((e) => e.category === 'note')
+    expect(noteRow).toBeDefined()
+    expect(dayKey(noteRow!.effective_at)).toBe('2026-03-10')
+    expect(allEntries.filter((e) => e.category === 'clinical').every((e) => e.notes.length === 0)).toBe(true)
   })
 
   it('caps a standalone note row to a first-line preview but keeps full prose in notes', () => {

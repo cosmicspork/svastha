@@ -325,17 +325,19 @@ function nestNotesUnderEncounters(built: Built[]): void {
 }
 
 function pickEncounterForNote(note: Built, encounters: Built[]): Built | undefined {
-  // (a) same source document as an encounter — prefer one on the note's own
-  // day when a document holds several (a CCD can), else the first.
+  const day = dayKey(note.entry.effective_at)
+  // (a) same source document AND same day. Day agreement is required even on a
+  // doc match: a longitudinal summary can hold dozens of encounters, and its
+  // narrative dated to none of them belongs to no single visit — filing it
+  // under an arbitrary one would move it off its own date. Unowned notes
+  // stand alone instead.
   if (note.sourceDoc) {
-    const docMatches = encounters.filter((e) => e.sourceDoc === note.sourceDoc)
-    if (docMatches.length > 0) {
-      const day = dayKey(note.entry.effective_at)
-      return docMatches.find((e) => dayKey(e.entry.effective_at) === day) ?? docMatches[0]
-    }
+    const owned = encounters.find(
+      (e) => e.sourceDoc === note.sourceDoc && dayKey(e.entry.effective_at) === day,
+    )
+    if (owned) return owned
   }
   // (b) else: nest only when exactly one encounter shares the note's day.
-  const day = dayKey(note.entry.effective_at)
   const sameDay = encounters.filter((e) => dayKey(e.entry.effective_at) === day)
   return sameDay.length === 1 ? sameDay[0] : undefined
 }
