@@ -67,6 +67,30 @@ describe('buildSummary: problems', () => {
     const { problems } = buildSummary(events)
     expect(problems[0].label).toBe('ICD-10-CM E11.9')
   })
+
+  it('resolves a display-less condition from the same code named on a different event', () => {
+    const icd10 = 'http://hl7.org/fhir/sid/icd-10-cm'
+    const events = [
+      ev({ kind: 'condition', code: { system: icd10, code: 'E11.9', display: 'Type 2 diabetes mellitus' }, effective_at: '2019-01-01T00:00:00+00:00' }),
+      ev({ kind: 'condition', code: { system: icd10, code: 'E11.9' }, effective_at: '2021-01-01T00:00:00+00:00' }),
+    ]
+    const { problems } = buildSummary(events)
+    expect(problems).toHaveLength(1)
+    expect(problems[0].label).toBe('Type 2 diabetes mellitus')
+  })
+
+  it('picks the most frequent display, tie-broken shortest-then-lexicographic, under conflicting names', () => {
+    const loincBmi = { system: LOINC, code: '39156-5' }
+    const events = [
+      ev({ kind: 'condition', code: { ...loincBmi, display: 'Body mass index (BMI) [Ratio]' }, effective_at: '2019-01-01T00:00:00+00:00' }),
+      ev({ kind: 'condition', code: { ...loincBmi, display: 'BMI' }, effective_at: '2020-01-01T00:00:00+00:00' }),
+      ev({ kind: 'condition', code: { ...loincBmi, display: 'BMI' }, effective_at: '2021-01-01T00:00:00+00:00' }),
+      ev({ kind: 'condition', code: loincBmi, effective_at: '2022-01-01T00:00:00+00:00' }),
+    ]
+    const { problems } = buildSummary(events)
+    expect(problems).toHaveLength(1)
+    expect(problems[0].label).toBe('BMI')
+  })
 })
 
 describe('buildSummary: allergies', () => {

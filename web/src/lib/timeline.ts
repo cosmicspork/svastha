@@ -13,6 +13,7 @@ import {
   type Code,
 } from './codes'
 import { categorize, type Category } from './category'
+import { buildCodeNameIndex, resolveDisplay } from './code-names'
 import type { EventKind } from './drafts'
 import type { StoredEvent } from './events'
 import { dayKey, formatDay } from './time'
@@ -85,7 +86,7 @@ function textOf(e: Ev): string | null {
 
 const VITAL_LABELS = new Map(VITALS.map((v) => [v.loinc.code, v.label]))
 
-function formatVitals(events: Ev[]): { label: string; value: string } {
+function formatVitals(events: Ev[], nameIndex: Map<string, string>): { label: string; value: string } {
   const systolic = events.find((e) => e.code?.code === BP_SYSTOLIC.code)
   const diastolic = events.find((e) => e.code?.code === BP_DIASTOLIC.code)
   const parts: { label: string; value: string }[] = []
@@ -100,7 +101,11 @@ function formatVitals(events: Ev[]): { label: string; value: string } {
     const q = quantityOf(e)
     if (!q) continue
     parts.push({
-      label: VITAL_LABELS.get(e.code?.code ?? '') ?? e.code?.display ?? 'Vital',
+      label:
+        VITAL_LABELS.get(e.code?.code ?? '') ??
+        e.code?.display ??
+        resolveDisplay(nameIndex, e.code) ??
+        'Vital',
       value: renderQuantity(q),
     })
   }
@@ -109,11 +114,14 @@ function formatVitals(events: Ev[]): { label: string; value: string } {
   return { label: 'Vitals', value: parts.map((p) => `${p.label} ${p.value}`).join(' · ') }
 }
 
-function formatSymptoms(events: Ev[]): { label: string; value: string; flare: boolean } {
+function formatSymptoms(
+  events: Ev[],
+  nameIndex: Map<string, string>,
+): { label: string; value: string; flare: boolean } {
   const names: string[] = []
   let maxSeverity: number | null = null
   for (const e of events) {
-    names.push(e.code?.display ?? textOf(e) ?? 'Symptom')
+    names.push(e.code?.display ?? resolveDisplay(nameIndex, e.code) ?? textOf(e) ?? 'Symptom')
     const q = quantityOf(e)
     if (q) {
       const n = Number(q.value)
@@ -164,12 +172,13 @@ function formatMind(events: Ev[]): { label: string; value: string } {
 function formatGroup(
   category: Category,
   events: Ev[],
+  nameIndex: Map<string, string>,
 ): Omit<TimelineEntry, 'effective_at' | 'category' | 'eventIds' | 'detail'> {
   switch (category) {
     case 'vital':
-      return { ...formatVitals(events), flare: false }
+      return { ...formatVitals(events, nameIndex), flare: false }
     case 'symptom':
-      return formatSymptoms(events)
+      return formatSymptoms(events, nameIndex)
     case 'exercise':
       return { ...formatExercise(events), flare: false }
     case 'mind':
@@ -189,7 +198,7 @@ function formatGroup(
       // the name in code.display (and sometimes the dose as a quantity), so
       // without this fallback an imported med renders as a blank row.
       const first = events[0]
-      const label = first.code?.display ?? first.kind.replace(/_/g, ' ')
+      const label = first.code?.display ?? resolveDisplay(nameIndex, first.code) ?? first.kind.replace(/_/g, ' ')
       const q = quantityOf(first)
       const coding = first.code ? `${shortenSystem(first.code.system)} ${first.code.code}` : null
       const hint = coding && coding !== label ? coding : undefined
@@ -203,7 +212,8 @@ function formatGroup(
       const first = events[0]
       const coded = first.value && 'coded' in first.value ? first.value.coded : null
       const humanKind = first.kind.replace(/_/g, ' ')
-      const label = first.code?.display ?? coded?.display ?? humanKind
+      const resolved = resolveDisplay(nameIndex, first.code) ?? resolveDisplay(nameIndex, coded)
+      const label = first.code?.display ?? coded?.display ?? resolved ?? humanKind
       const q = quantityOf(first)
       const value = textOf(first) ?? (q ? renderQuantity(q) : '')
 
@@ -223,6 +233,11 @@ function formatGroup(
 /** Group, sort (days desc, entries desc within a day), and format. Undated
  * events can't be placed on a timeline and are skipped. */
 export function buildTimeline(events: StoredEvent[], filter: Category | 'all'): TimelineDay[] {
+  // Built once from the full event set passed in, before filtering — a code's
+  // display can live on an event of a different category or date than the row
+  // rendering it (e.g. a lab named once at import, repeated undisplayed
+  // afterward).
+  const nameIndex = buildCodeNameIndex(events)
   const groups = new Map<string, { effective_at: string; category: Category; events: Ev[] }>()
   for (const { event } of events) {
     if (!event.effective_at) continue
@@ -250,7 +265,7 @@ export function buildTimeline(events: StoredEvent[], filter: Category | 'all'): 
         source: first.provenance.source,
         sourceDoc: first.provenance.source_doc,
       },
-      ...formatGroup(group.category, group.events),
+      ...formatGroup(group.category, group.events, nameIndex),
     })
     days.set(key, day)
   }
