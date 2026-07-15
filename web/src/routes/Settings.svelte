@@ -15,6 +15,7 @@
     passkeysSupported,
     enrollPasskey as createPasskey,
     PasskeyNotSupportedError,
+    PasskeyCeremonyError,
   } from '../lib/passkey'
   import { get, put, del, getAll } from '../lib/db'
   import Sheet from '../components/Sheet.svelte'
@@ -122,6 +123,7 @@
   let passkeys = $state<PasskeyRecord[]>([])
   let passkeyBusy = $state(false)
   let passkeyError = $state('')
+  let passkeyNotice = $state('')
   let confirmRemove = $state<PasskeyRecord | null>(null)
 
   onMount(async () => {
@@ -130,12 +132,12 @@
 
   async function addPasskey() {
     passkeyError = ''
+    passkeyNotice = ''
     const { identity, vaultKey, wrapKey } = session
     if (!identity || !vaultKey || !wrapKey) return
     passkeyBusy = true
     try {
       const created = await createPasskey(passkeys.map((p) => p.credId))
-      if (!created) return // user cancelled
       const label = `Passkey · ${created.credId.slice(0, 6)}`
       const mk = await storePasskey(
         { identity, vaultKey, wrapKey },
@@ -147,8 +149,14 @@
       session.wrapKey = mk
       passkeys = await listPasskeys()
     } catch (err) {
-      passkeyError =
-        err instanceof PasskeyNotSupportedError ? err.message : 'Could not add a passkey — try again.'
+      if (err instanceof PasskeyCeremonyError) {
+        // A cancel and a platform refusal look identical to WebAuthn, so name
+        // the outcome and show the underlying reason rather than guessing.
+        passkeyNotice = `No passkey was added (${err.detail}).`
+      } else {
+        passkeyError =
+          err instanceof PasskeyNotSupportedError ? err.message : 'Could not add a passkey — try again.'
+      }
     } finally {
       passkeyBusy = false
     }
@@ -486,6 +494,9 @@
     {/if}
     {#if passkeyError}
       <p class="error" data-testid="passkey-error">{passkeyError}</p>
+    {/if}
+    {#if passkeyNotice}
+      <p class="muted" data-testid="passkey-notice">{passkeyNotice}</p>
     {/if}
     <button onclick={addPasskey} disabled={passkeyBusy} data-testid="add-passkey">
       {passkeyBusy ? 'Follow the prompts…' : 'Add a passkey'}

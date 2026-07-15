@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { unlock, unlockWithPasskey, listPasskeys, wipe, WrongPassphraseError, PasskeyUnlockError } from '../lib/keyvault'
-  import { passkeysSupported, authenticate, PasskeyNotSupportedError } from '../lib/passkey'
+  import { passkeysSupported, authenticate, PasskeyNotSupportedError, PasskeyCeremonyError } from '../lib/passkey'
   import { setSession } from '../lib/session.svelte'
   import { get } from '../lib/db'
   import Sheet from '../components/Sheet.svelte'
@@ -9,6 +9,7 @@
   let passphrase = $state('')
   let showPassphrase = $state(false)
   let error = $state('')
+  let notice = $state('')
   let busy = $state(false)
   let input = $state<HTMLInputElement>()
   let showForgotSheet = $state(false)
@@ -67,17 +68,23 @@
 
   async function unlockWithPasskeyFlow() {
     error = ''
+    notice = ''
     busy = true
     try {
       const asserted = await authenticate(passkeyCredIds)
-      if (!asserted) return // user cancelled
       const { identity, vaultKey, wrapKey } = await unlockWithPasskey(asserted.credId, asserted.secret)
       setSession(identity, vaultKey, wrapKey)
     } catch (err) {
-      error =
-        err instanceof PasskeyUnlockError || err instanceof PasskeyNotSupportedError
-          ? err.message
-          : 'Something went wrong opening your vault — try again.'
+      if (err instanceof PasskeyCeremonyError) {
+        // Cancel and platform refusal are the same error to WebAuthn; show the
+        // reason (muted, not alarming) so an iOS failure isn't a silent no-op.
+        notice = `The vault stays locked (${err.detail}). Your passphrase always works.`
+      } else {
+        error =
+          err instanceof PasskeyUnlockError || err instanceof PasskeyNotSupportedError
+            ? err.message
+            : 'Something went wrong opening your vault — try again.'
+      }
     } finally {
       busy = false
     }
@@ -179,6 +186,9 @@
     >
       Unlock with passkey
     </button>
+    {#if notice}
+      <p class="muted notice" data-testid="unlock-passkey-notice">{notice}</p>
+    {/if}
   {/if}
 
   <button type="button" class="ghost forgot" onclick={() => (showForgotSheet = true)} data-testid="forgot-passphrase">
@@ -286,6 +296,12 @@
   .passkey {
     width: 100%;
     margin-top: var(--space-3);
+  }
+
+  .notice {
+    margin-top: var(--space-2);
+    font-size: var(--text-sm);
+    text-align: center;
   }
 
   .forgot {
