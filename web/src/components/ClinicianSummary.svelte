@@ -3,6 +3,7 @@
   import { allEvents, type StoredEvent } from '../lib/events'
   import { allCurationByPrefix } from '../lib/curation'
   import { buildSummary } from '../lib/summary'
+  import { loadDictionaryIndex, dictionaryStatus } from '../lib/dictionary'
   import SummarySection from './SummarySection.svelte'
 
   // Same contract as Spine.svelte: `readonly` (the person screen, over a
@@ -19,7 +20,19 @@
   let loaded = $state(false)
 
   const events = $derived(readonly ? (providedEvents ?? []) : ownEvents)
-  const summary = $derived(buildSummary(events, readonly ? {} : { hiddenIds }))
+
+  // The offline code dictionary (see lib/dictionary.ts): empty unless enabled.
+  // Hydrated once and re-hydrated when the Settings toggle bumps the version.
+  let dictionary = $state<Map<string, string>>(new Map())
+  $effect(() => {
+    void $dictionaryStatus.version
+    void $dictionaryStatus.enabled
+    void loadDictionaryIndex().then((d) => (dictionary = d))
+  })
+
+  const summary = $derived(
+    buildSummary(events, readonly ? { dictionary } : { hiddenIds, dictionary }),
+  )
 
   onMount(async () => {
     if (readonly) {

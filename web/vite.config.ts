@@ -9,7 +9,12 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       workbox: {
+        // The offline code dictionary under /dict/ is opt-in and multi-MB; it
+        // must NOT ride the install-time precache. JSON is already outside
+        // globPatterns, and this ignore makes that exclusion explicit and
+        // future-proof (dictionary.ts fetches these on demand instead).
         globPatterns: ['**/*.{js,css,html,wasm,woff2,png,svg,ico}'],
+        globIgnores: ['**/dict/**'],
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
       },
       manifest: {

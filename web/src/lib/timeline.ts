@@ -86,7 +86,11 @@ function textOf(e: Ev): string | null {
 
 const VITAL_LABELS = new Map(VITALS.map((v) => [v.loinc.code, v.label]))
 
-function formatVitals(events: Ev[], nameIndex: Map<string, string>): { label: string; value: string } {
+function formatVitals(
+  events: Ev[],
+  nameIndex: Map<string, string>,
+  dictionary: Map<string, string>,
+): { label: string; value: string } {
   const systolic = events.find((e) => e.code?.code === BP_SYSTOLIC.code)
   const diastolic = events.find((e) => e.code?.code === BP_DIASTOLIC.code)
   const parts: { label: string; value: string }[] = []
@@ -104,7 +108,7 @@ function formatVitals(events: Ev[], nameIndex: Map<string, string>): { label: st
       label:
         VITAL_LABELS.get(e.code?.code ?? '') ??
         e.code?.display ??
-        resolveDisplay(nameIndex, e.code) ??
+        resolveDisplay(nameIndex, e.code, dictionary) ??
         'Vital',
       value: renderQuantity(q),
     })
@@ -117,11 +121,12 @@ function formatVitals(events: Ev[], nameIndex: Map<string, string>): { label: st
 function formatSymptoms(
   events: Ev[],
   nameIndex: Map<string, string>,
+  dictionary: Map<string, string>,
 ): { label: string; value: string; flare: boolean } {
   const names: string[] = []
   let maxSeverity: number | null = null
   for (const e of events) {
-    names.push(e.code?.display ?? resolveDisplay(nameIndex, e.code) ?? textOf(e) ?? 'Symptom')
+    names.push(e.code?.display ?? resolveDisplay(nameIndex, e.code, dictionary) ?? textOf(e) ?? 'Symptom')
     const q = quantityOf(e)
     if (q) {
       const n = Number(q.value)
@@ -173,12 +178,13 @@ function formatGroup(
   category: Category,
   events: Ev[],
   nameIndex: Map<string, string>,
+  dictionary: Map<string, string>,
 ): Omit<TimelineEntry, 'effective_at' | 'category' | 'eventIds' | 'detail'> {
   switch (category) {
     case 'vital':
-      return { ...formatVitals(events, nameIndex), flare: false }
+      return { ...formatVitals(events, nameIndex, dictionary), flare: false }
     case 'symptom':
-      return formatSymptoms(events, nameIndex)
+      return formatSymptoms(events, nameIndex, dictionary)
     case 'exercise':
       return { ...formatExercise(events), flare: false }
     case 'mind':
@@ -198,7 +204,8 @@ function formatGroup(
       // the name in code.display (and sometimes the dose as a quantity), so
       // without this fallback an imported med renders as a blank row.
       const first = events[0]
-      const label = first.code?.display ?? resolveDisplay(nameIndex, first.code) ?? first.kind.replace(/_/g, ' ')
+      const label =
+        first.code?.display ?? resolveDisplay(nameIndex, first.code, dictionary) ?? first.kind.replace(/_/g, ' ')
       const q = quantityOf(first)
       const coding = first.code ? `${shortenSystem(first.code.system)} ${first.code.code}` : null
       const hint = coding && coding !== label ? coding : undefined
@@ -212,7 +219,8 @@ function formatGroup(
       const first = events[0]
       const coded = first.value && 'coded' in first.value ? first.value.coded : null
       const humanKind = first.kind.replace(/_/g, ' ')
-      const resolved = resolveDisplay(nameIndex, first.code) ?? resolveDisplay(nameIndex, coded)
+      const resolved =
+        resolveDisplay(nameIndex, first.code, dictionary) ?? resolveDisplay(nameIndex, coded, dictionary)
       const label = first.code?.display ?? coded?.display ?? resolved ?? humanKind
       const q = quantityOf(first)
       const value = textOf(first) ?? (q ? renderQuantity(q) : '')
@@ -232,7 +240,14 @@ function formatGroup(
 
 /** Group, sort (days desc, entries desc within a day), and format. Undated
  * events can't be placed on a timeline and are skipped. */
-export function buildTimeline(events: StoredEvent[], filter: Category | 'all'): TimelineDay[] {
+export function buildTimeline(
+  events: StoredEvent[],
+  filter: Category | 'all',
+  // The offline code dictionary (see dictionary.ts), hydrated once per session
+  // and passed in — never rebuilt here. Empty by default (feature off), which
+  // reduces resolveDisplay's dictionary layer to a no-op.
+  dictionary: Map<string, string> = new Map(),
+): TimelineDay[] {
   // Built once from the full event set passed in, before filtering — a code's
   // display can live on an event of a different category or date than the row
   // rendering it (e.g. a lab named once at import, repeated undisplayed
@@ -265,7 +280,7 @@ export function buildTimeline(events: StoredEvent[], filter: Category | 'all'): 
         source: first.provenance.source,
         sourceDoc: first.provenance.source_doc,
       },
-      ...formatGroup(group.category, group.events, nameIndex),
+      ...formatGroup(group.category, group.events, nameIndex, dictionary),
     })
     days.set(key, day)
   }

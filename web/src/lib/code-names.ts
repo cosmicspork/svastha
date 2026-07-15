@@ -60,10 +60,20 @@ export function buildCodeNameIndex(events: StoredEvent[]): Map<string, string> {
   return index
 }
 
-/** Look up a resolved display for a Code. Returns null when the index has
- * nothing for it — callers should check the code's own `display` first,
- * since a code's own display always wins over a borrowed one. */
-export function resolveDisplay(index: Map<string, string>, code: Code | null | undefined): string | null {
+/** Look up a resolved display for a Code. Returns null when nothing names it —
+ * callers should check the code's own `display` first, since a code's own
+ * display always wins over a borrowed one.
+ *
+ * The optional `dictionary` is the offline code dictionary (see
+ * dictionary.ts): a strictly lower-priority fallback than the vault index, so a
+ * name borrowed from the user's own records always beats the generic reference
+ * one, and both beat the raw "LOINC 39156-5" the callers render on a miss. */
+export function resolveDisplay(
+  index: Map<string, string>,
+  code: Code | null | undefined,
+  dictionary?: Map<string, string>,
+): string | null {
   if (!code) return null
-  return index.get(keyFor(code)) ?? null
+  const key = keyFor(code)
+  return index.get(key) ?? dictionary?.get(key) ?? null
 }

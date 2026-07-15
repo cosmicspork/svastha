@@ -51,6 +51,35 @@ describe('buildTimeline: mind category formatting', () => {
   })
 })
 
+describe('buildTimeline: offline dictionary layering', () => {
+  const at = '2026-02-01T10:00:00+00:00'
+  const ICD = 'http://hl7.org/fhir/sid/icd-10-cm'
+
+  it('labels an unnamed coded condition from the dictionary, below the vault index', () => {
+    const events = [ev({ kind: 'condition', effective_at: at, code: { system: ICD, code: 'E11.9' } })]
+    const dict = new Map([[`${ICD}|E11.9`, 'Type 2 diabetes mellitus without complications']])
+    // Without the dictionary it degrades to the shortened coding hint / kind.
+    expect(buildTimeline(events, 'all')[0].entries[0].label).toBe('condition')
+    // With it, the dictionary name surfaces.
+    expect(buildTimeline(events, 'all', dict)[0].entries[0].label).toBe(
+      'Type 2 diabetes mellitus without complications',
+    )
+  })
+
+  it('lets a name from the user own records win over the dictionary', () => {
+    const events = [
+      ev({ kind: 'condition', effective_at: at, code: { system: ICD, code: 'E11.9', display: 'My diabetes' } }),
+      ev({ kind: 'condition', effective_at: '2026-02-02T10:00:00+00:00', code: { system: ICD, code: 'E11.9' } }),
+    ]
+    const dict = new Map([[`${ICD}|E11.9`, 'Type 2 diabetes mellitus without complications']])
+    // The second (unnamed) event borrows the first event's display via the
+    // vault index, not the dictionary.
+    for (const day of buildTimeline(events, 'all', dict)) {
+      for (const entry of day.entries) expect(entry.label).toBe('My diabetes')
+    }
+  })
+})
+
 describe('buildTimeline: med/food/note formatting', () => {
   const at = '2026-01-01T10:00:00+00:00'
 

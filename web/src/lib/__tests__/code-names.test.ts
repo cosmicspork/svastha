@@ -73,3 +73,24 @@ describe('buildCodeNameIndex', () => {
     expect(resolveDisplay(index, undefined)).toBeNull()
   })
 })
+
+describe('resolveDisplay dictionary layering', () => {
+  const key = `${LOINC}|39156-5`
+  const CODE = { system: LOINC, code: '39156-5' }
+
+  it('uses the dictionary when the vault index has nothing', () => {
+    const dict = new Map([[key, 'Body mass index']])
+    expect(resolveDisplay(new Map(), CODE, dict)).toBe('Body mass index')
+  })
+
+  it('prefers the vault index over the dictionary for the same code', () => {
+    const index = new Map([[key, 'BMI (from my records)']])
+    const dict = new Map([[key, 'Body mass index']])
+    expect(resolveDisplay(index, CODE, dict)).toBe('BMI (from my records)')
+  })
+
+  it('returns null (raw fallback) when neither index nor dictionary names it', () => {
+    expect(resolveDisplay(new Map(), CODE, new Map())).toBeNull()
+    expect(resolveDisplay(new Map(), CODE)).toBeNull()
+  })
+})

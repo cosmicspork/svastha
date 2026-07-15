@@ -48,6 +48,14 @@ export const MIGRATIONS: ((db: IDBDatabase, tx: IDBTransaction) => void)[] = [
   (db) => {
     db.createObjectStore('doctor_shares', { keyPath: 'token' })
   },
+  // v5: the optional offline code dictionary (see lib/dictionary.ts) — one row
+  // per terminology system, each holding that system's whole `{code: name}` map
+  // as a single blob. Public reference data, never synced and never sensitive;
+  // stored as per-system blobs (not row-per-code) so a download is one put, a
+  // removal one clear, and unlock hydrates the lot with a single getAll.
+  (db) => {
+    db.createObjectStore('dictionary', { keyPath: 'system' })
+  },
 ]
 
 function requestToPromise<T>(req: IDBRequest<T>): Promise<T> {
@@ -108,6 +116,11 @@ export async function put(
 export async function del(storeName: string, key: IDBValidKey): Promise<void> {
   const s = await store(storeName, 'readwrite')
   await requestToPromise(s.delete(key))
+}
+
+export async function clear(storeName: string): Promise<void> {
+  const s = await store(storeName, 'readwrite')
+  await requestToPromise(s.clear())
 }
 
 export async function getAll<T>(storeName: string): Promise<T[]> {
