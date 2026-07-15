@@ -72,11 +72,26 @@ ongoing, read-only sharing between two people in one household.** Each vault
 keeps a single writer — the owner logs, the other person reads — so no
 multi-writer merge machinery is needed yet. The relay learns only the grant edge
 (routing metadata, consistent with zero-knowledge); the wrapped vault key travels
-through a store-and-forward mailbox. Filtered grants, terms, and the research
+through a store-and-forward mailbox. Richer grant terms and the research
 marketplace remain later work, and revocation is still key rotation with the same
 caveat: it cannot retract already-decrypted data, and the UI must say so. (The
 relay's grant and mailbox endpoints are specified in the Relay section below;
 the wire contract is in `spec/README.md`.)
+
+The second shipped slice is the **doctor share**: a *scoped, point-in-time*
+share for a recipient with no Svastha identity — the person across the desk at
+an appointment. The owner filters the record client-side (categories and a date
+range), re-seals the subset under a fresh per-share key, and uploads it as one
+sealed bundle the recipient fetches with an unguessable bearer token; the
+per-share key travels only in the link's URL fragment (rendered as a QR
+client-side), which browsers never send to any server. The vault key never
+moves, and the relay holds only opaque ciphertext either way. Shares expire (7
+days by default; the relay clamps and eventually sweeps them) and can be revoked
+early, with the standard caveat that revocation cannot retract what was already
+opened. Grants and shares are different trust shapes on the same zero-knowledge
+relay: a grant is an ongoing feed to a *keyed* identity, a share is a bounded
+handoff to a *keyless* one. The wire contract is `spec/README.md`'s "Shares"
+section.
 
 Identity exchange for this slice is a single self-describing code —
 `svastha1:{ed25519_hex}:{x25519_hex}:{label}` — shown as a QR and as
@@ -172,6 +187,19 @@ heavy and nested to be the internal model for a local-first event log. Internall
 Svastha keeps a lean, FHIR-informed shape and reuses the standard code systems
 (LOINC, RxNorm, SNOMED, CVX).
 
+**Code display names are resolved at render time, never written back.** A
+`Code`'s `display` string is part of the signed canonical content, so touching
+it on a stored event would mint a new id — and most imported codes arrive with
+no display at all. The web client therefore layers name resolution entirely in
+presentation: the event's own display → the same code named elsewhere in the
+vault → an **optional, opt-in offline dictionary** → the raw `system code`
+fallback. The dictionary is downloaded wholesale from the app's own origin and
+consulted only in memory — there is never a per-code or third-party lookup,
+because which codes a vault holds is itself health data. It bundles only
+freely-redistributable terminologies (LOINC, RxNorm's prescribable subset,
+ICD-10-CM, CVX); SNOMED CT and CPT names are excluded on licensing grounds and
+fall through to the earlier layers.
+
 - **Import.** US EHR exports arrive as Epic C-CDA (in IHE XDM packages, one
   Continuity of Care Document plus many per-encounter Summary of Care documents)
   or as FHIR R4 bundles (e.g. FollowMyHealth). Import runs entirely client-side,
@@ -186,15 +214,29 @@ Svastha keeps a lean, FHIR-informed shape and reuses the standard code systems
   "Sync and backup" below) — the mapping will keep improving, and the blob is
   what lets a fact be re-derived later without the original export.
 
+  Import is not only structured facts: the narrative sections a clinician
+  actually writes (plan of care, assessment, reason for visit, physical
+  findings, progress notes) map to `document` events with text values, dated to
+  the visit they describe, so the prose context travels with the coded record.
+
   `crates/import` is deliberately its own crate, not part of `core`: EHR mapping
   is churny domain logic (new section quirks, evolving code-system tables) that
   will keep changing long after the trust contract is frozen, and `core` stays
   the frozen audit surface — the canonical encoding and content-id rules never
   move to accommodate a parser fix.
-- **India (later).** Document ingestion with on-device OCR (native OS OCR through
-  the wrapper for quality, human-in-the-loop for handwriting). ABDM is
-  consent-federated rather than self-custodial; it is a future boundary adapter,
-  and its consent-artifact schema is prior art for the grant model.
+- **Paper records.** A handed-over paper document (a specialist's notes, a
+  printed med list — the common case in India) is photographed in the app,
+  downscaled on-device, and stored as a `document` event whose `attachment`
+  value content-addresses the encrypted image blob (`att-*`, see "Sync and
+  backup" below); a caption rides as a sibling text event. The photo is a
+  first-class record — synced, exported, viewable in-app, and includable in
+  doctor shares. **OCR stays out of the web app by design**: reading the
+  photo's contents belongs to native OS OCR through the wrapper or the
+  processing node (human-in-the-loop for handwriting), inside the user's trust
+  boundary.
+- **India (later).** ABDM is consent-federated rather than self-custodial; it is
+  a future boundary adapter, and its consent-artifact schema is prior art for
+  the grant model.
 
 ## Relay (`crates/relay`)
 
@@ -385,10 +427,18 @@ power users can run everything locally, from the same codebase.
   mailbox); client-side import of US EHR exports (Epic C-CDA in IHE XDM packages,
   FHIR R4 bundles) keeping verbatim provenance blobs; correlation timeline over a
   thin last-writer-wins curation overlay.
-- **v2.** India document ingestion (OCR, handwriting, human-in-the-loop).
-- **Later.** Multi-writer sync, filtered grants and terms (family and caregiver
-  access beyond the household pair), the research marketplace, ABDM, native
-  device and health-app integration.
+- **Shipped since.** Passkey unlock (WebAuthn PRF over the keyvault's MK
+  indirection, platform authenticator only); the doctor share and its clinician
+  summary view; narrative-notes import (visit prose folded under its encounter);
+  paper-record capture with the `attachment` value, encrypted `att-*` blobs, and
+  an in-app viewer; render-time code display names with the opt-in offline
+  dictionary.
+- **Next.** OCR for captured documents (native OS OCR through the wrapper, or
+  the processing node; human-in-the-loop for handwriting); PDF attachments;
+  imported source documents rendered through the attachment viewer.
+- **Later.** Multi-writer sync, richer grant terms (family and caregiver access
+  beyond the household pair), the research marketplace, ABDM, native device and
+  health-app integration.
 
 ## Keep in sync
 

@@ -19,5 +19,19 @@ See the repository root `README.md` and `docs/ARCHITECTURE.md`.
 - **Connect a relay.** Under Settings, enter your relay's URL to enable backup
   and multi-device sync. See the root `README.md` for a `docker run` one-liner
   to self-host one.
+- **Add a passkey (optional).** Under Settings → Passkeys, unlock with Face ID /
+  Touch ID instead of typing the passphrase. The passphrase always still works,
+  and the seed phrase remains the only recovery root.
+- **Import your records.** Settings → Import records accepts US EHR exports
+  (Epic IHE XDM zips, C-CDA XML, FHIR R4 bundles). Re-importing is safe —
+  duplicates collapse automatically.
+- **Capture paper records.** The log button's "Paper record" petal photographs
+  a handed-over document (a specialist's notes, a printed med list) straight
+  into the encrypted record, with a caption and date.
+- **Name the codes (optional).** Settings → Code dictionary downloads an
+  offline dictionary that puts human names on lab/med/condition codes your
+  documents left unnamed. Everything resolves locally; nothing is looked up
+  per-code.
 - **Share.** On the Share screen, exchange codes with a trusted person to grant
-  them read-only access to your whole vault.
+  them ongoing read-only access to your whole vault — or create a doctor share:
+  a scoped, expiring link (and QR) that opens without an account.
