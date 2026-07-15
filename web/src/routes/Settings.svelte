@@ -52,6 +52,16 @@
     type ImportSummary,
   } from '../lib/export'
   import { fromHex } from '../lib/hex'
+  import {
+    dictionaryStatus,
+    fetchManifest,
+    manifestBytes,
+    downloadDictionary,
+    removeDictionary,
+    refreshDictionaryStatus,
+    checkForUpdate,
+    type DictManifest,
+  } from '../lib/dictionary'
 
   /** Show a public key as spaced hex byte-groups, truncated — enough to eyeball
    * a match, not the full 64-char key. */
@@ -214,6 +224,69 @@
       }
     }
   })
+
+  // --- code dictionary (offline names for coded records; see
+  // lib/dictionary.ts). Opt-in; files come only from this app's own origin. ---
+  let dictManifest = $state<DictManifest | null>(null)
+  let dictBusy = $state(false)
+  let dictError = $state('')
+  let dictUpdate = $state('')
+
+  onMount(refreshDictionaryStatus)
+
+  function formatMb(bytes: number): string {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  }
+
+  async function previewDictionary() {
+    dictError = ''
+    dictUpdate = ''
+    dictBusy = true
+    try {
+      dictManifest = await fetchManifest()
+    } catch (err) {
+      dictError = err instanceof Error ? err.message : 'Could not reach the dictionary.'
+    } finally {
+      dictBusy = false
+    }
+  }
+
+  async function enableDictionary() {
+    dictError = ''
+    dictBusy = true
+    try {
+      await downloadDictionary(dictManifest ?? (await fetchManifest()))
+      dictManifest = null
+    } catch (err) {
+      dictError = err instanceof Error ? err.message : 'Download failed.'
+    } finally {
+      dictBusy = false
+    }
+  }
+
+  async function removeDict() {
+    dictError = ''
+    dictUpdate = ''
+    await removeDictionary()
+    dictManifest = null
+  }
+
+  async function checkDictUpdate() {
+    dictError = ''
+    dictUpdate = ''
+    dictBusy = true
+    try {
+      const r = await checkForUpdate()
+      dictUpdate = r.updateAvailable
+        ? `An update is available (${r.latest}).`
+        : `You have the latest version (${r.latest}).`
+      if (r.updateAvailable) dictManifest = await fetchManifest()
+    } catch (err) {
+      dictError = err instanceof Error ? err.message : 'Could not check for updates.'
+    } finally {
+      dictBusy = false
+    }
+  }
 
   const version = contract_version()
 
@@ -589,6 +662,70 @@
 </section>
 
 <section class="stack">
+  <h2>Code dictionary</h2>
+  <p class="muted">
+    Optional offline names for lab, medication, diagnosis, and vaccine codes that were imported
+    without a readable label. The files download only from this app — no code is ever looked up
+    against an outside service — and work offline once stored.
+  </p>
+
+  {#if $dictionaryStatus.enabled}
+    <dl>
+      <dt>Version</dt>
+      <dd class="data" data-testid="dict-version">{$dictionaryStatus.version}</dd>
+      <dt>Names</dt>
+      <dd data-testid="dict-entry-count">{$dictionaryStatus.entryCount.toLocaleString()}</dd>
+    </dl>
+    {#if dictUpdate}
+      <p class="muted" data-testid="dict-update-status">{dictUpdate}</p>
+    {/if}
+    <div class="swatches">
+      <button onclick={checkDictUpdate} disabled={dictBusy} data-testid="dict-check-update">
+        {dictBusy ? 'Checking…' : 'Check for updates'}
+      </button>
+      {#if dictManifest}
+        <button class="primary" onclick={enableDictionary} disabled={dictBusy} data-testid="dict-update">
+          {dictBusy ? 'Updating…' : `Update (${formatMb(manifestBytes(dictManifest))})`}
+        </button>
+      {/if}
+      <button class="ghost" onclick={removeDict} disabled={dictBusy} data-testid="dict-remove">
+        Remove
+      </button>
+    </div>
+  {:else if $dictionaryStatus.downloading}
+    <p data-testid="dict-progress">
+      Downloading{$dictionaryStatus.progress
+        ? ` ${$dictionaryStatus.progress.done} of ${$dictionaryStatus.progress.total}`
+        : ''}…
+    </p>
+  {:else if dictManifest}
+    <p data-testid="dict-size">
+      {formatMb(manifestBytes(dictManifest))} across {dictManifest.files.length} code sets.
+    </p>
+    <button class="primary" onclick={enableDictionary} disabled={dictBusy} data-testid="dict-download">
+      {dictBusy ? 'Downloading…' : `Download ${formatMb(manifestBytes(dictManifest))}`}
+    </button>
+  {:else}
+    <button onclick={previewDictionary} disabled={dictBusy} data-testid="dict-preview">
+      {dictBusy ? 'Checking…' : 'Check download size'}
+    </button>
+  {/if}
+
+  {#if dictError}
+    <p class="error" data-testid="dict-error">{dictError}</p>
+  {/if}
+
+  {#if $dictionaryStatus.enabled || dictManifest}
+    {@const files = $dictionaryStatus.enabled ? $dictionaryStatus.files : dictManifest?.files ?? []}
+    <div class="attributions" data-testid="dict-attributions">
+      {#each files as f (f.label)}
+        <p class="attribution">{f.attribution}</p>
+      {/each}
+    </div>
+  {/if}
+</section>
+
+<section class="stack">
   <h2>Sync</h2>
   {#if !relayConnected}
     <form class="stack" onsubmit={submitConnect}>
@@ -868,6 +1005,21 @@
   .hint {
     font-size: var(--text-xs);
     color: var(--muted);
+  }
+
+  .attributions {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
+
+  /* Legal/courtesy notices — deliberately quiet but must stay legible (the
+     LOINC line is a license requirement, not decoration). */
+  .attribution {
+    font-size: var(--text-xs);
+    color: var(--muted);
+    margin: 0;
   }
 
   /* Confirm-sheet action row (matches Unlock.svelte's forgot sheet). */
