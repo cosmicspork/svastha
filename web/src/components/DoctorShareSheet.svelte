@@ -11,6 +11,7 @@
   import {
     createDoctorShare,
     filterEventsForScope,
+    referencedAttachmentShas,
     listDoctorShares,
     revokeDoctorShare,
     shareLinkFor,
@@ -61,6 +62,10 @@
   })
 
   const filtered = $derived(filterEventsForScope(events, scope))
+  // Paper records travel inside the share bundle (their bytes are inlined), so
+  // surface the page count honestly — it's what can push a share toward the
+  // relay's size cap.
+  const pageCount = $derived(referencedAttachmentShas(filtered).length)
 
   const scopeDescription = $derived.by(() => {
     const cats =
@@ -241,6 +246,11 @@
     <section class="stack">
       <p class="count" data-testid="share-count">
         {filtered.length} entr{filtered.length === 1 ? 'y' : 'ies'} selected
+        {#if pageCount > 0}
+          <span class="muted" data-testid="share-pages"
+            >· includes 📷 {pageCount} photo {pageCount === 1 ? 'page' : 'pages'}</span
+          >
+        {/if}
       </p>
       <button
         class="ghost"

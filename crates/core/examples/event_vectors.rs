@@ -151,6 +151,38 @@ fn main() {
                 },
             ),
         ),
+        signed(
+            "document with an attachment value (a photographed paper record), signed",
+            Event::new(
+                EventKind::Document,
+                None,
+                Some("2026-01-02T15:04:05Z".into()),
+                Some(EventValue::Attachment {
+                    // 32-byte SHA-256 of the plaintext image bytes, lowercase hex.
+                    sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                        .into(),
+                    mime: "image/jpeg".into(),
+                    size: 148_213,
+                }),
+                Provenance {
+                    source: "self".into(),
+                    source_doc: None,
+                },
+            ),
+        ),
+        unsigned(
+            "the caption sibling: a text `document` sharing the attachment's effective_at",
+            Event::new(
+                EventKind::Document,
+                None,
+                Some("2026-01-02T15:04:05Z".into()),
+                Some(EventValue::Text("GI consult — Dr. Rao".into())),
+                Provenance {
+                    source: "self".into(),
+                    source_doc: None,
+                },
+            ),
+        ),
     ];
 
     let file = VectorFile {

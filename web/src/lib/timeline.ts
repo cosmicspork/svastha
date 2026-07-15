@@ -40,10 +40,21 @@ export interface NoteRef {
   eventIds: string[]
 }
 
+/** A captured page referenced by a paper-record entry: its content address and
+ * type, enough for the viewer to load and render it. */
+export interface AttachmentRef {
+  sha256: string
+  mime: string
+}
+
 export interface TimelineEntry {
   effective_at: string
   category: Category
   label: string
+  /** Present (and non-empty) when this entry is a captured paper record: the
+   * pages, sha-sorted for a stable order (per-item events carry no sequence).
+   * Drives the camera hint and, on tap, the full-screen viewer. */
+  attachments?: AttachmentRef[]
   /** Formatted measurement, rendered in --font-data; '' when the label says it
    * all (a note, a meal). */
   value: string
@@ -98,6 +109,15 @@ export function renderQuantity(q: { value: string; unit: string }): string {
 
 function textOf(e: Ev): string | null {
   return e.value && 'text' in e.value ? e.value.text : null
+}
+
+/** The attachment pages in a group, sha-sorted so page order is stable (the
+ * per-item events share an effective_at but carry no sequence). */
+function attachmentRefs(events: Ev[]): AttachmentRef[] {
+  return events
+    .flatMap((e) => (e.value && 'attachment' in e.value ? [e.value.attachment] : []))
+    .map((a) => ({ sha256: a.sha256, mime: a.mime }))
+    .sort((a, b) => a.sha256.localeCompare(b.sha256))
 }
 
 const VITAL_LABELS = new Map(VITALS.map((v) => [v.loinc.code, v.label]))
@@ -291,6 +311,28 @@ function formatNote(
   return { label: preview, value: '', hint: undefined, flare: false }
 }
 
+/** A captured paper record: N photo events (attachment values) plus an
+ * optional caption sibling (a text document). The caption is the label; the
+ * camera hint carries the page count and the presence of `attachments` is
+ * what opens the viewer on tap. */
+function formatPaperRecord(
+  events: Ev[],
+  attachments: AttachmentRef[],
+): Omit<TimelineEntry, 'effective_at' | 'category' | 'eventIds' | 'detail' | 'notes'> {
+  const caption = events
+    .map(textOf)
+    .filter((t): t is string => t !== null)
+    .join(', ')
+  const pages = attachments.length
+  return {
+    label: caption || 'Paper record',
+    value: '',
+    hint: `📷 ${pages} ${pages === 1 ? 'page' : 'pages'}`,
+    attachments,
+    flare: false,
+  }
+}
+
 /** An entry plus the scratch a nesting pass needs; the `entry` is what ships. */
 interface Built {
   entry: TimelineEntry
@@ -309,6 +351,9 @@ function nestNotesUnderEncounters(built: Built[]): void {
 
   for (const b of built) {
     if (b.entry.category !== 'note') continue
+    // A paper record (or any note with no prose to carry over) keeps its own
+    // row: folding it would hide the tap target that opens the photo viewer.
+    if (b.entry.notes.length === 0 || (b.entry.attachments?.length ?? 0) > 0) continue
     const target = pickEncounterForNote(b, encounters)
     if (!target) continue
     target.entry.notes.push(...b.entry.notes)
@@ -372,10 +417,15 @@ export function buildTimeline(
   const built: Built[] = []
   for (const group of groups.values()) {
     const first = group.events[0]
-    const notes = group.category === 'note' ? noteRefsOf(group.events) : []
+    const attachments = group.category === 'note' ? attachmentRefs(group.events) : []
+    // A paper record's caption text event is its label, not detail-panel
+    // prose, so an attachment group carries no NoteRefs.
+    const notes = group.category === 'note' && attachments.length === 0 ? noteRefsOf(group.events) : []
     const formatted =
       group.category === 'note'
-        ? formatNote(group.events, notes)
+        ? attachments.length > 0
+          ? formatPaperRecord(group.events, attachments)
+          : formatNote(group.events, notes)
         : formatGroup(group.category, group.events, nameIndex, dictionary)
     built.push({
       entry: {

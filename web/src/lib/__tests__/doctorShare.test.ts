@@ -14,6 +14,7 @@ import {
   buildShareLink,
   filterEventsForScope,
   generateShareToken,
+  referencedAttachmentShas,
   shareStatus,
   SHARE_TOKEN_LEN,
   type DoctorShareRecord,
@@ -128,6 +129,26 @@ describe('buildBundle', () => {
   it('serializes events in exactly the StoredEvent JSON shape', () => {
     const parsed = JSON.parse(JSON.stringify(bundle)) as typeof bundle
     expect(parsed.events[0]).toEqual(events[0])
+  })
+
+  it('omits attachments when there are none, and inlines them when given', () => {
+    expect(bundle.attachments).toBeUndefined()
+    const withAtt = buildBundle(events, signerHex, '2026-07-14T12:00:00.000Z', { aa: 'AQID' })
+    expect(withAtt.attachments).toEqual({ aa: 'AQID' })
+  })
+})
+
+describe('referencedAttachmentShas', () => {
+  const att = (id: string, sha: string) =>
+    ev(id, 'document', '2026-01-01T09:00:00Z', null, { attachment: { sha256: sha, mime: 'image/jpeg', size: 1 } })
+
+  it('collects distinct attachment hashes in sha order', () => {
+    const events = [att('a', 'bb'), att('b', 'aa'), att('c', 'aa'), ev('t', 'document', 'x', null, { text: 'note' })]
+    expect(referencedAttachmentShas(events)).toEqual(['aa', 'bb'])
+  })
+
+  it('is empty when no event carries an attachment', () => {
+    expect(referencedAttachmentShas([ev('t', 'document', 'x', null, { text: 'note' })])).toEqual([])
   })
 })
 

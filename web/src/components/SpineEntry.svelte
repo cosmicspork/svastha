@@ -15,6 +15,7 @@
     editable = true,
     onTagsChanged,
     onToggleHidden,
+    onOpenViewer,
   }: {
     entry: TimelineEntry
     /** Entrance animation runs only on the spine's first render. */
@@ -29,10 +30,16 @@
     editable?: boolean
     onTagsChanged?: (eventId: string, tags: string[]) => void
     onToggleHidden?: (eventId: string, hidden: boolean) => void
+    /** Open the full-screen viewer for a captured paper record. Supplied by
+     * both the owner spine and the read-only share view. */
+    onOpenViewer?: (entry: TimelineEntry) => void
   } = $props()
 
   const meta = $derived(CATEGORY_META[entry.category])
   const primaryEventId = $derived(entry.eventIds[0])
+  // A captured paper record: the row opens the viewer instead of the inline
+  // detail stub (there's a photo to look at, not a coding to read).
+  const isPaper = $derived((entry.attachments?.length ?? 0) > 0)
   let editingTags = $state(false)
 
   // The inline provenance panel is available in both modes (a share recipient
@@ -109,9 +116,10 @@
     <button
       type="button"
       class="row-trigger"
-      aria-expanded={expanded}
-      aria-controls={stubId}
-      onclick={() => (expanded = !expanded)}
+      aria-expanded={isPaper ? undefined : expanded}
+      aria-controls={isPaper ? undefined : stubId}
+      aria-haspopup={isPaper ? 'dialog' : undefined}
+      onclick={() => (isPaper ? onOpenViewer?.(entry) : (expanded = !expanded))}
       data-testid="spine-entry-trigger"
     >
       <span class="row-main">

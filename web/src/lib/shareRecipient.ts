@@ -39,6 +39,10 @@ export interface OpenedBundle {
   /** Events dropped because they failed verification — a non-zero count drives
    * a visible warning rather than silently rendering a tampered subset. */
   dropped: number
+  /** Inlined captured-document bytes (sha256 → base64 plaintext), for the
+   * viewer to render paper records the events reference. Empty when the share
+   * carried none. */
+  attachments: Record<string, string>
 }
 
 /** Each maps to one specific, honest error state in the UI. `expired` and
@@ -105,7 +109,7 @@ export function parseShareFragment(hash: string): ParsedFragment | null {
  */
 export function validateBundle(
   json: string,
-): { createdAt: string; signerHex: string; events: StoredEvent[] } | null {
+): { createdAt: string; signerHex: string; events: StoredEvent[]; attachments: Record<string, string> } | null {
   let parsed: unknown
   try {
     parsed = JSON.parse(json)
@@ -128,7 +132,18 @@ export function validateBundle(
     return null
   }
 
-  return { createdAt: b.created_at, signerHex, events: b.events as StoredEvent[] }
+  // `attachments` is optional (older bundles and attachment-free scopes omit
+  // it). When present it must be a flat string→string map; anything else is a
+  // damaged bundle rather than a silently-ignored field.
+  let attachments: Record<string, string> = {}
+  if (b.attachments !== undefined) {
+    if (!b.attachments || typeof b.attachments !== 'object' || Array.isArray(b.attachments)) return null
+    const entries = Object.entries(b.attachments as Record<string, unknown>)
+    if (!entries.every(([, v]) => typeof v === 'string')) return null
+    attachments = Object.fromEntries(entries) as Record<string, string>
+  }
+
+  return { createdAt: b.created_at, signerHex, events: b.events as StoredEvent[], attachments }
 }
 
 /**
@@ -180,7 +195,14 @@ export function openShareBundle(
   if (!validated) return null
 
   const { events, verified, dropped } = verifyBundleEvents(validated.events, validated.signerHex)
-  return { createdAt: validated.createdAt, signerHex: validated.signerHex, events, verified, dropped }
+  return {
+    createdAt: validated.createdAt,
+    signerHex: validated.signerHex,
+    events,
+    verified,
+    dropped,
+    attachments: validated.attachments,
+  }
 }
 
 /** Fetch the sealed bundle by bearer token — the system's only unauthenticated

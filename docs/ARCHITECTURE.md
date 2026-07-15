@@ -152,10 +152,11 @@ years-long, heavily-tagged log, so a full-listing pull (no pagination, no
 per-blob etag) is adequate for v1; both are natural future hardening as the
 "no manifest" section below already flags for the `ev-`/`doc-` namespaces.
 
-**Owner-only in v1.** Shared (read-only household) pulls fetch only `ev-*`
-blobs — a share never touches `cur-*`. The owner's tags, hides, and notes are
-their own working state, not something to project onto someone reading their
-shared record.
+**Owner-only in v1.** Shared (read-only household) pulls fetch only `ev-*` and
+`att-*` blobs (the record and the captured documents its events point at) — a
+share never touches `cur-*`. The owner's tags, hides, and notes are their own
+working state, not something to project onto someone reading their shared
+record.
 
 **Favorites migration.** Favorited quick-log templates used to live in a
 single device-local `prefs` key; they now live under `fav:` curation records
@@ -297,7 +298,8 @@ by prefix:
 | `ev-{event_id_hex}` | one sealed `SignedEvent` (JSON) |
 | `vault.key` | the vault data key, wrapped to the owner's own X25519 key |
 | `doc-{sha256_hex}` | one imported source document's verbatim bytes (name + base64 bytes, JSON), keyed by its own content hash |
-| `cur-{sha256_hex(key)}` | one curation overlay record (tag/note/hide/favorite — see the Event model's "Curation overlay" subsection), keyed by the hash of its own app-level `key`. Unlike `ev-`/`doc-`, this blob is **mutable**: a write `PUT`s over the existing id rather than minting a new one. |
+| `att-{sha256_hex}` | one captured document page's bytes (mime + base64 bytes, JSON — a photographed paper record), keyed by the plaintext content hash the event's `attachment` value carries |
+| `cur-{sha256_hex(key)}` | one curation overlay record (tag/note/hide/favorite — see the Event model's "Curation overlay" subsection), keyed by the hash of its own app-level `key`. Unlike `ev-`/`doc-`/`att-`, this blob is **mutable**: a write `PUT`s over the existing id rather than minting a new one. |
 
 **AAD = blob id.** Every blob sealed under the vault key uses the UTF-8 bytes
 of its own blob id as the AEAD associated data. The relay stores opaque
@@ -343,8 +345,8 @@ are ever sealed under the discarded key.
 sealed blobs the relay stores — same namespaces, same AAD = blob id binding —
 plus the self-wrapped vault key. Importing it therefore runs the identical
 open/verify/LWW path as a relay pull and dedupes by content id automatically:
-`ev-`/`doc-` blobs land as new or are skipped as duplicates, `cur-` blobs merge
-by LWW. Import requires the same seed — the wrapped vault key must unwrap, which
+`ev-`/`doc-`/`att-` blobs land as new or are skipped as duplicates, `cur-` blobs
+merge by LWW. Import requires the same seed — the wrapped vault key must unwrap, which
 only the owning identity can do — and blobs open under the file's own key, so a
 backup made before a relay-won key adoption still restores (a differing session
 key is reported, never a rejection). The plaintext export is one-way out and can

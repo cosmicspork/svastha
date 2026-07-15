@@ -10,6 +10,7 @@ import {
   noteDraft,
   moodDraft,
   gratitudeDrafts,
+  paperRecordDrafts,
   fromTemplates,
   toTemplate,
 } from '../drafts'
@@ -110,6 +111,30 @@ describe('noteDraft', () => {
     const draft = noteDraft('slept badly', AT)
     expect(draft.kind).toBe('document')
     expect(draft.value).toEqual({ text: 'slept badly' })
+  })
+})
+
+describe('paperRecordDrafts', () => {
+  const photos = [
+    { sha256: 'aa', mime: 'image/jpeg', size: 100 },
+    { sha256: 'bb', mime: 'image/jpeg', size: 200 },
+  ]
+
+  it('emits one attachment document per photo plus a caption note, all sharing effective_at', () => {
+    const drafts = paperRecordDrafts(photos, 'GI consult — Dr. Rao', AT)
+    expect(drafts).toHaveLength(3)
+    expect(drafts.every((d) => d.kind === 'document')).toBe(true)
+    expect(drafts.every((d) => d.effective_at === AT)).toBe(true)
+    expect(drafts[0].value).toEqual({ attachment: { sha256: 'aa', mime: 'image/jpeg', size: 100 } })
+    expect(drafts[1].value).toEqual({ attachment: { sha256: 'bb', mime: 'image/jpeg', size: 200 } })
+    // The caption is a plain text document (a note), not a field on the attachment.
+    expect(drafts[2].value).toEqual({ text: 'GI consult — Dr. Rao' })
+  })
+
+  it('omits the caption sibling when the caption is blank', () => {
+    const drafts = paperRecordDrafts(photos, '   ', AT)
+    expect(drafts).toHaveLength(2)
+    expect(drafts.every((d) => d.value && 'attachment' in d.value)).toBe(true)
   })
 })
 

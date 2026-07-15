@@ -168,6 +168,64 @@ const provenanceCodec: Codec = {
 }
 registerCodec(provenanceCodec)
 
+// --- attachments codec ('att-') ---
+//
+// One entry per captured document page (see `attachments.ts`): the downscaled
+// JPEG bytes of a photographed paper record, content-addressed by the SHA-256
+// of those plaintext bytes. Modeled exactly on the `doc-` codec above — same
+// "JSON envelope (mime + base64 bytes) sealed under the vault key, AAD = blob
+// id" shape, same embedded-hash check — because a captured document is the same
+// kind of opaque, immutable, content-addressed blob an imported source document
+// is. The `attachment` event value carries the sha256, so a synced event points
+// at the `att-` blob its bytes live in.
+
+interface AttachmentRow {
+  sha256: string
+  mime: string
+  size: number
+  bytes: Uint8Array
+  capturedAt: string
+}
+
+function attachmentIdFromBlobId(blobId: string): string {
+  return blobId.slice('att-'.length)
+}
+
+const attachmentsCodec: Codec = {
+  prefix: 'att-',
+  async localHas(id) {
+    return (await get<AttachmentRow>('attachments', attachmentIdFromBlobId(id))) !== undefined
+  },
+  async localLoad(id) {
+    const att = await get<AttachmentRow>('attachments', attachmentIdFromBlobId(id))
+    if (!att) return null
+    const envelope = JSON.stringify({ mime: att.mime, bytes: bytesToBase64(att.bytes) })
+    return new TextEncoder().encode(envelope)
+  },
+  async remoteApply(id, plaintext) {
+    const sha256 = attachmentIdFromBlobId(id)
+    const { mime, bytes: b64 } = JSON.parse(new TextDecoder().decode(plaintext)) as {
+      mime: string
+      bytes: string
+    }
+    const bytes = base64ToBytes(b64)
+    // Same embedded-hash guard the doc- codec makes: the AAD binding already
+    // stops the relay swapping ciphertext between ids, and this additionally
+    // catches a same-device bug (bytes stored under the wrong sha256) rather
+    // than letting it land silently.
+    const actual = await sha256Hex(bytes)
+    if (actual !== sha256) throw new Error(`att- blob ${id}: content hash does not match the blob id`)
+    await put('attachments', {
+      sha256,
+      mime,
+      size: bytes.length,
+      bytes,
+      capturedAt: new Date().toISOString(),
+    })
+  },
+}
+registerCodec(attachmentsCodec)
+
 // --- pure diff functions (unit tested without wasm or a browser) ---
 
 /** Blob ids on the relay this device should pull: known to a registered
@@ -229,19 +287,21 @@ export async function sealLocalBlob(id: string, key: SealKey): Promise<Uint8Arra
 }
 
 /** Every blob id representable from this device's local data: an `ev-` per
- * event, a `doc-` per provenance record, a `cur-` per curation key. `vault.key`
- * is deliberately excluded — it is not a codec (it is the wrapped key itself,
- * carried separately by the export container). */
+ * event, a `doc-` per provenance record, an `att-` per captured attachment, a
+ * `cur-` per curation key. `vault.key` is deliberately excluded — it is not a
+ * codec (it is the wrapped key itself, carried separately by the export
+ * container). */
 export async function listLocalBlobIds(): Promise<string[]> {
   const events = (await getAll<StoredEvent>('events')).map((e) => eventBlobId(e.event.id))
   const docs = (await getAll<ProvenanceRecord>('provenance')).map((p) => `doc-${p.sha256}`)
+  const attachments = (await getAll<AttachmentRow>('attachments')).map((a) => `att-${a.sha256}`)
   // Dynamic import for the same reason `configure` above imports curation.ts
   // dynamically: curation.ts statically imports this module, so a static
   // import back would form a cycle.
   const { curationBlobIdForKey } = await import('./curation')
   const curationRecords = await getAll<{ key: string }>('curation')
   const curation = await Promise.all(curationRecords.map((r) => curationBlobIdForKey(r.key)))
-  return [...events, ...docs, ...curation]
+  return [...events, ...docs, ...attachments, ...curation]
 }
 
 // --- status surface ---

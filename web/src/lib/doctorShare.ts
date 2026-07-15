@@ -17,6 +17,7 @@ import { categorize, type Category } from './category'
 import { isoToMillis } from './time'
 import { fromHex } from './hex'
 import { bytesToBase64, base64ToBytes } from './base64'
+import { attachmentBytes } from './attachments'
 import { get, getAll, put } from './db'
 
 /** Token alphabet: URL-safe base64 minus the dot the relay would also allow —
@@ -31,6 +32,11 @@ export const SHARE_TOKEN_LEN = 26
 /** Per-share key size — 32 CSPRNG bytes, fed to the same `WasmDataKey` the app
  * seals everything else under. */
 const SHARE_KEY_BYTES = 32
+
+/** The relay caps a share bundle at 8 MiB (see spec/README.md "Shares"). The
+ * sealing nonce+tag add only a few dozen bytes, so bound the plaintext just
+ * below the cap and reject early with a friendly message. */
+const SHARE_MAX_BYTES = 8 * 1024 * 1024 - 1024
 
 /** Base64url (RFC 4648 §5), unpadded — the encoding the share link and bundle
  * signer field use. */
@@ -90,29 +96,50 @@ export function filterEventsForScope(events: StoredEvent[], scope: ShareScope): 
 
 /** The bundle plaintext, before sealing. `events` are `SignedEvent`s in exactly
  * the JSON shape the app stores and syncs (`StoredEvent`), so the recipient
- * runs the same verify path a relay pull does. */
+ * runs the same verify path a relay pull does. `attachments` inlines the bytes
+ * of any captured paper record referenced by those events (base64, keyed by the
+ * content hash the `attachment` value carries), so a recipient with no vault key
+ * and no relay auth can still open them — a share re-encrypts everything it
+ * needs under its own key. Omitted when the scope has no attachments. */
 export interface ShareBundle {
   v: 1
   created_at: string
   /** base64url (unpadded) of the owner's 32-byte Ed25519 public key. */
   signer: string
   events: StoredEvent[]
+  attachments?: Record<string, string>
+}
+
+/** The distinct content hashes of every attachment referenced by these events,
+ * in sha order. Pure (no db), so the create UI can count pages from the scoped
+ * events without touching storage. */
+export function referencedAttachmentShas(events: StoredEvent[]): string[] {
+  const shas = new Set<string>()
+  for (const se of events) {
+    const v = se.event.value
+    if (v && 'attachment' in v) shas.add(v.attachment.sha256)
+  }
+  return [...shas].sort()
 }
 
 /** Build the bundle plaintext. `signerEd25519Hex` is the owner's 64-hex-char
  * Ed25519 public key; it is re-encoded to base64url so the recipient can pin
- * every event's `author` to the one signer named by the bundle. */
+ * every event's `author` to the one signer named by the bundle. `attachments`
+ * (sha256 → base64 plaintext bytes) is inlined only when non-empty. */
 export function buildBundle(
   events: StoredEvent[],
   signerEd25519Hex: string,
   createdAtIso: string,
+  attachments: Record<string, string> = {},
 ): ShareBundle {
-  return {
+  const bundle: ShareBundle = {
     v: 1,
     created_at: createdAtIso,
     signer: base64url(fromHex(signerEd25519Hex)),
     events,
   }
+  if (Object.keys(attachments).length > 0) bundle.attachments = attachments
+  return bundle
 }
 
 /** Assemble the doctor-facing link: `{appOrigin}/#/s/{token}.{key}.{relay}`.
@@ -184,8 +211,24 @@ export async function createDoctorShare(params: {
   const shareKey = WasmDataKey.from_bytes(keyBytes)
 
   const createdAtIso = new Date().toISOString()
-  const bundle = buildBundle(events, identity.ed25519_public_hex, createdAtIso)
+  // Inline the bytes of any captured paper record in scope, so the recipient
+  // (no vault key, no relay auth) can open them from the bundle itself.
+  const attachments: Record<string, string> = {}
+  for (const sha256 of referencedAttachmentShas(events)) {
+    const bytes = await attachmentBytes(sha256)
+    if (bytes) attachments[sha256] = bytesToBase64(bytes)
+  }
+  const bundle = buildBundle(events, identity.ed25519_public_hex, createdAtIso, attachments)
   const plaintext = new TextEncoder().encode(JSON.stringify(bundle))
+  // A share is capped tighter than a blob (relay's 8 MiB share ceiling). Catch
+  // it here with an honest message rather than letting the PUT 413 — attachments
+  // are the only thing that can push a scoped subset over.
+  if (plaintext.length > SHARE_MAX_BYTES) {
+    throw new Error(
+      'This selection is too large to share — it includes more photo pages than a single ' +
+        'link can carry. Narrow the dates or categories, or share fewer paper records.',
+    )
+  }
   const aad = new TextEncoder().encode(token)
   const sealed = shareKey.seal(plaintext, aad)
 

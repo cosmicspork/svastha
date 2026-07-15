@@ -56,6 +56,15 @@ export const MIGRATIONS: ((db: IDBDatabase, tx: IDBTransaction) => void)[] = [
   (db) => {
     db.createObjectStore('dictionary', { keyPath: 'system' })
   },
+  // v6: captured-document bytes (see lib/attachments.ts) — one row per
+  // photographed paper record, keyed by the content hash of its plaintext
+  // bytes, exactly as the `provenance` store holds imported source documents.
+  // The bytes are at rest as plaintext (origin isolation + OS disk encryption
+  // are the boundary, same as `events`/`provenance`); the `att-` sync codec
+  // seals them under the vault key only for transport.
+  (db) => {
+    db.createObjectStore('attachments', { keyPath: 'sha256' })
+  },
 ]
 
 function requestToPromise<T>(req: IDBRequest<T>): Promise<T> {

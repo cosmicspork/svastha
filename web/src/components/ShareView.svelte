@@ -8,11 +8,31 @@
   import { initSvastha } from '../lib/svastha'
   import { loadShare, type ShareLoadResult } from '../lib/shareRecipient'
   import { fingerprint } from '../lib/exchange'
+  import { base64ToBytes } from '../lib/base64'
+  import { buildTimeline, type TimelineEntry } from '../lib/timeline'
   import ClinicianSummary from './ClinicianSummary.svelte'
+  import AttachmentViewer from './AttachmentViewer.svelte'
 
   // null = still loading; the pipeline is wasm-gated, so nothing is shown until
   // initSvastha resolves.
   let result = $state<ShareLoadResult | null>(null)
+
+  // The paper records the shared events reference, and the open viewer entry.
+  // The loader reads the bundle's own in-memory attachments map (base64 → bytes)
+  // — a recipient has no vault key and no relay, so the bytes travel inline.
+  let viewerEntry = $state<TimelineEntry | null>(null)
+
+  const paperEntries = $derived.by<TimelineEntry[]>(() => {
+    if (result?.status !== 'ok') return []
+    return buildTimeline(result.bundle.events, 'note')
+      .flatMap((day) => day.entries)
+      .filter((e) => e.attachments && e.attachments.length > 0)
+  })
+
+  function loadSharedBytes(sha256: string): Promise<Uint8Array | null> {
+    const b64 = result?.status === 'ok' ? result.bundle.attachments[sha256] : undefined
+    return Promise.resolve(b64 ? base64ToBytes(b64) : null)
+  }
 
   async function load() {
     result = null
@@ -69,8 +89,41 @@
     </header>
 
     <ClinicianSummary events={bundle.events} readonly />
+
+    {#if paperEntries.length > 0}
+      <section class="documents" data-testid="share-documents">
+        <h2 class="doc-head">Documents</h2>
+        <ul class="doc-list">
+          {#each paperEntries as entry (entry.effective_at)}
+            <li>
+              <button
+                type="button"
+                class="doc-row"
+                onclick={() => (viewerEntry = entry)}
+                data-testid="share-doc-row"
+              >
+                <span class="doc-glyph" aria-hidden="true">📷</span>
+                <span class="doc-label">{entry.label}</span>
+                <span class="doc-hint muted">{entry.hint}</span>
+              </button>
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
   {/if}
 </div>
+
+{#if viewerEntry?.attachments}
+  <AttachmentViewer
+    pages={viewerEntry.attachments}
+    caption={viewerEntry.label}
+    recordedIso={viewerEntry.effective_at}
+    source={viewerEntry.detail.source}
+    loadBytes={loadSharedBytes}
+    onclose={() => (viewerEntry = null)}
+  />
+{/if}
 
 <style>
   .share {
@@ -109,6 +162,53 @@
     margin: var(--space-3) 0 0;
     font-size: var(--text-sm);
     color: var(--danger);
+  }
+
+  .documents {
+    margin-top: var(--space-6);
+  }
+
+  .doc-head {
+    font-size: var(--text-lg);
+    margin-bottom: var(--space-3);
+  }
+
+  .doc-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  .doc-list li {
+    border-top: 1px solid var(--border);
+  }
+
+  .doc-row {
+    width: 100%;
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    min-height: 44px;
+    padding: var(--space-2) 0;
+    border: none;
+    background: none;
+    color: inherit;
+    text-align: left;
+  }
+
+  .doc-glyph {
+    flex: none;
+  }
+
+  .doc-label {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .doc-hint {
+    flex: none;
+    font-size: var(--text-xs);
   }
 
   .state {

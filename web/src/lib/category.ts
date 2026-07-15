@@ -46,9 +46,14 @@ export function categorize(event: Categorizable): Category {
     case 'medication_statement':
       return 'med'
     case 'document':
-      // A text document is a personal note; anything richer (an imported
-      // source-document pointer, say) belongs with the clinical record.
-      return event.value && 'text' in event.value ? 'note' : 'clinical'
+      // A text document is a personal note, and a captured paper record (an
+      // attachment-valued document) is filed alongside notes — both are the
+      // user's own hand, and a photographed handout reads as a note, not a
+      // coded clinical fact. Anything richer (an imported source-document
+      // pointer, say) belongs with the clinical record.
+      return event.value && ('text' in event.value || 'attachment' in event.value)
+        ? 'note'
+        : 'clinical'
     case 'condition':
     case 'immunization':
     case 'encounter':

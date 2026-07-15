@@ -13,8 +13,14 @@ describe('categorize by kind', () => {
     expect(categorize({ kind: 'allergy_intolerance' })).toBe('clinical')
   })
 
-  it('splits document on value shape: text is a note, anything else clinical', () => {
+  it('splits document on value shape: text or attachment is a note, anything else clinical', () => {
     expect(categorize({ kind: 'document', value: { text: 'slept badly' } })).toBe('note')
+    expect(
+      categorize({
+        kind: 'document',
+        value: { attachment: { sha256: 'ab', mime: 'image/jpeg', size: 10 } },
+      }),
+    ).toBe('note')
     expect(categorize({ kind: 'document', value: null })).toBe('clinical')
   })
 })

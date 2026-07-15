@@ -13,8 +13,17 @@
 import { get, put, del, getAll, getAllFromIndex } from './db'
 import { verify_event } from './svastha'
 import { fromHex } from './hex'
+import { base64ToBytes } from './base64'
 import { writable } from 'svelte/store'
 import type { StoredEvent } from './events'
+
+/** Local lowercase-hex SHA-256, duplicated (like sync.ts's own) to keep this
+ * module free of an import cycle. Used to check a pulled `att-` blob's bytes
+ * against the content hash its blob id claims. */
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', bytes as BufferSource)
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('')
+}
 
 /** The relay surface sharing needs — narrower than `RelayClient` so tests can
  * supply an in-memory fake, same reasoning as sync.ts's `BlobClient`. */
@@ -258,6 +267,26 @@ export async function pullShared(): Promise<void> {
       )
 
       for (const blobId of ids) {
+        // Captured paper records: mirror the owner's `att-` blobs into the same
+        // content-addressed `attachments` store the owner's own device uses, so
+        // the read-only spine's viewer loads them the same way (see Spine.svelte).
+        // A household share carries the owner's vault key, so these open under
+        // the same key their events do. Content-addressed, so once-and-done.
+        if (blobId.startsWith('att-')) {
+          const sha256 = blobId.slice('att-'.length)
+          if ((await get('attachments', sha256)) !== undefined) continue
+          const sealed = await sharingClient.getSharedBlob(share.ownerEd, blobId)
+          if (!sealed) continue
+          const { mime, bytes: b64 } = JSON.parse(
+            new TextDecoder().decode(key.open(sealed, aad(blobId))),
+          ) as { mime: string; bytes: string }
+          const bytes = base64ToBytes(b64)
+          if ((await sha256Hex(bytes)) !== sha256) {
+            throw new Error(`shared blob ${blobId}: content hash does not match the blob id`)
+          }
+          await put('attachments', { sha256, mime, size: bytes.length, bytes, capturedAt: new Date().toISOString() })
+          continue
+        }
         if (!blobId.startsWith('ev-')) continue
         const eventId = blobId.slice('ev-'.length)
         if (known.has(eventId)) continue

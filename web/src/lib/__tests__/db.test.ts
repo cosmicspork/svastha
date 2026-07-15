@@ -11,7 +11,7 @@ describe('MIGRATIONS', () => {
     const db = await openDb()
     expect(db.version).toBe(MIGRATIONS.length)
     expect([...db.objectStoreNames].sort()).toEqual(
-      ['curation', 'dictionary', 'doctor_shares', 'events', 'keyvault', 'prefs', 'provenance', 'shared_events', 'shares', 'sync'].sort(),
+      ['attachments', 'curation', 'dictionary', 'doctor_shares', 'events', 'keyvault', 'prefs', 'provenance', 'shared_events', 'shares', 'sync'].sort(),
     )
 
     const tx = db.transaction('events', 'readonly')
@@ -23,6 +23,20 @@ describe('MIGRATIONS', () => {
 
     const curationTx = db.transaction('curation', 'readonly')
     expect([...curationTx.objectStore('curation').indexNames]).toEqual(['updated_at'])
+  })
+})
+
+describe('attachments (v5)', () => {
+  it('round-trips a captured-document record keyed by sha256', async () => {
+    const record = {
+      sha256: 'a'.repeat(64),
+      mime: 'image/jpeg',
+      size: 3,
+      bytes: new Uint8Array([1, 2, 3]),
+      capturedAt: '2026-07-15T00:00:00.000Z',
+    }
+    await put('attachments', record)
+    expect(await get('attachments', 'a'.repeat(64))).toEqual(record)
   })
 })
 
