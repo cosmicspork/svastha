@@ -709,6 +709,7 @@
 
 <section class="stack">
   <h2>About</h2>
+  <p class="muted" data-testid="about-app-version">Svastha v{__APP_VERSION__}</p>
   <p class="muted" data-testid="about-version">Trust contract v{version}</p>
   <button
     class="ghost"
