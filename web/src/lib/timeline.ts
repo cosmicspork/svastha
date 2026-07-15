@@ -29,6 +29,17 @@ export interface EntryDetail {
   sourceDoc: string | null
 }
 
+/** A note (a document+text event) carried by an entry: an imported visit
+ * note's section title + prose, or a standalone personal note's own text. An
+ * office-visit encounter folds its visit notes here (decision C2) instead of
+ * their standing as separate spine rows; a standalone note carries its own
+ * single ref. `eventIds` is the note event's id, for its own curation. */
+export interface NoteRef {
+  label: string
+  text: string
+  eventIds: string[]
+}
+
 export interface TimelineEntry {
   effective_at: string
   category: Category
@@ -53,6 +64,11 @@ export interface TimelineEntry {
    * (a symptom, a note) and a documented simplification for the multi-event
    * ones. */
   eventIds: string[]
+  /** Notes this entry carries: an office-visit encounter's folded visit notes
+   * (decision C2), or a standalone note's own single ref. Empty for every
+   * other row. Rendered as titled prose (with a read-more) in the detail
+   * panel; an encounter with notes also shows a "N notes" hint. */
+  notes: NoteRef[]
 }
 
 export interface TimelineDay {
@@ -179,7 +195,7 @@ function formatGroup(
   events: Ev[],
   nameIndex: Map<string, string>,
   dictionary: Map<string, string>,
-): Omit<TimelineEntry, 'effective_at' | 'category' | 'eventIds' | 'detail'> {
+): Omit<TimelineEntry, 'effective_at' | 'category' | 'eventIds' | 'detail' | 'notes'> {
   switch (category) {
     case 'vital':
       return { ...formatVitals(events, nameIndex, dictionary), flare: false }
@@ -190,8 +206,7 @@ function formatGroup(
     case 'mind':
       return { ...formatMind(events), flare: false }
     case 'med':
-    case 'food':
-    case 'note': {
+    case 'food': {
       // Per-item events carry no sequence (the store returns id order, i.e.
       // hash order), so sort for a stable join rather than a shuffling one.
       const texts = events
@@ -238,8 +253,96 @@ function formatGroup(
   }
 }
 
-/** Group, sort (days desc, entries desc within a day), and format. Undated
- * events can't be placed on a timeline and are skipped. */
+/** Longest first-line preview shown on a note row before eliding; the full
+ * prose lives in the detail panel. */
+const NOTE_PREVIEW_MAX = 90
+
+function firstLinePreview(text: string): string {
+  const firstLine =
+    text
+      .split('\n')
+      .map((line) => line.trim())
+      .find((line) => line.length > 0) ?? ''
+  return firstLine.length > NOTE_PREVIEW_MAX
+    ? `${firstLine.slice(0, NOTE_PREVIEW_MAX).trimEnd()}…`
+    : firstLine
+}
+
+/** One `NoteRef` per text-bearing event in a note group — a visit note commonly
+ * has several narrative sections (plan of care, assessment, ...) sharing the
+ * visit date, so they land in one group but stay individually titled. */
+function noteRefsOf(events: Ev[]): NoteRef[] {
+  return events
+    .map((e): NoteRef | null => {
+      const text = textOf(e)
+      if (text === null) return null
+      return { label: e.code?.display ?? 'Note', text, eventIds: [e.id] }
+    })
+    .filter((n): n is NoteRef => n !== null)
+}
+
+/** A note row: a first-line preview label (full prose lives in the detail
+ * panel via the entry's `notes`), no measurement value. */
+function formatNote(
+  events: Ev[],
+  notes: NoteRef[],
+): Omit<TimelineEntry, 'effective_at' | 'category' | 'eventIds' | 'detail' | 'notes'> {
+  const preview = notes.length > 0 ? firstLinePreview(notes[0].text) : events[0].kind.replace(/_/g, ' ')
+  return { label: preview, value: '', hint: undefined, flare: false }
+}
+
+/** An entry plus the scratch a nesting pass needs; the `entry` is what ships. */
+interface Built {
+  entry: TimelineEntry
+  isEncounter: boolean
+  sourceDoc: string | null
+  nested: boolean
+}
+
+/** Decision C2: fold each note into an office-visit encounter when one clearly
+ * owns it — same source document (a per-encounter Summary of Care carries the
+ * encounter and its notes together), else the sole encounter on the note's
+ * day. A note no encounter owns stands alone. */
+function nestNotesUnderEncounters(built: Built[]): void {
+  const encounters = built.filter((b) => b.isEncounter)
+  if (encounters.length === 0) return
+
+  for (const b of built) {
+    if (b.entry.category !== 'note') continue
+    const target = pickEncounterForNote(b, encounters)
+    if (!target) continue
+    target.entry.notes.push(...b.entry.notes)
+    b.nested = true
+  }
+
+  // A subtle hint that the encounter row carries notes; occupies the muted
+  // hint slot (overriding any coding/source hint — the note count is the more
+  // useful anchor here).
+  for (const enc of encounters) {
+    const n = enc.entry.notes.length
+    if (n > 0) enc.entry.hint = `${n} note${n === 1 ? '' : 's'}`
+  }
+}
+
+function pickEncounterForNote(note: Built, encounters: Built[]): Built | undefined {
+  // (a) same source document as an encounter — prefer one on the note's own
+  // day when a document holds several (a CCD can), else the first.
+  if (note.sourceDoc) {
+    const docMatches = encounters.filter((e) => e.sourceDoc === note.sourceDoc)
+    if (docMatches.length > 0) {
+      const day = dayKey(note.entry.effective_at)
+      return docMatches.find((e) => dayKey(e.entry.effective_at) === day) ?? docMatches[0]
+    }
+  }
+  // (b) else: nest only when exactly one encounter shares the note's day.
+  const day = dayKey(note.entry.effective_at)
+  const sameDay = encounters.filter((e) => dayKey(e.entry.effective_at) === day)
+  return sameDay.length === 1 ? sameDay[0] : undefined
+}
+
+/** Group, nest visit notes under their encounter (decision C2), then sort
+ * (days desc, entries desc within a day) and format. Undated events can't be
+ * placed on a timeline and are skipped. */
 export function buildTimeline(
   events: StoredEvent[],
   filter: Category | 'all',
@@ -264,24 +367,45 @@ export function buildTimeline(
     groups.set(key, group)
   }
 
-  const days = new Map<string, TimelineDay>()
-  const sorted = [...groups.values()].sort((a, b) => b.effective_at.localeCompare(a.effective_at))
-  for (const group of sorted) {
-    const key = dayKey(group.effective_at)
-    const day = days.get(key) ?? { day: key, label: formatDay(key), entries: [] }
+  const built: Built[] = []
+  for (const group of groups.values()) {
     const first = group.events[0]
-    day.entries.push({
-      effective_at: group.effective_at,
-      category: group.category,
-      eventIds: group.events.map((e) => e.id),
-      detail: {
-        kind: first.kind,
-        code: first.code,
-        source: first.provenance.source,
-        sourceDoc: first.provenance.source_doc,
+    const notes = group.category === 'note' ? noteRefsOf(group.events) : []
+    const formatted =
+      group.category === 'note'
+        ? formatNote(group.events, notes)
+        : formatGroup(group.category, group.events, nameIndex, dictionary)
+    built.push({
+      entry: {
+        effective_at: group.effective_at,
+        category: group.category,
+        eventIds: group.events.map((e) => e.id),
+        detail: {
+          kind: first.kind,
+          code: first.code,
+          source: first.provenance.source,
+          sourceDoc: first.provenance.source_doc,
+        },
+        notes,
+        ...formatted,
       },
-      ...formatGroup(group.category, group.events, nameIndex, dictionary),
+      isEncounter: group.events.some((e) => e.kind === 'encounter'),
+      sourceDoc: first.provenance.source_doc,
+      nested: false,
     })
+  }
+
+  nestNotesUnderEncounters(built)
+
+  const days = new Map<string, TimelineDay>()
+  const visible = built
+    .filter((b) => !b.nested)
+    .map((b) => b.entry)
+    .sort((a, b) => b.effective_at.localeCompare(a.effective_at))
+  for (const entry of visible) {
+    const key = dayKey(entry.effective_at)
+    const day = days.get(key) ?? { day: key, label: formatDay(key), entries: [] }
+    day.entries.push(entry)
     days.set(key, day)
   }
   return [...days.values()].sort((a, b) => b.day.localeCompare(a.day))

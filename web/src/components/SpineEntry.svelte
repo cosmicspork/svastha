@@ -38,6 +38,21 @@
   // The inline provenance panel is available in both modes (a share recipient
   // wants exactly this), unlike tags/hide which stay owner-only.
   let expanded = $state(false)
+
+  // Which of this entry's notes (an encounter's folded visit notes, or a
+  // standalone note's own prose) are expanded past the clamped preview.
+  let expandedNotes = $state<Set<number>>(new Set())
+  function toggleNote(i: number): void {
+    const next = new Set(expandedNotes)
+    if (next.has(i)) next.delete(i)
+    else next.add(i)
+    expandedNotes = next
+  }
+  // A note gets a Read more toggle when the clamped 3-line preview could hide
+  // content: multi-paragraph prose, or a long single run.
+  function isLongNote(text: string): boolean {
+    return text.split('\n').length > 3 || text.length > 200
+  }
   const stubId = $derived(`stub-${primaryEventId}`)
   const detail = $derived(entry.detail)
   const humanKind = $derived(detail.kind.replace(/_/g, ' '))
@@ -186,6 +201,22 @@
             <dd class="doc data">{detail.sourceDoc}</dd>
           </div>
         {/if}
+        {#each entry.notes as note, i (note.eventIds[0])}
+          <div class="note" data-testid="spine-entry-note">
+            <p class="note-title">{note.label}</p>
+            <p class="note-body" class:clamped={!expandedNotes.has(i)}>{note.text}</p>
+            {#if isLongNote(note.text)}
+              <button
+                type="button"
+                class="read-more"
+                onclick={() => toggleNote(i)}
+                data-testid="spine-entry-note-readmore"
+              >
+                {expandedNotes.has(i) ? 'Read less' : 'Read more'}
+              </button>
+            {/if}
+          </div>
+        {/each}
       </dl>
     </div>
   </div>
@@ -388,6 +419,52 @@
 
   .stub .data {
     font-size: var(--text-sm);
+  }
+
+  /* A folded visit note (or a standalone note's own prose): a full-width block,
+     unlike the dt/dd metadata rows above it. */
+  .note {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding-top: var(--space-1);
+    border-top: 1px solid var(--border);
+  }
+
+  .note-title {
+    margin: 0;
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+  }
+
+  .note-body {
+    margin: 0;
+    /* Prose keeps its paragraph breaks (the importer preserves them). */
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+  }
+
+  /* Collapsed preview: a few lines, the rest behind Read more. The reduced-
+     motion kill-switch doesn't touch this — it's a clamp, not an animation. */
+  .note-body.clamped {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    overflow: hidden;
+  }
+
+  .read-more {
+    align-self: flex-start;
+    min-height: auto;
+    min-width: auto;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--action);
+    font-size: var(--text-xs);
   }
 
   @keyframes enter {

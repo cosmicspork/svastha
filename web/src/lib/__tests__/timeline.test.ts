@@ -142,6 +142,103 @@ describe('buildTimeline: med/food/note formatting', () => {
   })
 })
 
+describe('buildTimeline: visit-note nesting (decision C2)', () => {
+  function encounter(at: string, sourceDoc: string | null): StoredEvent {
+    return ev({
+      kind: 'encounter',
+      effective_at: at,
+      code: { system: LOINC, code: '99213', display: 'Office visit' },
+      provenance: { source: 'import:Clinic', source_doc: sourceDoc },
+    })
+  }
+  function note(at: string, text: string, sourceDoc: string | null, display?: string): StoredEvent {
+    return ev({
+      kind: 'document',
+      effective_at: at,
+      value: { text },
+      code: display ? { system: LOINC, code: '18776-5', display } : null,
+      provenance: { source: sourceDoc ? 'import:Clinic' : 'self', source_doc: sourceDoc },
+    })
+  }
+
+  it('nests a note under the encounter sharing its source document (rule a)', () => {
+    const at = '2026-02-01T10:00:00+00:00'
+    const days = buildTimeline(
+      [encounter(at, 'docA'), note(at, 'Plan: rest and recheck.', 'docA', 'Plan of Care')],
+      'all',
+    )
+    expect(days).toHaveLength(1)
+    // Only the encounter is a visible row; the note folded into it.
+    expect(days[0].entries).toHaveLength(1)
+    const enc = days[0].entries[0]
+    expect(enc.category).toBe('clinical')
+    expect(enc.notes).toHaveLength(1)
+    expect(enc.notes[0]).toMatchObject({ label: 'Plan of Care', text: 'Plan: rest and recheck.' })
+    expect(enc.hint).toBe('1 note')
+    // Curation still keys off the encounter's own event id, not the note's.
+    expect(enc.eventIds).toHaveLength(1)
+    expect(enc.eventIds[0]).not.toBe(enc.notes[0].eventIds[0])
+  })
+
+  it('nests a note under the sole encounter on its day when no source doc matches (rule b)', () => {
+    const days = buildTimeline(
+      [
+        encounter('2026-02-02T09:00:00+00:00', 'docX'),
+        note('2026-02-02T18:00:00+00:00', 'Self note.', null),
+      ],
+      'all',
+    )
+    expect(days[0].entries).toHaveLength(1)
+    expect(days[0].entries[0].category).toBe('clinical')
+    expect(days[0].entries[0].notes).toHaveLength(1)
+  })
+
+  it('leaves a note standalone when its day has two encounters and no source-doc match', () => {
+    const days = buildTimeline(
+      [
+        encounter('2026-02-03T09:00:00+00:00', 'docA'),
+        encounter('2026-02-03T13:00:00+00:00', 'docB'),
+        note('2026-02-03T20:00:00+00:00', 'A standalone personal note.', null),
+      ],
+      'all',
+    )
+    // Three rows: two encounters (neither carrying the note) + the lone note.
+    expect(days[0].entries).toHaveLength(3)
+    const noteRow = days[0].entries.find((e) => e.category === 'note')
+    expect(noteRow).toBeDefined()
+    expect(days[0].entries.filter((e) => e.category === 'clinical').every((e) => e.notes.length === 0)).toBe(
+      true,
+    )
+  })
+
+  it('caps a standalone note row to a first-line preview but keeps full prose in notes', () => {
+    const long = `${'x'.repeat(200)}\nsecond paragraph`
+    const days = buildTimeline([note('2026-02-04T10:00:00+00:00', long, null)], 'all')
+    const noteRow = days[0].entries[0]
+    expect(noteRow.category).toBe('note')
+    expect(noteRow.label.length).toBeLessThanOrEqual(91) // 90 chars + ellipsis
+    expect(noteRow.label.endsWith('…')).toBe(true)
+    expect(noteRow.notes[0].text).toBe(long)
+  })
+
+  it('folds every section of a multi-section visit note under one encounter', () => {
+    const at = '2026-02-05T10:00:00+00:00'
+    // Two narrative sections sharing the visit date land in one note group,
+    // then fold into the encounter as two individually-titled notes.
+    const days = buildTimeline(
+      [
+        encounter(at, 'docV'),
+        note(at, 'Plan text.', 'docV', 'Plan of Care'),
+        note(at, 'Assessment text.', 'docV', 'Assessment'),
+      ],
+      'all',
+    )
+    expect(days[0].entries).toHaveLength(1)
+    expect(days[0].entries[0].notes.map((n) => n.label).sort()).toEqual(['Assessment', 'Plan of Care'])
+    expect(days[0].entries[0].hint).toBe('2 notes')
+  })
+})
+
 describe('buildTimeline: clinical/other default formatting', () => {
   const at = '2026-01-01T10:00:00+00:00'
 
