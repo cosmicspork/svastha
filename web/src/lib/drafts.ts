@@ -33,6 +33,7 @@ export type EventValue =
   | { quantity: { value: string; unit: Code | null } }
   | { coded: Code }
   | { text: string }
+  | { attachment: { sha256: string; mime: string; size: number } }
 
 /** An event ready to sign: everything but `id` (derived) and `provenance`
  * (stamped by logEvent). Quick-log always dates its facts. */
@@ -156,6 +157,39 @@ export function exerciseDrafts(activity: string, effectiveAt: string, minutes?: 
 
 export function noteDraft(body: string, effectiveAt: string): Draft {
   return { kind: 'document', effective_at: effectiveAt, value: text(body) }
+}
+
+// --- paper records (captured documents) ---
+
+/** Metadata for one captured photo, produced by the capture form after
+ * downscaling: the content address of the plaintext bytes plus its type/size.
+ * The bytes themselves are stored separately (see lib/attachments.ts). */
+export interface CapturedPhoto {
+  sha256: string
+  mime: string
+  size: number
+}
+
+/** One `document` event per photo carrying an `attachment` value, plus a
+ * caption sibling (a plain text `document`, i.e. a note) sharing the same
+ * `effective_at` when the caption is non-empty. The shared timestamp is what
+ * folds a multi-page capture and its caption into one spine entry — the same
+ * convention a BP pair or a multi-item meal uses. The caption lives where a
+ * note's text lives, never inside the attachment value, so each photo's id is a
+ * pure function of its bytes. */
+export function paperRecordDrafts(
+  photos: CapturedPhoto[],
+  caption: string,
+  effectiveAt: string,
+): Draft[] {
+  const drafts: Draft[] = photos.map((p) => ({
+    kind: 'document' as const,
+    effective_at: effectiveAt,
+    value: { attachment: { sha256: p.sha256, mime: p.mime, size: p.size } },
+  }))
+  const trimmed = caption.trim()
+  if (trimmed) drafts.push(noteDraft(trimmed, effectiveAt))
+  return drafts
 }
 
 // --- mindfulness ---

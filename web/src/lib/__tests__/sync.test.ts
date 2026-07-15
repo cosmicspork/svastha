@@ -183,6 +183,45 @@ describe('provenance codec (doc-)', () => {
   })
 })
 
+describe('attachments codec (att-)', () => {
+  it('pushes a stored attachment as a mime+base64-bytes envelope', async () => {
+    const bytes = new Uint8Array([255, 216, 255, 0, 42]) // JPEG-ish header bytes
+    await put('attachments', {
+      sha256: 'deadbeef',
+      mime: 'image/jpeg',
+      size: bytes.length,
+      bytes,
+      capturedAt: new Date().toISOString(),
+    })
+    const relay = inMemoryBlobClient()
+    configure(relay, passthroughSealKey())
+
+    await enqueue(['att-deadbeef'])
+    await drain()
+
+    const pushed = relay.blobs.get('att-deadbeef')
+    expect(pushed).toBeDefined()
+    const envelope = JSON.parse(new TextDecoder().decode(pushed)) as { mime: string; bytes: string }
+    expect(envelope.mime).toBe('image/jpeg')
+    expect(Array.from(atob(envelope.bytes), (c) => c.charCodeAt(0))).toEqual([255, 216, 255, 0, 42])
+  })
+
+  it('marks an att- id done without pushing when no local attachment backs it', async () => {
+    const relay = inMemoryBlobClient()
+    configure(relay, passthroughSealKey())
+
+    await enqueue(['att-missing'])
+    await drain()
+
+    expect(relay.blobs.has('att-missing')).toBe(false)
+    expect(storeGet(syncStatus).pendingCount).toBe(0)
+  })
+
+  it('idsToPull includes att- ids now that the codec is registered', () => {
+    expect(idsToPull(['att-aaa', 'ev-bbb'], new Set())).toEqual(['att-aaa', 'ev-bbb'])
+  })
+})
+
 describe('mutable codec (Codec.mutable — the shape cur- relies on)', () => {
   // A minimal fake mutable codec, registered once for this file (`registerCodec`
   // has no unregister — matches how curation.ts's real 'cur-' codec is
@@ -363,6 +402,28 @@ describe('applySealedBlob', () => {
     expect(key.openAads[0]).toEqual(utf8(id))
   })
 
+  it("round-trips an att- blob to 'new' + a stored attachment record, checking the embedded hash", async () => {
+    const bytes = new Uint8Array([1, 2, 3, 4, 255])
+    const sha = await sha256Hex(bytes)
+    const id = `att-${sha}`
+    const envelope = JSON.stringify({ mime: 'image/jpeg', bytes: btoa(String.fromCharCode(...bytes)) })
+    const key = recordingSealKey()
+
+    const outcome = await applySealedBlob(id, utf8(envelope), key)
+
+    expect(outcome).toBe('new')
+    expect(await dbGet('attachments', sha)).toMatchObject({ sha256: sha, mime: 'image/jpeg', size: 5 })
+    expect(key.openAads).toHaveLength(1)
+    expect(key.openAads[0]).toEqual(utf8(id))
+  })
+
+  it('rejects an att- blob whose bytes do not hash to the blob id', async () => {
+    const envelope = JSON.stringify({ mime: 'image/jpeg', bytes: btoa('mismatched') })
+    await expect(applySealedBlob('att-notthehash', utf8(envelope), passthroughSealKey())).rejects.toThrow(
+      /content hash does not match/,
+    )
+  })
+
   it("applies a cur- blob to 'merged', LWW-merging over an older local record", async () => {
     const { curationBlobIdForKey } = await import('../curation')
     const key = 'tag:evt-lww'
@@ -404,13 +465,20 @@ describe('sealLocalBlob', () => {
 })
 
 describe('listLocalBlobIds', () => {
-  it('lists an ev- per event, a doc- per provenance record, and a cur- per curation key', async () => {
+  it('lists an ev- per event, a doc- per provenance record, an att- per attachment, and a cur- per curation key', async () => {
     await put('events', fakeStoredEvent('evt-a'))
     await put('provenance', {
       sha256: 'sha-a',
       name: 'D.xml',
       bytes: new Uint8Array([1]),
       importedAt: new Date().toISOString(),
+    })
+    await put('attachments', {
+      sha256: 'sha-att',
+      mime: 'image/jpeg',
+      size: 1,
+      bytes: new Uint8Array([1]),
+      capturedAt: new Date().toISOString(),
     })
     await put('curation', { key: 'tag:evt-a', value: { tags: ['x'] }, updated_at: 1, author: 'aaa' })
 
@@ -419,6 +487,7 @@ describe('listLocalBlobIds', () => {
 
     expect(ids).toContain('ev-evt-a')
     expect(ids).toContain('doc-sha-a')
+    expect(ids).toContain('att-sha-att')
     expect(ids).toContain(await curationBlobIdForKey('tag:evt-a'))
     // vault.key is not a codec, so it is never enumerated.
     expect(ids).not.toContain('vault.key')
