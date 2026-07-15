@@ -6,7 +6,15 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { docsFromFile, docsFromZip, sha256Hex, totalsOf, type DocPlan } from '../import'
+import {
+  docsFromFile,
+  docsFromZip,
+  projectedDocBlobBytes,
+  RELAY_MAX_BLOB_BYTES,
+  sha256Hex,
+  totalsOf,
+  type DocPlan,
+} from '../import'
 // Ambient types for the Node builtins below — see ./node-builtins.d.ts.
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -80,6 +88,22 @@ describe('sha256Hex', () => {
   })
 })
 
+describe('projectedDocBlobBytes', () => {
+  it('accounts for base64 inflation, the JSON envelope, and the AEAD seal', () => {
+    // 3 raw bytes -> 4 base64 chars; envelope `{"name":"d","bytes":""}` is 23
+    // bytes; seal overhead is 40. 4 + 23 + 40 = 67.
+    expect(projectedDocBlobBytes('d', 3)).toBe(4 + 23 + 40)
+  })
+
+  it('flags a document whose projected blob exceeds the relay cap', () => {
+    // ~12.1 MiB of raw bytes already blows past 16 MiB once base64'd (~4/3).
+    const raw = 13 * 1024 * 1024
+    expect(projectedDocBlobBytes('big.xml', raw)).toBeGreaterThan(RELAY_MAX_BLOB_BYTES)
+    // A comfortably small document stays under the cap.
+    expect(projectedDocBlobBytes('small.xml', 1024)).toBeLessThan(RELAY_MAX_BLOB_BYTES)
+  })
+})
+
 describe('totalsOf', () => {
   function fakeDoc(partial: Partial<DocPlan>): DocPlan {
     return {
@@ -92,6 +116,7 @@ describe('totalsOf', () => {
       newCount: 0,
       dupCount: 0,
       bytes: new Uint8Array(),
+      tooLargeToSync: false,
       ...partial,
     }
   }
