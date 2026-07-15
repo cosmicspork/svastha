@@ -6,7 +6,10 @@
   import { loadDictionaryIndex, dictionaryStatus } from '../lib/dictionary'
   import { CATEGORIES, CATEGORY_META, type Category } from '../lib/category'
   import { allCurationByPrefix, allTags, setHidden } from '../lib/curation'
+  import { attachmentBytes } from '../lib/attachments'
+  import type { TimelineEntry } from '../lib/timeline'
   import SpineEntry from './SpineEntry.svelte'
+  import AttachmentViewer from './AttachmentViewer.svelte'
   import TagChips from './TagChips.svelte'
 
   // `readonly` (the person screen, over a share's cached events) supplies its
@@ -31,6 +34,11 @@
   // been going on lately"; older history is one tap away.
   let visibleDays = $state(60)
   let animate = $state(true)
+
+  // The paper-record entry whose viewer is open, or null. Both the owner spine
+  // and the read-only (household) spine load bytes from the local `attachments`
+  // store — the household pull mirrors att- blobs into it too (see shared.ts).
+  let viewerEntry = $state<TimelineEntry | null>(null)
 
   let tagsByEvent = $state<Map<string, string[]>>(new Map())
   let hiddenEvents = $state<Set<string>>(new Set())
@@ -201,6 +209,7 @@
               editable={!readonly}
               onTagsChanged={handleTagsChanged}
               onToggleHidden={handleToggleHidden}
+              onOpenViewer={(e) => (viewerEntry = e)}
             />
           {/each}
         </section>
@@ -217,6 +226,17 @@
       {/if}
     {/if}
   </div>
+
+  {#if viewerEntry?.attachments}
+    <AttachmentViewer
+      pages={viewerEntry.attachments}
+      caption={viewerEntry.label}
+      recordedIso={viewerEntry.effective_at}
+      source={viewerEntry.detail.source}
+      loadBytes={attachmentBytes}
+      onclose={() => (viewerEntry = null)}
+    />
+  {/if}
 {/if}
 
 <style>

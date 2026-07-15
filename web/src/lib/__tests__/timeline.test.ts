@@ -354,3 +354,34 @@ describe('buildTimeline: clinical/other default formatting', () => {
     })
   })
 })
+
+describe('buildTimeline: paper records (attachment documents)', () => {
+  const at = '2026-01-01T09:00:00+00:00'
+
+  it('groups multi-page captures with their caption into one note entry', () => {
+    const events = [
+      ev({ effective_at: at, kind: 'document', value: { attachment: { sha256: 'bb', mime: 'image/jpeg', size: 20 } } }),
+      ev({ effective_at: at, kind: 'document', value: { attachment: { sha256: 'aa', mime: 'image/jpeg', size: 10 } } }),
+      ev({ effective_at: at, kind: 'document', value: { text: 'GI consult — Dr. Rao' } }),
+    ]
+    const entry = buildTimeline(events, 'all')[0].entries[0]
+    expect(entry.category).toBe('note')
+    expect(entry.label).toBe('GI consult — Dr. Rao')
+    expect(entry.hint).toBe('📷 2 pages')
+    // sha-sorted for a stable page order.
+    expect(entry.attachments).toEqual([
+      { sha256: 'aa', mime: 'image/jpeg' },
+      { sha256: 'bb', mime: 'image/jpeg' },
+    ])
+  })
+
+  it('labels an uncaptioned single page "Paper record" with a 1-page hint', () => {
+    const events = [
+      ev({ effective_at: at, kind: 'document', value: { attachment: { sha256: 'aa', mime: 'image/jpeg', size: 10 } } }),
+    ]
+    const entry = buildTimeline(events, 'all')[0].entries[0]
+    expect(entry.label).toBe('Paper record')
+    expect(entry.hint).toBe('📷 1 page')
+    expect(entry.attachments).toHaveLength(1)
+  })
+})
