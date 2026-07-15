@@ -1,0 +1,43 @@
+{
+  "version": "2026-07-15",
+  "generated_at": "2026-07-15T11:17:36.725Z",
+  "files": [
+    {
+      "system": "http://loinc.org",
+      "path": "loinc.json",
+      "bytes": 339,
+      "sha256": "3a9166bcdcfbfd6e3d7acd28f1702a7cf1e51ae492edc093b3fc72d262884980",
+      "entries": 10,
+      "label": "LOINC",
+      "attribution": "This material contains content from LOINC (http://loinc.org). LOINC is copyright © Regenstrief Institute, Inc. and the Logical Observation Identifiers Names and Codes (LOINC) Committee and is available at no cost under the license at http://loinc.org/license. LOINC® is a registered United States trademark of Regenstrief Institute, Inc.",
+      "starter": true
+    },
+    {
+      "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+      "path": "rxnorm.json",
+      "bytes": 3961827,
+      "sha256": "68fab8b0ea2ba0af7d12928bfb1a7e368c22fc2106d063ae4b02a6c90d63f04f",
+      "entries": 74934,
+      "label": "RxNorm",
+      "attribution": "Courtesy of the U.S. National Library of Medicine (NLM/NIH). RxNorm Current Prescribable Content; no license required."
+    },
+    {
+      "system": "http://hl7.org/fhir/sid/icd-10-cm",
+      "path": "icd10cm.json",
+      "bytes": 8223487,
+      "sha256": "03fdffa345f871fa5a8b3db2a7bd4bb771541e1eb67ad47212000b07ccf1b288",
+      "entries": 98186,
+      "label": "ICD-10-CM",
+      "attribution": "ICD-10-CM is a U.S. public-domain code set maintained by CMS and the CDC/NCHS."
+    },
+    {
+      "system": "http://hl7.org/fhir/sid/cvx",
+      "path": "cvx.json",
+      "bytes": 11850,
+      "sha256": "ad2ff05205ca0b127204b73baba8724192228463f5bf882579a19f6b92928bac",
+      "entries": 289,
+      "label": "CVX",
+      "attribution": "CVX vaccine codes courtesy of the U.S. CDC."
+    }
+  ]
+}
