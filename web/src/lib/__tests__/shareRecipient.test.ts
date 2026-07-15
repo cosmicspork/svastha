@@ -133,6 +133,26 @@ describe('validateBundle', () => {
     expect(v!.createdAt).toBe('2026-07-14T00:00:00Z')
     expect(v!.signerHex).toBe(signerHex)
     expect(v!.events).toEqual([])
+    // Attachments default to an empty map when the field is absent.
+    expect(v!.attachments).toEqual({})
+  })
+
+  it('accepts and carries an attachments map when present', () => {
+    const json = JSON.stringify({
+      v: 1,
+      created_at: 'x',
+      signer,
+      events: [],
+      attachments: { aa: 'AQID', bb: 'BAUG' },
+    })
+    expect(validateBundle(json)!.attachments).toEqual({ aa: 'AQID', bb: 'BAUG' })
+  })
+
+  it('rejects a malformed attachments field (not a flat string map)', () => {
+    expect(validateBundle(JSON.stringify({ v: 1, created_at: 'x', signer, events: [], attachments: [] }))).toBeNull()
+    expect(
+      validateBundle(JSON.stringify({ v: 1, created_at: 'x', signer, events: [], attachments: { aa: 5 } })),
+    ).toBeNull()
   })
 
   it('rejects malformed JSON', () => {
@@ -187,12 +207,13 @@ describe('openShareBundle (round-trip through the mocked envelope)', () => {
     return key.seal(new TextEncoder().encode(JSON.stringify(bundleObj)), new TextEncoder().encode(TOKEN))
   }
 
-  it('opens, validates, and verifies a good bundle', () => {
+  it('opens, validates, and verifies a good bundle, carrying attachments through', () => {
     const bytes = sealed({
       v: 1,
       created_at: '2026-07-14T00:00:00Z',
       signer,
       events: [event('a', signerHex, 'ok'), event('b', signerHex, 'bad')],
+      attachments: { deadbeef: 'AQID' },
     })
     const opened = openShareBundle(bytes, TOKEN, KEY)
     expect(opened).not.toBeNull()
@@ -200,6 +221,7 @@ describe('openShareBundle (round-trip through the mocked envelope)', () => {
     expect(opened!.signerHex).toBe(signerHex)
     expect(opened!.verified).toBe(1)
     expect(opened!.dropped).toBe(1)
+    expect(opened!.attachments).toEqual({ deadbeef: 'AQID' })
   })
 
   it('returns null when the wrong key is supplied (open throws → damaged)', () => {
