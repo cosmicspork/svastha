@@ -22,7 +22,13 @@ before sharing it.
   section's narrative `<text>`, one dangling (must skip + warn). Medications
   appear in all three mapped section shapes: history (`10160-0`), administered
   (`29549-3`, same plain-substanceAdministration entries), and discharge
-  (`10183-2`, act-wrapped, plus one empty act that must skip). Fictional
+  (`10183-2`, act-wrapped, plus one empty act that must skip). Two narrative
+  prose sections exercise the note mapping: a Plan of Care (`18776-5`) with
+  paragraph + list prose that becomes one `document`/Text note dated by the
+  document's `componentOf/encompassingEncounter` visit date, and an Assessment
+  (`51848-0`) whose "No data available" placeholder must skip (never an empty
+  note). The header `<effectiveTime>` deliberately carries a birth-date-shaped
+  value the mapping must ignore in favor of the encounter date. Fictional
   patient "Alex Example", fictional codes and values.
 - `fhir/bundle-minimal.json` — a small FHIR R4 `Bundle` with one of each
   resourceType `crates/import/src/fhir.rs` maps, a `Patient` (unmapped) and an
@@ -30,10 +36,13 @@ before sharing it.
   zero must survive the round trip (see the decimal-preservation test in
   `crates/import/tests/fhir.rs`).
 - `xdm/minimal-xdm.zip` — an IHE_XDM package: `IHE_XDM/EXAMPLE1/DOC0001.XML`
-  (a copy of `ccda/minimal-ccd.xml`) alongside stub `STYLE.XSL` and
+  (a verbatim copy of `ccda/minimal-ccd.xml`) alongside stub `STYLE.XSL` and
   `INDEX.HTM` files, so the web unzip/path-filtering test has a real package
   shape to exercise (only `DOC*.XML` files are documents; everything else in
-  an IHE_XDM package is styling/index noise).
+  an IHE_XDM package is styling/index noise). `DOC0001.XML` must stay an exact
+  copy of the C-CDA fixture; regenerate the zip whenever that fixture changes,
+  e.g. `cd fixtures && rm -f xdm/minimal-xdm.zip && mkdir -p /tmp/xdm/IHE_XDM/EXAMPLE1 && cp ccda/minimal-ccd.xml /tmp/xdm/IHE_XDM/EXAMPLE1/DOC0001.XML`
+  (add the two stubs) `&& (cd /tmp/xdm && zip -X -r -D "$OLDPWD/xdm/minimal-xdm.zip" IHE_XDM)`.
 
 ## Golden tests
 

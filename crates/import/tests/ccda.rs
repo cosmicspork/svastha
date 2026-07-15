@@ -46,7 +46,12 @@ fn maps_every_section_to_its_expected_event_count() {
         "the standalone procedure entry + 2 nested in the encounter"
     );
     assert_eq!(count(EventKind::Encounter), 1);
-    assert_eq!(result.events.len(), 15);
+    assert_eq!(
+        count(EventKind::Document),
+        1,
+        "the Plan of Care narrative note; the Assessment 'no data' section skips"
+    );
+    assert_eq!(result.events.len(), 16);
 }
 
 #[test]
@@ -349,6 +354,91 @@ fn unknown_oid_is_kept_as_urn_oid_not_dropped() {
 }
 
 #[test]
+fn narrative_section_becomes_one_dated_document_note() {
+    // The Plan of Care section has no structured <entry>; its prose is mapped
+    // to a single document/Text event, coded by the section's LOINC with the
+    // section title as display, dated by the encompassingEncounter (not the
+    // header <effectiveTime>, which carries a birth-date-shaped value).
+    let note = events()
+        .into_iter()
+        .find(|e| e.kind == EventKind::Document)
+        .expect("narrative plan-of-care note");
+    assert_eq!(
+        note.code,
+        Some(Code {
+            system: "http://loinc.org".into(),
+            code: "18776-5".into(),
+            display: Some("Plan of Care".into()),
+        })
+    );
+    assert_eq!(note.effective_at.as_deref(), Some("2024-01-03"));
+    assert_eq!(
+        note.value,
+        Some(EventValue::Text(
+            "Continue current medications. Recheck blood pressure in two weeks.\n\
+             Increase daily walking to 30 minutes.\n\
+             Reduce dietary sodium."
+                .into()
+        ))
+    );
+}
+
+#[test]
+fn no_data_available_narrative_is_skipped_not_emitted_as_empty_note() {
+    let result = import_ccda(FIXTURE).unwrap();
+    // Only the Plan of Care becomes a document event; the Assessment "no data"
+    // section must not.
+    assert_eq!(
+        result
+            .events
+            .iter()
+            .filter(|e| e.kind == EventKind::Document)
+            .count(),
+        1
+    );
+    assert!(
+        result
+            .skipped
+            .iter()
+            .any(|s| s.what == "Assessment" && s.why.contains("no data available")),
+        "skipped: {:?}",
+        result.skipped
+    );
+}
+
+#[test]
+fn narrative_with_no_visit_date_is_skipped_with_a_warning() {
+    // Same narrative section, but a document with no encompassingEncounter /
+    // serviceEvent date: an undated note can't be placed on the timeline, so
+    // it skips with a warning rather than emitting an undatable event.
+    let doc = r#"<ClinicalDocument xmlns="urn:hl7-org:v3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+          <effectiveTime value="19900101"/>
+          <component><structuredBody><component>
+            <section>
+              <code code="10164-2" codeSystem="2.16.840.1.113883.6.1"/>
+              <title>History of Present Illness</title>
+              <text><paragraph>Patient reports a mild headache.</paragraph></text>
+            </section>
+          </component></structuredBody></component>
+        </ClinicalDocument>"#;
+    let result = import_ccda(doc).unwrap();
+    assert!(result.events.is_empty(), "events: {:?}", result.events);
+    assert!(
+        result.warnings.iter().any(|w| w.contains("no visit date")),
+        "warnings: {:?}",
+        result.warnings
+    );
+    assert!(
+        result
+            .skipped
+            .iter()
+            .any(|s| s.what == "History of Present Illness" && s.why.contains("no visit date")),
+        "skipped: {:?}",
+        result.skipped
+    );
+}
+
+#[test]
 fn importing_twice_is_deterministic() {
     // Re-import (e.g. the user re-drops the same document) must produce byte-
     // identical drafts, or content ids would drift and dedup would break.
@@ -389,5 +479,9 @@ fn pinned_content_ids() {
     assert_eq!(
         id_of(&drafts[3]), // immunization
         "0346caea336f203649dd9c9976371ebea71be8493a9ba285bc56789761179623"
+    );
+    assert_eq!(
+        id_of(&drafts[15]), // plan-of-care narrative note (document/Text)
+        "1b2cb25e391d299b51e30fdc490f43f0f4c8b1e11a7cd664e291e0f6118ead70"
     );
 }
