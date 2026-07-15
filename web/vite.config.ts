@@ -1,9 +1,18 @@
+import { readFileSync } from 'node:fs'
 import { defineConfig } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { VitePWA } from 'vite-plugin-pwa'
 
+// The release version release-please maintains for the whole workspace — the
+// web app has no version of its own (package.json stays 0.0.0), so the About
+// screen bakes this in at build time.
+const APP_VERSION: string = JSON.parse(readFileSync('../.release-please-manifest.json', 'utf8'))['.']
+
 // https://vite.dev/config/
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(APP_VERSION),
+  },
   plugins: [
     svelte(),
     VitePWA({
