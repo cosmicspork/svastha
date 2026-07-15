@@ -30,19 +30,54 @@ pub fn import(xml: &str) -> Result<ImportResult, ImportError> {
         return Ok(result);
     };
 
+    // The visit date, resolved once from the document header (see
+    // `document_visit_date`), dates the narrative prose sections — they carry
+    // no per-entry effectiveTime of their own.
+    let visit_date = document_visit_date(root);
+
     for section_wrapper in children_named(structured_body, "component") {
         let Some(section) = find_child(section_wrapper, "section") else {
             continue;
         };
-        import_section(section, &mut result);
+        import_section(section, visit_date.as_deref(), &mut result);
     }
 
     Ok(result)
 }
 
+/// The document's visit date, used only to date the narrative prose sections
+/// (which have no per-entry effectiveTime). Order:
+/// `componentOf/encompassingEncounter/effectiveTime` — its `<low value>`, then
+/// its own `@value` — then `documentationOf/serviceEvent/effectiveTime/<low>`.
+///
+/// The document header `<effectiveTime>` is deliberately NOT consulted: in real
+/// Epic exports it holds junk (a birth date, an export timestamp) rather than
+/// the visit date, so trusting it would scatter narrative notes onto the wrong
+/// days on the timeline.
+fn document_visit_date(root: Node) -> Option<String> {
+    let encompassing = find_child(root, "componentOf")
+        .and_then(|c| find_child(c, "encompassingEncounter"))
+        .and_then(|e| find_child(e, "effectiveTime"));
+    let service_event = find_child(root, "documentationOf")
+        .and_then(|d| find_child(d, "serviceEvent"))
+        .and_then(|s| find_child(s, "effectiveTime"));
+
+    for et in [encompassing, service_event].into_iter().flatten() {
+        let raw = find_child(et, "low")
+            .and_then(|low| low.attribute("value"))
+            .or_else(|| et.attribute("value"));
+        if let Some(v) = raw {
+            if let Ok(iso) = hl7_ts_to_iso(v) {
+                return Some(iso);
+            }
+        }
+    }
+    None
+}
+
 // --- section dispatch ---
 
-fn import_section(section: Node, result: &mut ImportResult) {
+fn import_section(section: Node, visit_date: Option<&str>, result: &mut ImportResult) {
     let Some(code) = section_code(section) else {
         result.skipped.push(Skipped {
             what: section_title(section),
@@ -63,6 +98,14 @@ fn import_section(section: Node, result: &mut ImportResult) {
         "8716-3" => import_vitals(section, result),
         "47519-4" => import_procedures(section, result),
         "46240-8" => import_encounters(section, result),
+        // Narrative prose sections — the human-written parts of a visit note.
+        // 18776-5 plan of care, 10164-2 HPI/progress note, 29299-5 reason for
+        // visit, 51848-0 assessment, 10190-7 physical findings, 11506-3
+        // progress note. Each maps to one document/Text event (see
+        // `import_narrative`).
+        "18776-5" | "10164-2" | "29299-5" | "51848-0" | "10190-7" | "11506-3" => {
+            import_narrative(section, visit_date, result)
+        }
         _ => result.skipped.push(Skipped {
             what: format!("{} ({code})", section_title(section)),
             why: "section not mapped (v1)".into(),
@@ -599,6 +642,144 @@ fn has_template(node: Node, root: &str) -> bool {
     children_named(node, "templateId").any(|t| t.attribute("root") == Some(root))
 }
 
+// --- narrative prose sections ---
+//
+// The dispatch routes six narrative LOINC codes here (see `import_section`).
+// Unlike every other section, there is no structured `<entry>` to walk: the
+// human-written prose lives in the section's own `<text>` block, and the whole
+// section becomes ONE `document`/`Text` event coded by the section's LOINC
+// with its title as the display name.
+
+/// Map a narrative section to a single document event. The prose is the
+/// section `<text>` flattened to readable plain text; the date is the
+/// document's visit date (narrative sections carry no date of their own).
+/// Skips — never silently drops — a section whose prose is empty or a "no data
+/// available" placeholder, or (with a warning) one that has no visit date to
+/// place it on the timeline.
+fn import_narrative(section: Node, visit_date: Option<&str>, result: &mut ImportResult) {
+    let title = section_title(section);
+    let Some(text_node) = find_child(section, "text") else {
+        result.skipped.push(Skipped {
+            what: title,
+            why: "narrative section has no <text>".into(),
+        });
+        return;
+    };
+
+    let prose = flatten_narrative(text_node);
+    if prose.is_empty() || is_no_data(&prose) {
+        result.skipped.push(Skipped {
+            what: title,
+            why: "narrative is empty or says no data available".into(),
+        });
+        return;
+    }
+
+    let Some(date) = visit_date else {
+        result.warnings.push(format!(
+            "{title}: no visit date on the document, narrative note not placed on the timeline"
+        ));
+        result.skipped.push(Skipped {
+            what: title,
+            why: "no visit date to place the narrative on the timeline".into(),
+        });
+        return;
+    };
+
+    // Dispatched on the section `<code>`, so the LOINC is present; the section
+    // title is the human display name.
+    let code = section_code(section).map(|loinc| Code {
+        system: LOINC.to_string(),
+        code: loinc,
+        display: Some(title),
+    });
+    result.events.push(EventDraft {
+        kind: EventKind::Document,
+        code,
+        effective_at: Some(date.to_string()),
+        value: Some(EventValue::Text(prose)),
+    });
+}
+
+/// True for narrative that carries no real content — an empty section, or one
+/// of the "No data available" placeholder strings EHRs emit for a section they
+/// have nothing for. Kept deliberately narrow (exact placeholder phrases, not a
+/// substring search) so real prose that merely mentions "no data" is never
+/// dropped.
+fn is_no_data(text: &str) -> bool {
+    let normalized = text.trim().trim_end_matches('.').to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "" | "no data"
+            | "no data available"
+            | "no data available for this section"
+            | "no information"
+            | "no information available"
+            | "not available"
+            | "none"
+            | "none recorded"
+    )
+}
+
+/// Flatten a narrative `<text>` block to readable plain text: block elements
+/// (paragraphs, list items, table rows, `<br/>`) become line breaks, table
+/// cells within a row are space-separated, and all other whitespace collapses
+/// to single spaces. Unlike `flatten_text` (which joins everything onto one
+/// line for a single coded value), this preserves the paragraph/list structure
+/// a human needs to actually read a visit note.
+fn flatten_narrative(node: Node) -> String {
+    // One accumulated string per output line. Block boundaries start a new
+    // line; a text node's own whitespace (including source newlines from
+    // pretty-printed markup) stays within its line and is collapsed to single
+    // spaces below — only the boundaries we insert survive as real breaks.
+    let mut lines: Vec<String> = vec![String::new()];
+    collect_narrative(node, &mut lines);
+    lines
+        .into_iter()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Narrative elements that force a line break. `list`/`table` break so their
+/// first child doesn't run onto the preceding text; `item`/`tr`/`paragraph`
+/// break per row/item; `caption`/`title` stand on their own line.
+fn is_narrative_block(name: &str) -> bool {
+    matches!(
+        name,
+        "paragraph" | "list" | "item" | "table" | "tr" | "caption" | "title"
+    )
+}
+
+fn collect_narrative(node: Node, lines: &mut Vec<String>) {
+    for child in node.children() {
+        if child.is_text() {
+            lines
+                .last_mut()
+                .expect("lines is never empty")
+                .push_str(child.text().unwrap_or_default());
+        } else if child.is_element() {
+            let name = child.tag_name().name();
+            if name == "br" {
+                lines.push(String::new());
+                continue;
+            }
+            let block = is_narrative_block(name);
+            if block {
+                lines.push(String::new());
+            } else if matches!(name, "td" | "th") {
+                // Keep cells on the row's single line but separated.
+                lines.last_mut().expect("lines is never empty").push(' ');
+            }
+            collect_narrative(child, lines);
+            if block {
+                lines.push(String::new());
+            }
+        }
+    }
+}
+
 // --- shared helpers ---
 
 /// A code-bearing element's `code`/`codeSystem`/`displayName`, with
@@ -838,5 +1019,110 @@ mod narrative_reference_tests {
     fn resolve_returns_none_with_no_narrative_text_block() {
         let doc = Document::parse(r#"<section><title>No text here</title></section>"#).unwrap();
         assert_eq!(resolve_narrative_reference(doc.root_element(), "any"), None);
+    }
+}
+
+#[cfg(test)]
+mod narrative_tests {
+    use roxmltree::Document;
+
+    use super::{document_visit_date, find_child, flatten_narrative, is_no_data};
+
+    fn text_of(xml: &str) -> String {
+        let doc = Document::parse(xml).unwrap();
+        let text = find_child(doc.root_element(), "text").unwrap();
+        flatten_narrative(text)
+    }
+
+    #[test]
+    fn flatten_narrative_keeps_paragraph_and_list_breaks_collapsing_other_whitespace() {
+        let flat = text_of(
+            r#"<section><text>
+                <paragraph>Follow up   in
+                  two weeks.</paragraph>
+                <list>
+                    <item>Start medication</item>
+                    <item>Rest</item>
+                </list>
+            </text></section>"#,
+        );
+        assert_eq!(flat, "Follow up in two weeks.\nStart medication\nRest");
+    }
+
+    #[test]
+    fn flatten_narrative_joins_table_cells_on_one_row_line() {
+        let flat = text_of(
+            r#"<section><text>
+                <table><tbody>
+                    <tr><td>Weight</td><td>70 kg</td></tr>
+                    <tr><td>Height</td><td>170 cm</td></tr>
+                </tbody></table>
+            </text></section>"#,
+        );
+        assert_eq!(flat, "Weight 70 kg\nHeight 170 cm");
+    }
+
+    #[test]
+    fn flatten_narrative_breaks_on_br() {
+        let flat = text_of(
+            r#"<section><text><paragraph>Line one<br/>Line two</paragraph></text></section>"#,
+        );
+        assert_eq!(flat, "Line one\nLine two");
+    }
+
+    #[test]
+    fn is_no_data_matches_placeholder_phrases_but_not_real_prose() {
+        assert!(is_no_data("No data available"));
+        assert!(is_no_data("No data available for this section."));
+        assert!(is_no_data("  None  "));
+        assert!(is_no_data(""));
+        assert!(!is_no_data("No new complaints; no data was lost."));
+        assert!(!is_no_data("Assessment: hypertension, stable."));
+    }
+
+    #[test]
+    fn visit_date_prefers_encompassing_encounter_low_over_service_event() {
+        let doc = Document::parse(
+            r#"<ClinicalDocument>
+                <effectiveTime value="19900101"/>
+                <documentationOf><serviceEvent>
+                    <effectiveTime><low value="20200101"/></effectiveTime>
+                </serviceEvent></documentationOf>
+                <componentOf><encompassingEncounter>
+                    <effectiveTime><low value="20240103"/><high value="20240103"/></effectiveTime>
+                </encompassingEncounter></componentOf>
+            </ClinicalDocument>"#,
+        )
+        .unwrap();
+        assert_eq!(
+            document_visit_date(doc.root_element()).as_deref(),
+            Some("2024-01-03")
+        );
+    }
+
+    #[test]
+    fn visit_date_falls_back_to_service_event_and_never_the_header() {
+        let doc = Document::parse(
+            r#"<ClinicalDocument>
+                <effectiveTime value="19900101"/>
+                <documentationOf><serviceEvent>
+                    <effectiveTime><low value="20210615"/></effectiveTime>
+                </serviceEvent></documentationOf>
+            </ClinicalDocument>"#,
+        )
+        .unwrap();
+        assert_eq!(
+            document_visit_date(doc.root_element()).as_deref(),
+            Some("2021-06-15")
+        );
+    }
+
+    #[test]
+    fn visit_date_is_none_when_only_the_header_effective_time_exists() {
+        let doc = Document::parse(
+            r#"<ClinicalDocument><effectiveTime value="19900101"/></ClinicalDocument>"#,
+        )
+        .unwrap();
+        assert_eq!(document_visit_date(doc.root_element()), None);
     }
 }

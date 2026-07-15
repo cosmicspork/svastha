@@ -144,6 +144,13 @@
         </p>
         <p data-testid="import-doc-counts">{doc.newCount} new / {doc.dupCount} duplicate</p>
 
+        {#if doc.tooLargeToSync}
+          <p class="warn" data-testid="import-doc-too-large">
+            Too large to sync — kept locally. This document's records still import; only its verbatim
+            copy stays on this device.
+          </p>
+        {/if}
+
         {#if doc.warnings.length > 0}
           <button
             type="button"
@@ -242,6 +249,11 @@
   .row {
     display: flex;
     gap: var(--space-2);
+  }
+
+  .warn {
+    font-size: var(--text-sm);
+    color: var(--flare);
   }
 
   ul {

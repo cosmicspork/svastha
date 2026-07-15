@@ -34,15 +34,15 @@ test('imports an XDM package and a FHIR bundle, dedupes across formats, and re-i
   // Two source documents (the XDM zip's one DOC*.XML, plus the bundle).
   await expect(page.getByTestId('import-doc')).toHaveCount(2)
 
-  // 10 C-CDA events + 9 FHIR events, minus 3 facts (Condition, Immunization,
+  // 16 C-CDA events + 9 FHIR events, minus 3 facts (Condition, Immunization,
   // Procedure) that are the identical fact in both fixtures -- the
-  // cross-format dedup the content-id scheme exists for -- leaves 16 new and
+  // cross-format dedup the content-id scheme exists for -- leaves 22 new and
   // 3 counted as already accounted for within this same drop.
-  await expect(page.getByTestId('import-totals')).toContainText('16 new')
+  await expect(page.getByTestId('import-totals')).toContainText('22 new')
   await expect(page.getByTestId('import-totals')).toContainText('3 already in your record')
 
   await page.getByTestId('import-commit').click()
-  await expect(page.getByTestId('import-done')).toContainText('16')
+  await expect(page.getByTestId('import-done')).toContainText('22')
 
   await page.getByTestId('import-view-timeline').click()
   await expect(page.getByTestId('spine-entry').filter({ hasText: 'Appendectomy' })).toBeVisible()
@@ -52,7 +52,8 @@ test('imports an XDM package and a FHIR bundle, dedupes across formats, and re-i
   await goToImport(page)
   await page.getByTestId('import-file-input').setInputFiles([XDM_ZIP, FHIR_BUNDLE])
   await expect(page.getByTestId('import-totals')).toContainText('0')
-  await expect(page.getByTestId('import-totals')).toContainText('19 already in your record')
+  // Every draft across both documents (16 C-CDA + 9 FHIR) is now in the log.
+  await expect(page.getByTestId('import-totals')).toContainText('25 already in your record')
 
   // The verbatim source documents were pushed as doc- provenance blobs too
   // (see sync.ts's provenance codec) -- the outbox drains to empty either way.

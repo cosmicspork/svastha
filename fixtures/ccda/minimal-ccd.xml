@@ -483,6 +483,52 @@
         </section>
       </component>
 
+      <!-- Plan of Care (18776-5): a narrative prose section. No structured
+           <entry> — the whole <text> becomes ONE document/Text event, dated by
+           the document's visit date (componentOf, below), coded by this
+           section's LOINC with its title as the display name. -->
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.10"/>
+          <id root="l0l0l0l0-0000-0000-0000-000000000000"/>
+          <code code="18776-5" codeSystem="2.16.840.1.113883.6.1" displayName="Plan of care note"/>
+          <title>Plan of Care</title>
+          <text>
+            <paragraph>Continue current medications. Recheck blood pressure in
+              two weeks.</paragraph>
+            <list>
+              <item>Increase daily walking to 30 minutes.</item>
+              <item>Reduce dietary sodium.</item>
+            </list>
+          </text>
+        </section>
+      </component>
+
+      <!-- Assessment (51848-0): a narrative section with a "no data available"
+           placeholder — must be Skipped, never emitted as an empty note. -->
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.8"/>
+          <id root="m0m0m0m0-0000-0000-0000-000000000000"/>
+          <code code="51848-0" codeSystem="2.16.840.1.113883.6.1" displayName="Assessment note"/>
+          <title>Assessment</title>
+          <text>No data available for this section.</text>
+        </section>
+      </component>
+
     </structuredBody>
   </component>
+  <!-- The visit date for the narrative sections above. The mapping reads the
+       encompassingEncounter's effectiveTime <low>, never the document header
+       <effectiveTime> (which above carries a birth-date-shaped value on
+       purpose, to prove the header is ignored). -->
+  <componentOf>
+    <encompassingEncounter>
+      <id root="1.2.3.4.5.6.7.8.9" extension="visit-1"/>
+      <effectiveTime>
+        <low value="20240103"/>
+        <high value="20240103"/>
+      </effectiveTime>
+    </encompassingEncounter>
+  </componentOf>
 </ClinicalDocument>

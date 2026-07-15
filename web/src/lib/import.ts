@@ -85,6 +85,28 @@ export interface DocPlan {
   newCount: number
   dupCount: number
   bytes: Uint8Array
+  /** The projected `doc-` provenance blob would exceed the relay's body cap,
+   * so it can't sync — the document is kept locally and its facts still import,
+   * only its verbatim provenance blob stays on this device. Surfaced as a
+   * per-document warning in the import summary. */
+  tooLargeToSync: boolean
+}
+
+// The relay rejects any request body over 16 MiB (crates/relay MAX_BODY). A
+// `doc-` provenance blob is the source bytes base64'd inside a small JSON
+// envelope (see sync.ts's provenance codec), then AEAD-sealed — base64 inflates
+// the raw bytes ~4/3, and the seal adds a fixed nonce+tag.
+export const RELAY_MAX_BLOB_BYTES = 16 * 1024 * 1024
+// XChaCha20-Poly1305 nonce (24) + tag (16), per crates/core/src/envelope.rs.
+const SEAL_OVERHEAD_BYTES = 24 + 16
+
+/** Honest projection of the sealed `doc-` blob's byte size the relay would see
+ * for a source document, so an over-cap document is flagged at analyze time
+ * instead of failing a push silently later. */
+export function projectedDocBlobBytes(name: string, byteLength: number): number {
+  const base64Len = Math.ceil(byteLength / 3) * 4
+  const envelopeSansBytes = new TextEncoder().encode(JSON.stringify({ name, bytes: '' })).length
+  return envelopeSansBytes + base64Len + SEAL_OVERHEAD_BYTES
 }
 
 export interface ImportTotals {
@@ -220,6 +242,7 @@ async function analyzeDoc(doc: SourceDoc, seenInBatch: Set<string>): Promise<Doc
     newCount,
     dupCount,
     bytes: doc.bytes,
+    tooLargeToSync: projectedDocBlobBytes(doc.name, doc.bytes.length) > RELAY_MAX_BLOB_BYTES,
   }
 }
 
@@ -285,7 +308,11 @@ export async function commitImport(plan: ImportPlan, onProgress?: (p: CommitProg
       bytes: doc.bytes,
       importedAt: new Date().toISOString(),
     })
-    await enqueue([`doc-${doc.sha256}`])
+    // The provenance blob syncs unless it's over the relay's body cap: then
+    // it's kept locally (still queryable on this device) rather than enqueued
+    // to fail its push forever. The document's facts (ev- blobs below) sync
+    // regardless — only this one verbatim blob is affected.
+    if (!doc.tooLargeToSync) await enqueue([`doc-${doc.sha256}`])
 
     const newBlobIds: string[] = []
     for (let j = 0; j < doc.drafts.length; j++) {
