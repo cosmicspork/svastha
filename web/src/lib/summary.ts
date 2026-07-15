@@ -61,10 +61,10 @@ function textOf(e: Ev): string | null {
  * the vault (see code-names.ts) -> shortened system + code -> the humanized
  * kind word. Free text (a quick-logged med) slots in ahead of the bare kind so
  * it stays readable. Never blank. */
-function labelFor(e: Ev, nameIndex: Map<string, string>): string {
+function labelFor(e: Ev, nameIndex: Map<string, string>, dictionary: Map<string, string>): string {
   const coding = codingFor(e)
   if (coding?.display) return coding.display
-  if (coding) return resolveDisplay(nameIndex, coding) ?? `${shortenSystem(coding.system)} ${coding.code}`
+  if (coding) return resolveDisplay(nameIndex, coding, dictionary) ?? `${shortenSystem(coding.system)} ${coding.code}`
   const text = textOf(e)
   if (text) return text
   return e.kind.replace(/_/g, ' ')
@@ -120,6 +120,7 @@ function foldSection(
   dateStrategy: 'earliest' | 'latest',
   detailFor: (labelEvent: Ev, group: Ev[]) => string,
   nameIndex: Map<string, string>,
+  dictionary: Map<string, string>,
 ): SummaryRow[] {
   const groups = new Map<string, Ev[]>()
   for (const e of events) {
@@ -133,7 +134,7 @@ function foldSection(
     const ls = labelSource(group)
     rows.push({
       key,
-      label: labelFor(ls, nameIndex),
+      label: labelFor(ls, nameIndex, dictionary),
       detail: detailFor(ls, group),
       date: representativeDate(group, dateStrategy),
       count: group.length,
@@ -206,9 +207,11 @@ function buildVitals(observations: Ev[]): SummaryRow[] {
 
 export function buildSummary(
   events: StoredEvent[],
-  opts: { hiddenIds?: Set<string>; resultLimit?: number } = {},
+  opts: { hiddenIds?: Set<string>; resultLimit?: number; dictionary?: Map<string, string> } = {},
 ): ClinicianSummary {
-  const { hiddenIds, resultLimit = 20 } = opts
+  // `dictionary`: the offline code dictionary (see dictionary.ts), hydrated once
+  // and passed in. Empty by default, which makes its resolution layer a no-op.
+  const { hiddenIds, resultLimit = 20, dictionary = new Map() } = opts
   // Subtract hides before grouping; dropped silently — a clinical summary
   // shouldn't advertise redactions with a "hidden entry" placeholder. The name
   // index is built from this same visible set, so a hidden event's display
@@ -228,9 +231,11 @@ export function buildSummary(
   const results = observations.filter((e) => categorize(e) === 'clinical')
 
   return {
-    problems: foldSection(conditions, 'earliest', () => '', nameIndex).sort(byDateDescNullLast),
-    medications: foldSection(meds, 'latest', (ls) => quantityString(ls), nameIndex).sort(byDateDescNullLast),
-    allergies: foldSection(allergyEvents, 'latest', () => '', nameIndex).sort((a, b) =>
+    problems: foldSection(conditions, 'earliest', () => '', nameIndex, dictionary).sort(byDateDescNullLast),
+    medications: foldSection(meds, 'latest', (ls) => quantityString(ls), nameIndex, dictionary).sort(
+      byDateDescNullLast,
+    ),
+    allergies: foldSection(allergyEvents, 'latest', () => '', nameIndex, dictionary).sort((a, b) =>
       a.label.localeCompare(b.label),
     ),
     immunizations: foldSection(
@@ -238,6 +243,7 @@ export function buildSummary(
       'latest',
       (_ls, group) => (group.length > 1 ? `${group.length} doses` : ''),
       nameIndex,
+      dictionary,
     ).sort(byDateDescNullLast),
     latestVitals: buildVitals(observations),
     recentResults: foldSection(
@@ -245,6 +251,7 @@ export function buildSummary(
       'latest',
       (ls) => quantityString(ls) || textOf(ls) || '',
       nameIndex,
+      dictionary,
     )
       .sort(byDateDescNullLast)
       .slice(0, resultLimit),

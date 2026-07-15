@@ -3,6 +3,7 @@
   import { get, put } from '../lib/db'
   import { allEvents, type StoredEvent } from '../lib/events'
   import { buildTimeline, categoriesPresent } from '../lib/timeline'
+  import { loadDictionaryIndex, dictionaryStatus } from '../lib/dictionary'
   import { CATEGORIES, CATEGORY_META, type Category } from '../lib/category'
   import { allCurationByPrefix, allTags, setHidden } from '../lib/curation'
   import SpineEntry from './SpineEntry.svelte'
@@ -36,7 +37,17 @@
   let allTagsList = $state<string[]>([])
   let selectedTags = $state<Set<string>>(new Set())
 
-  const days = $derived(buildTimeline(events, filter))
+  // The offline code dictionary (see lib/dictionary.ts): empty unless the user
+  // turned it on. Hydrated once (module-cached) and re-hydrated when the
+  // Settings toggle bumps the status version, so labels don't rebuild the Map.
+  let dictionary = $state<Map<string, string>>(new Map())
+  $effect(() => {
+    void $dictionaryStatus.version
+    void $dictionaryStatus.enabled
+    void loadDictionaryIndex().then((d) => (dictionary = d))
+  })
+
+  const days = $derived(buildTimeline(events, filter, dictionary))
   const filteredDays = $derived.by(() => {
     if (selectedTags.size === 0) return days
     return days
