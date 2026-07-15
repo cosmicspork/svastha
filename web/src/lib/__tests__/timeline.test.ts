@@ -51,6 +51,48 @@ describe('buildTimeline: mind category formatting', () => {
   })
 })
 
+describe('buildTimeline: med/food/note formatting', () => {
+  const at = '2026-01-01T10:00:00+00:00'
+
+  it('labels a quick-logged med from its text value', () => {
+    const events = [ev({ kind: 'medication_statement', effective_at: at, value: { text: 'Metformin' } })]
+    const entry = buildTimeline(events, 'all')[0].entries[0]
+    expect(entry.label).toBe('Metformin')
+  })
+
+  it('falls back to code.display for an imported med with no text value', () => {
+    const events = [
+      ev({
+        kind: 'medication_statement',
+        effective_at: at,
+        code: { system: 'http://www.nlm.nih.gov/research/umls/rxnorm', code: '314076', display: 'Lisinopril 10 MG Oral Tablet' },
+        value: null,
+      }),
+    ]
+    const entry = buildTimeline(events, 'all')[0].entries[0]
+    expect(entry.label).toBe('Lisinopril 10 MG Oral Tablet')
+    expect(entry.hint).toBe('RxNorm 314076')
+  })
+
+  it('renders an imported med dose quantity and degrades to the kind without any code', () => {
+    const events = [
+      ev({
+        kind: 'medication_statement',
+        effective_at: at,
+        code: { system: 'http://www.nlm.nih.gov/research/umls/rxnorm', code: '314076', display: 'Lisinopril 10 MG Oral Tablet' },
+        value: { quantity: { value: '1', unit: { system: UCUM, code: 'mg' } } },
+      }),
+      ev({ kind: 'medication_statement', effective_at: '2026-01-02T10:00:00+00:00', value: null }),
+    ]
+    const days = buildTimeline(events, 'all')
+    const dosed = days[1].entries[0]
+    expect(dosed.label).toBe('Lisinopril 10 MG Oral Tablet')
+    expect(dosed.value).toBe('1 mg')
+    const bare = days[0].entries[0]
+    expect(bare.label).toBe('medication statement')
+  })
+})
+
 describe('buildTimeline: clinical/other default formatting', () => {
   const at = '2026-01-01T10:00:00+00:00'
 

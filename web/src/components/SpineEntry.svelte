@@ -99,19 +99,25 @@
       onclick={() => (expanded = !expanded)}
       data-testid="spine-entry-trigger"
     >
-      <span class="glyph {meta.hueClass}" aria-hidden="true">{meta.glyph}</span>
-      <span class="label">{entry.label}</span>
-      {#each tags as tag (tag)}
-        <span class="tag-chip" data-testid="spine-entry-tag">#{tag}</span>
-      {/each}
-      {#if entry.hint}
-        <span class="hint muted" data-testid="spine-entry-hint">{entry.hint}</span>
-      {/if}
-      {#if entry.value}
-        <span class="value data">{entry.value}</span>
-      {/if}
-      <span class="time muted">{recordedTime}</span>
-      <span class="chevron" class:open={expanded} aria-hidden="true">›</span>
+      <span class="row-main">
+        <span class="glyph {meta.hueClass}" aria-hidden="true">{meta.glyph}</span>
+        <span class="label">{entry.label}</span>
+        {#each tags as tag (tag)}
+          <span class="tag-chip" data-testid="spine-entry-tag">#{tag}</span>
+        {/each}
+        {#if entry.hint}
+          <span class="hint muted" data-testid="spine-entry-hint">{entry.hint}</span>
+        {/if}
+        {#if entry.value}
+          <span class="value data">{entry.value}</span>
+        {/if}
+      </span>
+      <span class="trail">
+        {#if recordedTime}
+          <span class="time muted">{recordedTime}</span>
+        {/if}
+        <span class="chevron" class:open={expanded} aria-hidden="true">›</span>
+      </span>
     </button>
     {#if editable}
       <button
@@ -206,21 +212,38 @@
     padding-left: var(--space-2);
   }
 
-  /* The trigger carries the old row layout (baseline-aligned, wrapping) and
-     resets the global button chrome; the 44px min-height is the touch target. */
+  /* The trigger resets the global button chrome; the 44px min-height is the
+     touch target. Content that wraps lives in .row-main; .trail (time +
+     chevron) is a non-wrapping cluster centered on the row so the chevron
+     lines up with the #/⋯ actions no matter how many lines the text takes. */
   .row-trigger {
     flex: 1;
     min-width: 0;
     min-height: 44px;
     display: flex;
-    align-items: baseline;
-    flex-wrap: wrap;
+    align-items: center;
     gap: var(--space-2);
     padding: var(--space-1) 0;
     border: none;
     background: none;
     color: inherit;
     text-align: left;
+  }
+
+  .row-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .trail {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
   }
 
   .hint {
@@ -293,7 +316,6 @@
   }
 
   .time {
-    margin-left: auto;
     flex: none;
     font-size: var(--text-xs);
   }
