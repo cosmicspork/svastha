@@ -29,10 +29,20 @@ const SYSTEM_LABELS: Record<string, string> = {
   'http://hl7.org/fhir/sid/icd-10-cm': 'ICD-10-CM',
   'http://www.ama-assn.org/go/cpt': 'CPT',
   'http://hl7.org/fhir/sid/cvx': 'CVX',
+  'http://terminology.hl7.org/CodeSystem/v3-ActCode': 'ActCode',
 }
 
 export function shortenSystem(system: string): string {
-  return SYSTEM_LABELS[system] ?? system
+  const known = SYSTEM_LABELS[system]
+  if (known) return known
+  // A full system URI is provenance, not reading material — an unknown one
+  // (e.g. a terminology.hl7.org CodeSystem) shortens to its last path segment
+  // so the row hint stays scannable; the raw URI stays in the export.
+  if (/^https?:\/\//.test(system)) {
+    const tail = system.replace(/\/+$/, '').split('/').pop()
+    if (tail) return tail
+  }
+  return system
 }
 
 function loinc(code: string, display: string): Code {

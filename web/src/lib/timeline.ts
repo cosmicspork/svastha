@@ -183,7 +183,17 @@ function formatGroup(
         .map(textOf)
         .filter((t): t is string => t !== null)
         .sort((a, b) => a.localeCompare(b))
-      return { label: texts.join(', '), value: '', flare: false }
+      if (texts.length > 0) return { label: texts.join(', '), value: '', flare: false }
+
+      // Quick-log always writes a text value, but imported medications carry
+      // the name in code.display (and sometimes the dose as a quantity), so
+      // without this fallback an imported med renders as a blank row.
+      const first = events[0]
+      const label = first.code?.display ?? first.kind.replace(/_/g, ' ')
+      const q = quantityOf(first)
+      const coding = first.code ? `${shortenSystem(first.code.system)} ${first.code.code}` : null
+      const hint = coding && coding !== label ? coding : undefined
+      return { label, value: q ? renderQuantity(q) : '', hint, flare: false }
     }
     default: {
       // Encounters, conditions, immunizations, procedures, and uncoded
