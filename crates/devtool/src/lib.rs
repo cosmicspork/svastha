@@ -9,6 +9,7 @@
 //! mismatch is a hard error naming the blob id — ids are content hashes, not
 //! PHI, so they're safe to print.
 
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -20,8 +21,8 @@ use sha2::{Digest, Sha256};
 use ureq::http::StatusCode;
 use ureq::Agent;
 
-use svastha_core::envelope::{Sealed, WrappedKey};
-use svastha_core::event::SignedEvent;
+use svastha_core::envelope::{DataKey, Sealed, WrappedKey};
+use svastha_core::event::{Event, EventKind, Provenance, SignedEvent};
 use svastha_core::keys::Identity;
 use svastha_core::relay::{sign_request, AuthRequest};
 
@@ -61,26 +62,14 @@ impl std::fmt::Display for Summary {
 /// `config.mnemonic`, decrypt everything, and write a clean snapshot under
 /// `config.out_dir`.
 pub fn run(config: &Config) -> Result<Summary> {
-    // Empty BIP39 passphrase is deliberate: the app's unlock passphrase wraps
-    // local storage only and is never part of seed derivation (see
-    // `Identity::from_mnemonic`), so it has no bearing on which identity —
-    // and which relay blobs — this pulls.
-    let identity = Identity::from_mnemonic(&config.mnemonic, "")
-        .map_err(|e| anyhow!("SVASTHA_MNEMONIC is not a valid BIP39 mnemonic: {e}"))?;
+    let identity = identity_from_mnemonic(&config.mnemonic)?;
 
     let base = config.relay_url.trim_end_matches('/').to_string();
     let relay = RelayHttp::new(base, &identity);
     relay.get_info()?;
 
     let ids = relay.list_blobs()?;
-
-    let vault_key_blob = relay.get_blob("vault.key")?.ok_or_else(|| {
-        anyhow!("no vault.key blob on the relay for this identity — nothing else can be opened")
-    })?;
-    let wrapped = WrappedKey::from_bytes(&vault_key_blob).context("parse vault.key")?;
-    let data_key = identity
-        .unwrap_key(&wrapped)
-        .context("unwrap vault.key — wrong mnemonic, or relay is for a different identity")?;
+    let data_key = open_vault(&relay, &identity)?;
 
     reset_out_dir(&config.out_dir)?;
     let docs_dir = config.out_dir.join("docs");
@@ -167,6 +156,266 @@ pub fn run(config: &Config) -> Result<Summary> {
         skipped,
         out_dir: config.out_dir.clone(),
     })
+}
+
+/// Derive the pull/push identity from a BIP39 mnemonic. Empty BIP39 passphrase
+/// is deliberate: the app's unlock passphrase wraps local storage only and is
+/// never part of seed derivation (see `Identity::from_mnemonic`), so it has no
+/// bearing on which identity — and which relay blobs — this touches.
+fn identity_from_mnemonic(mnemonic: &str) -> Result<Identity> {
+    Identity::from_mnemonic(mnemonic, "")
+        .map_err(|e| anyhow!("SVASTHA_MNEMONIC is not a valid BIP39 mnemonic: {e}"))
+}
+
+/// Fetch the relay's `vault.key` blob and unwrap it to this identity's vault
+/// data key — the one key that opens every other sealed blob. Shared by the
+/// decrypt (`run`) and re-import (`import_run`) paths.
+fn open_vault(relay: &RelayHttp<'_>, identity: &Identity) -> Result<DataKey> {
+    let vault_key_blob = relay.get_blob("vault.key")?.ok_or_else(|| {
+        anyhow!("no vault.key blob on the relay for this identity — nothing else can be opened")
+    })?;
+    let wrapped = WrappedKey::from_bytes(&vault_key_blob).context("parse vault.key")?;
+    identity
+        .unwrap_key(&wrapped)
+        .context("unwrap vault.key — wrong mnemonic, or relay is for a different identity")
+}
+
+// --- re-import (`svastha-devtool import`) ---
+//
+// A headless re-run of the web importer's commit path
+// (`web/src/lib/import.ts`), driven entirely from the relay: every source
+// document is already stored verbatim as a `doc-` provenance blob, so after the
+// mappers learn new facts a re-import re-derives events from those blobs and
+// pushes only the ones the relay doesn't already have. No browser, no original
+// export files. Prints names, counts, kinds, and content-hash blob ids only —
+// never a value, code display, or narrative string.
+
+/// Where to re-import from and how to unlock it. No out dir (nothing is written
+/// to disk) and a `dry_run` toggle that skips every PUT.
+pub struct ImportConfig {
+    pub relay_url: String,
+    pub mnemonic: String,
+    pub dry_run: bool,
+}
+
+/// One document's line in the re-import report: a shortened name and counts.
+/// Never carries record contents — see the module doc.
+#[derive(Debug)]
+pub struct DocReport {
+    pub name: String,
+    pub drafts: usize,
+    pub new: usize,
+    pub dup: usize,
+    pub skipped: usize,
+}
+
+/// What `import_run` derived and pushed, for the report the binary prints.
+/// Counts, kinds, a shortened name per document, and the new events' content
+/// ids (hashes, safe to print) — nothing else.
+#[derive(Debug)]
+pub struct ImportSummary {
+    pub dry_run: bool,
+    pub docs: Vec<DocReport>,
+    pub drafts: usize,
+    pub dups: usize,
+    pub skipped: usize,
+    /// Content ids (hex) of the new events, pushed as `ev-{id}` — or, under
+    /// `--dry-run`, exactly what WOULD be pushed.
+    pub new_ids: Vec<String>,
+    /// New-event count per kind, e.g. `{"document": 210, "observation": 3}`.
+    pub per_kind: BTreeMap<String, usize>,
+}
+
+impl std::fmt::Display for ImportSummary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for d in &self.docs {
+            writeln!(
+                f,
+                "{}: {} drafts, {} new, {} dup, {} skipped",
+                d.name, d.drafts, d.new, d.dup, d.skipped,
+            )?;
+        }
+        let verb = if self.dry_run { "would push" } else { "pushed" };
+        let per_kind = if self.per_kind.is_empty() {
+            "none".to_string()
+        } else {
+            self.per_kind
+                .iter()
+                .map(|(k, n)| format!("{k}: {n}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        write!(
+            f,
+            "{} documents, {} drafts, {} new events {verb} ({per_kind}), {} dup, {} skipped",
+            self.docs.len(),
+            self.drafts,
+            self.new_ids.len(),
+            self.dups,
+            self.skipped,
+        )?;
+        if self.dry_run {
+            write!(f, " [dry-run: nothing written to the relay]")?;
+        }
+        Ok(())
+    }
+}
+
+/// Re-derive events from the relay's stored `doc-` source documents and push
+/// only the ones the relay doesn't already carry, mirroring the web client's
+/// commit path (`web/src/lib/import.ts`). With `dry_run`, does everything
+/// except the PUTs.
+pub fn import_run(config: &ImportConfig) -> Result<ImportSummary> {
+    let identity = identity_from_mnemonic(&config.mnemonic)?;
+
+    let base = config.relay_url.trim_end_matches('/').to_string();
+    let relay = RelayHttp::new(base, &identity);
+    relay.get_info()?;
+
+    let ids = relay.list_blobs()?;
+    let data_key = open_vault(&relay, &identity)?;
+
+    // Dedup baseline: every `ev-` content id already on the relay. Devices sync
+    // through the relay, so its blob list is the event log.
+    let existing: HashSet<&str> = ids.iter().filter_map(|id| id.strip_prefix("ev-")).collect();
+
+    // Process documents in blob-id order so a run is deterministic regardless
+    // of the order the relay lists them.
+    let mut doc_ids: Vec<&String> = ids.iter().filter(|id| id.starts_with("doc-")).collect();
+    doc_ids.sort();
+
+    let mut summary = ImportSummary {
+        dry_run: config.dry_run,
+        docs: Vec::new(),
+        drafts: 0,
+        dups: 0,
+        skipped: 0,
+        new_ids: Vec::new(),
+        per_kind: BTreeMap::new(),
+    };
+    // Ids already produced earlier in this same run: a fact repeated across
+    // documents (the exact overlap a multi-document export is full of) counts —
+    // and is signed and pushed — as new only once, matching the web path.
+    let mut produced: HashSet<String> = HashSet::new();
+
+    for id in doc_ids {
+        let hex_id = id.strip_prefix("doc-").expect("filtered to doc- ids");
+
+        let Some(blob) = relay.get_blob(id)? else {
+            // Listed, then gone by the time we fetched it (concurrent delete).
+            continue;
+        };
+        let plaintext = open_sealed(&data_key, &blob, id)?;
+        let doc: DocEnvelope = serde_json::from_slice(&plaintext)
+            .with_context(|| format!("parse document envelope for blob {id}"))?;
+        let raw = BASE64
+            .decode(&doc.bytes)
+            .with_context(|| format!("base64-decode document bytes for blob {id}"))?;
+        let digest = hex::encode(Sha256::digest(&raw));
+        if digest != hex_id {
+            bail!("document content hash does not match blob id {id}");
+        }
+
+        let result =
+            map_document(&doc.name, &raw).with_context(|| format!("map document for blob {id}"))?;
+
+        let mut report = DocReport {
+            name: short_name(&doc.name),
+            drafts: result.events.len(),
+            new: 0,
+            dup: 0,
+            skipped: result.skipped.len(),
+        };
+        summary.drafts += report.drafts;
+        summary.skipped += report.skipped;
+
+        for draft in result.events {
+            // Provenance labels the source document but is excluded from the
+            // content id (see `crates/core/src/event.rs`), so building the event
+            // with the real provenance and reading back its id gives the same id
+            // the web computes with a dummy provenance for dedup.
+            let provenance = Provenance {
+                source: format!("import:{}", doc.name),
+                source_doc: Some(digest.clone()),
+            };
+            let event = Event::new(
+                draft.kind,
+                draft.code,
+                draft.effective_at,
+                draft.value,
+                provenance,
+            );
+            let id_hex = event.id.to_hex();
+            if existing.contains(id_hex.as_str()) || produced.contains(&id_hex) {
+                report.dup += 1;
+                continue;
+            }
+
+            let kind = kind_wire(&event.kind);
+            produced.insert(id_hex.clone());
+            report.new += 1;
+            *summary.per_kind.entry(kind).or_insert(0) += 1;
+
+            let signed = identity.sign_event(event);
+            let blob_id = format!("ev-{id_hex}");
+            if !config.dry_run {
+                // AAD is the UTF-8 blob id, binding each sealed payload to the id
+                // it's stored under — the web client's convention (see `run`).
+                let signed_json = serde_json::to_vec(&signed)
+                    .with_context(|| format!("serialize signed event {blob_id}"))?;
+                let sealed = data_key.seal(&signed_json, blob_id.as_bytes());
+                relay
+                    .put_blob(&blob_id, &sealed.to_bytes())
+                    .with_context(|| format!("push {blob_id}"))?;
+            }
+            summary.new_ids.push(id_hex);
+        }
+
+        summary.dups += report.dup;
+        summary.docs.push(report);
+    }
+
+    Ok(summary)
+}
+
+/// Sniff a stored document and run the matching mapper: a leading `<` is C-CDA
+/// XML, a leading `{` is a FHIR bundle — the same two shapes the web importer
+/// accepts. Zip packages never reach here: the relay stores each XDM member
+/// already unpacked as its own `doc-` blob.
+fn map_document(name: &str, bytes: &[u8]) -> Result<svastha_import::ImportResult> {
+    let text =
+        std::str::from_utf8(bytes).with_context(|| format!("document {name} is not UTF-8"))?;
+    match text.trim_start().as_bytes().first() {
+        Some(b'<') => {
+            svastha_import::import_ccda(text).with_context(|| format!("map C-CDA document {name}"))
+        }
+        Some(b'{') => svastha_import::import_fhir_bundle(text)
+            .with_context(|| format!("map FHIR document {name}")),
+        _ => bail!("document {name} is neither C-CDA (leading '<') nor FHIR (leading '{{')"),
+    }
+}
+
+/// An event kind's stable wire name (`observation`, `document`, …) for the
+/// per-kind breakdown. Goes through serde — `EventKind::wire_name` is private to
+/// `core` — which yields the same `snake_case` strings by construction.
+fn kind_wire(kind: &EventKind) -> String {
+    serde_json::to_value(kind)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// A short, log-safe label for a document: its last path component, length
+/// capped. Names aren't PHI, but the report stays terse and doesn't echo full
+/// nested XDM paths.
+fn short_name(name: &str) -> String {
+    let base = name.rsplit('/').next().unwrap_or(name);
+    if base.chars().count() > 48 {
+        let head: String = base.chars().take(45).collect();
+        format!("{head}...")
+    } else {
+        base.to_string()
+    }
 }
 
 fn curation_key(record: &serde_json::Value) -> &str {

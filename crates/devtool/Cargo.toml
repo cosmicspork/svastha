@@ -11,6 +11,9 @@ publish = false
 # No version/release-please marker: this crate never publishes, so it always
 # builds against the workspace's current core.
 svastha-core = { path = "../core" }
+# The `import` subcommand re-runs the C-CDA/FHIR mappers headlessly; path-only
+# (no version marker) since this crate never publishes.
+svastha-import = { path = "../import" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"

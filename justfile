@@ -57,6 +57,13 @@ e2e:
 decrypt:
     cargo run -p svastha-devtool
 
+# re-derive events from the relay's stored source documents and push only the
+# new ones (dev-only, no browser or export files). Same SVASTHA_MNEMONIC and
+# SVASTHA_RELAY_URL as `just decrypt`. Pass `--dry-run` to print what would push
+# without writing: `just import-derive --dry-run`.
+import-derive *args:
+    cargo run -p svastha-devtool -- import {{args}}
+
 # --- aggregate ---
 
 check: fmt-check clippy web-check
