@@ -9,6 +9,7 @@
 // unknown".
 import { VITALS, BP_SYSTOLIC, BP_DIASTOLIC, VITAL_LOINC_CODES, shortenSystem, type Code } from './codes'
 import { categorize } from './category'
+import { buildCodeNameIndex, resolveDisplay } from './code-names'
 import { quantityOf, renderQuantity } from './timeline'
 import type { StoredEvent } from './events'
 import { isoToMillis } from './time'
@@ -56,13 +57,14 @@ function textOf(e: Ev): string | null {
 }
 
 /** Fallback chain: coded display -> allergy substance display (both via the
- * coding's `display`) -> shortened system + code -> the humanized kind word.
- * Free text (a quick-logged med) slots in ahead of the bare kind so it stays
- * readable. Never blank. */
-function labelFor(e: Ev): string {
+ * coding's `display`) -> a display resolved from the same code elsewhere in
+ * the vault (see code-names.ts) -> shortened system + code -> the humanized
+ * kind word. Free text (a quick-logged med) slots in ahead of the bare kind so
+ * it stays readable. Never blank. */
+function labelFor(e: Ev, nameIndex: Map<string, string>): string {
   const coding = codingFor(e)
   if (coding?.display) return coding.display
-  if (coding) return `${shortenSystem(coding.system)} ${coding.code}`
+  if (coding) return resolveDisplay(nameIndex, coding) ?? `${shortenSystem(coding.system)} ${coding.code}`
   const text = textOf(e)
   if (text) return text
   return e.kind.replace(/_/g, ' ')
@@ -117,6 +119,7 @@ function foldSection(
   events: Ev[],
   dateStrategy: 'earliest' | 'latest',
   detailFor: (labelEvent: Ev, group: Ev[]) => string,
+  nameIndex: Map<string, string>,
 ): SummaryRow[] {
   const groups = new Map<string, Ev[]>()
   for (const e of events) {
@@ -130,7 +133,7 @@ function foldSection(
     const ls = labelSource(group)
     rows.push({
       key,
-      label: labelFor(ls),
+      label: labelFor(ls, nameIndex),
       detail: detailFor(ls, group),
       date: representativeDate(group, dateStrategy),
       count: group.length,
@@ -207,10 +210,12 @@ export function buildSummary(
 ): ClinicianSummary {
   const { hiddenIds, resultLimit = 20 } = opts
   // Subtract hides before grouping; dropped silently — a clinical summary
-  // shouldn't advertise redactions with a "hidden entry" placeholder.
-  const evs = (hiddenIds ? events.filter((se) => !hiddenIds.has(se.event.id)) : events).map(
-    (se) => se.event,
-  )
+  // shouldn't advertise redactions with a "hidden entry" placeholder. The name
+  // index is built from this same visible set, so a hidden event's display
+  // can't leak into another row's label either.
+  const visible = hiddenIds ? events.filter((se) => !hiddenIds.has(se.event.id)) : events
+  const nameIndex = buildCodeNameIndex(visible)
+  const evs = visible.map((se) => se.event)
 
   const conditions = evs.filter((e) => e.kind === 'condition')
   const meds = evs.filter((e) => e.kind === 'medication_statement')
@@ -223,14 +228,24 @@ export function buildSummary(
   const results = observations.filter((e) => categorize(e) === 'clinical')
 
   return {
-    problems: foldSection(conditions, 'earliest', () => '').sort(byDateDescNullLast),
-    medications: foldSection(meds, 'latest', (ls) => quantityString(ls)).sort(byDateDescNullLast),
-    allergies: foldSection(allergyEvents, 'latest', () => '').sort((a, b) => a.label.localeCompare(b.label)),
-    immunizations: foldSection(immunizations, 'latest', (_ls, group) =>
-      group.length > 1 ? `${group.length} doses` : '',
+    problems: foldSection(conditions, 'earliest', () => '', nameIndex).sort(byDateDescNullLast),
+    medications: foldSection(meds, 'latest', (ls) => quantityString(ls), nameIndex).sort(byDateDescNullLast),
+    allergies: foldSection(allergyEvents, 'latest', () => '', nameIndex).sort((a, b) =>
+      a.label.localeCompare(b.label),
+    ),
+    immunizations: foldSection(
+      immunizations,
+      'latest',
+      (_ls, group) => (group.length > 1 ? `${group.length} doses` : ''),
+      nameIndex,
     ).sort(byDateDescNullLast),
     latestVitals: buildVitals(observations),
-    recentResults: foldSection(results, 'latest', (ls) => quantityString(ls) || textOf(ls) || '')
+    recentResults: foldSection(
+      results,
+      'latest',
+      (ls) => quantityString(ls) || textOf(ls) || '',
+      nameIndex,
+    )
       .sort(byDateDescNullLast)
       .slice(0, resultLimit),
   }

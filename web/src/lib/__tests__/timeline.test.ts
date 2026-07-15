@@ -91,6 +91,26 @@ describe('buildTimeline: med/food/note formatting', () => {
     const bare = days[0].entries[0]
     expect(bare.label).toBe('medication statement')
   })
+
+  it('resolves a display-less imported med from the same RxNorm code named elsewhere', () => {
+    const rxnorm = 'http://www.nlm.nih.gov/research/umls/rxnorm'
+    const events = [
+      ev({
+        kind: 'medication_statement',
+        effective_at: '2025-06-01T10:00:00+00:00',
+        code: { system: rxnorm, code: '314076', display: 'Lisinopril 10 MG Oral Tablet' },
+        value: null,
+      }),
+      ev({
+        kind: 'medication_statement',
+        effective_at: at,
+        code: { system: rxnorm, code: '314076' },
+        value: null,
+      }),
+    ]
+    const entry = buildTimeline(events, 'all')[0].entries[0]
+    expect(entry.label).toBe('Lisinopril 10 MG Oral Tablet')
+  })
 })
 
 describe('buildTimeline: clinical/other default formatting', () => {
@@ -141,6 +161,30 @@ describe('buildTimeline: clinical/other default formatting', () => {
   it('leaves the hint empty when a self-logged row carries no code', () => {
     const entry = buildTimeline([ev({ effective_at: at, kind: 'observation' })], 'all')[0].entries[0]
     expect(entry.hint).toBeUndefined()
+  })
+
+  it('resolves a null display from the same code elsewhere in the vault', () => {
+    const events = [
+      // A different day/document named this code...
+      ev({ effective_at: '2025-06-01T00:00:00+00:00', code: { system: LOINC, code: '39156-5', display: 'Body mass index (BMI) [Ratio]' } }),
+      // ...so the display-less occurrence resolves it instead of degrading to "observation".
+      ev({ effective_at: at, code: { system: LOINC, code: '39156-5' } }),
+    ]
+    const entry = buildTimeline(events, 'all')[0].entries[0]
+    expect(entry.label).toBe('Body mass index (BMI) [Ratio]')
+    // The label came from elsewhere, so the coding still surfaces as the hint.
+    expect(entry.hint).toBe('LOINC 39156-5')
+  })
+
+  it('picks the most frequent display under conflicting names for the same code', () => {
+    const events = [
+      ev({ effective_at: '2025-01-01T00:00:00+00:00', code: { system: LOINC, code: '39156-5', display: 'Body mass index (BMI) [Ratio]' } }),
+      ev({ effective_at: '2025-02-01T00:00:00+00:00', code: { system: LOINC, code: '39156-5', display: 'BMI' } }),
+      ev({ effective_at: '2025-03-01T00:00:00+00:00', code: { system: LOINC, code: '39156-5', display: 'BMI' } }),
+      ev({ effective_at: at, code: { system: LOINC, code: '39156-5' } }),
+    ]
+    const entry = buildTimeline(events, 'all')[0].entries[0]
+    expect(entry.label).toBe('BMI')
   })
 
   it('carries the first event provenance/coding through as detail', () => {
