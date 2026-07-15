@@ -69,6 +69,22 @@ pub enum EventValue {
     Coded(Code),
     /// Free text.
     Text(String),
+    /// A captured document (e.g. a photographed paper record). The bytes live
+    /// out of band as a content-addressed, vault-sealed blob; the event carries
+    /// only the address (`sha256`, the lowercase-hex SHA-256 of the *plaintext*
+    /// bytes so the id is derivable pre-encryption and matches across devices),
+    /// the `mime` type, and the byte `size`. The user's caption is NOT a field
+    /// here: it rides as a sibling [`Text`](EventValue::Text)-valued `document`
+    /// event sharing the same `effective_at` (the "one event per component,
+    /// grouping is presentational" convention this schema already uses for a BP
+    /// pair or a multi-item meal), so the caption lives exactly where a note's
+    /// text lives and the image event's content id stays a pure function of the
+    /// bytes, independent of any caption.
+    Attachment {
+        sha256: String,
+        mime: String,
+        size: u64,
+    },
 }
 
 /// A content-addressed event id: SHA-256 over [`Event::canonical_content`].
@@ -284,6 +300,13 @@ fn put_str(out: &mut Vec<u8>, s: &str) {
     put_bytes(out, s.as_bytes());
 }
 
+/// A `u64` as 8 big-endian bytes — the same fixed-width encoding the relay-auth
+/// preimage uses for its timestamp, so a reimplementation needs no new rule for
+/// the attachment `size`.
+fn put_u64(out: &mut Vec<u8>, n: u64) {
+    out.extend_from_slice(&n.to_be_bytes());
+}
+
 fn put_opt_str(out: &mut Vec<u8>, s: &Option<String>) {
     match s {
         None => out.push(0),
@@ -328,6 +351,12 @@ fn put_opt_value(out: &mut Vec<u8>, value: &Option<EventValue>) {
                 EventValue::Text(text) => {
                     out.push(2);
                     put_str(out, text);
+                }
+                EventValue::Attachment { sha256, mime, size } => {
+                    out.push(3);
+                    put_str(out, sha256);
+                    put_str(out, mime);
+                    put_u64(out, *size);
                 }
             }
         }
@@ -481,6 +510,79 @@ mod tests {
     fn event_serde_round_trip() {
         let id = Identity::from_seed(b"author seed");
         let signed = id.sign_event(observation("118", "Clinic A"));
+        let json = serde_json::to_string(&signed).unwrap();
+        let parsed: SignedEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.event, signed.event);
+        assert!(parsed.verify());
+    }
+
+    // --- attachment value (paper records) ---
+
+    fn attachment_event(sha256: &str, size: u64) -> Event {
+        Event::new(
+            EventKind::Document,
+            None,
+            Some("2026-01-02T15:04:05Z".into()),
+            Some(EventValue::Attachment {
+                sha256: sha256.into(),
+                mime: "image/jpeg".into(),
+                size,
+            }),
+            Provenance {
+                source: "self".into(),
+                source_doc: None,
+            },
+        )
+    }
+
+    #[test]
+    fn attachment_id_addresses_the_bytes() {
+        // The image event's id is a pure function of the content address, so the
+        // same capture on two devices collapses; a different photo diverges.
+        let a = attachment_event("aa", 100);
+        let b = attachment_event("aa", 100);
+        let c = attachment_event("bb", 100);
+        assert_eq!(a.id, b.id);
+        assert_ne!(a.id, c.id);
+        assert_eq!(a.id, a.content_id());
+    }
+
+    #[test]
+    fn attachment_size_is_part_of_the_id() {
+        // size is canonicalized (8-byte BE), so a truncated/wrong length is a
+        // different fact and cannot masquerade as the original.
+        assert_ne!(
+            attachment_event("aa", 100).id,
+            attachment_event("aa", 101).id
+        );
+    }
+
+    #[test]
+    fn attachment_canon_layout() {
+        // tag 0x01 (present value) ‖ 0x03 (attachment variant) ‖ sha256 ‖ mime ‖
+        // size(u64 BE). Pin the tail bytes so a reimplementation matches exactly.
+        let canon = attachment_event("ab", 258).canonical_content();
+        let value_start = canon
+            .windows(2)
+            .rposition(|w| w == [0x01, 0x03])
+            .expect("present-attachment tag pair");
+        assert_eq!(
+            &canon[value_start..],
+            &[
+                0x01, 0x03, // present, attachment
+                0, 0, 0, 2, b'a', b'b', // sha256 "ab"
+                0, 0, 0, 10, b'i', b'm', b'a', b'g', b'e', b'/', b'j', b'p', b'e',
+                b'g', // mime
+                0, 0, 0, 0, 0, 0, 1, 2, // size 258 as u64 BE
+            ]
+        );
+    }
+
+    #[test]
+    fn attachment_sign_verify_and_serde_round_trip() {
+        let id = Identity::from_seed(b"author seed");
+        let signed = id.sign_event(attachment_event("deadbeef", 12345));
+        assert!(signed.verify());
         let json = serde_json::to_string(&signed).unwrap();
         let parsed: SignedEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.event, signed.event);

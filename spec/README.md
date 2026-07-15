@@ -111,6 +111,16 @@ and a `provenance` (`source`, optional `source_doc`). A `value` is one of:
   Numbers are strings, never floats, so the bytes are exact and reproducible.
 - `coded` — a `Code`.
 - `text` — a string.
+- `attachment` — a captured document (e.g. a photographed paper record): a
+  `sha256` (lowercase hex of the SHA-256 of the *plaintext* bytes — the content
+  address, derivable before encryption so it matches across devices), a `mime`
+  string, and an integer byte `size`. The bytes themselves live out of band as a
+  content-addressed, vault-sealed blob (the client's `att-{sha256}` namespace —
+  an app-level convention documented in `docs/ARCHITECTURE.md`, invisible to the
+  relay). Any caption the user typed is **not** a field here: it rides as a
+  sibling `text`-valued `document` event sharing the attachment's `effective_at`
+  (the multi-part convention below), so it lives where a note's text lives and
+  the image event's id stays a pure function of the bytes.
 
 ### Canonical encoding
 
@@ -121,15 +131,29 @@ Fields are encoded into a deterministic byte string:
 - **`Code`** → `system` ‖ `code` ‖ `display?`.
 - **`kind`** → its wire name (the `snake_case` string above), length-prefixed, so
   reordering the enum cannot silently change ids.
-- **`value`** → a 1-byte variant tag (`0x00` quantity, `0x01` coded, `0x02` text)
-  followed by its fields in the order listed above.
+- **`value`** → a 1-byte variant tag (`0x00` quantity, `0x01` coded, `0x02` text,
+  `0x03` attachment) followed by its fields in the order listed above. An
+  `attachment` is `sha256` (string) ‖ `mime` (string) ‖ `size`, where `size` is a
+  **u64 as 8 big-endian bytes** — the same fixed-width integer encoding the
+  relay-auth preimage already uses for its timestamp.
 
 The **canonical content** is `kind ‖ code? ‖ effective_at? ‖ value?`. It excludes
 `id` and `provenance`, so a fact reported by two sources canonicalizes identically.
 
-A multi-part fact (a blood pressure reading, a several-item meal) is written as
-one event per component sharing an `effective_at`; there are no panel or grouping
-events. This is an informative convention — ids do not depend on it.
+A multi-part fact (a blood pressure reading, a several-item meal, a paper record's
+photo plus its caption, a multi-page capture's N photos) is written as one event
+per component sharing an `effective_at`; there are no panel or grouping events.
+This is an informative convention — ids do not depend on it.
+
+**Versioning.** Adding the `attachment` variant is an *additive* value shape: it
+does not change key derivation, the encryption envelope, the signing preimage
+structure, or the relay protocol, and every pre-existing event canonicalizes to
+byte-identical output (the new tag appears only in new events). The content-id
+domain tag is version-independent by design, so ids are stable regardless. It
+therefore does **not** bump `CONTRACT_VERSION`: a bump rotates every derived
+identity and HKDF label (that is the whole reason the labels embed the version)
+and would orphan every existing vault and sealed blob — the opposite of what an
+additive value shape should do. New vectors are pinned under the current version.
 
 ### Content-addressed id
 

@@ -129,6 +129,49 @@
       },
       "canon_hex": "0000000b6f62736572766174696f6e000001020000001d70617469656e74207265706f727473206d696c64206865616461636865",
       "id_hex": "5ae38fc12eed3b2ad7a258d498e621366a82f6452d6461cca39651e89287b2eb"
+    },
+    {
+      "note": "document with an attachment value (a photographed paper record), signed",
+      "event": {
+        "id": "ca8433466fcbef8432c9e6483f69ad2b4ebcb89472ce1dc6fde38fd45ecfc81f",
+        "kind": "document",
+        "code": null,
+        "effective_at": "2026-01-02T15:04:05Z",
+        "value": {
+          "attachment": {
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "mime": "image/jpeg",
+            "size": 148213
+          }
+        },
+        "provenance": {
+          "source": "self",
+          "source_doc": null
+        }
+      },
+      "canon_hex": "00000008646f63756d656e74000100000014323032362d30312d30325431353a30343a30355a010300000040653362306334343239386663316331343961666266346338393936666239323432376165343165343634396239333463613439353939316237383532623835350000000a696d6167652f6a70656700000000000242f5",
+      "id_hex": "ca8433466fcbef8432c9e6483f69ad2b4ebcb89472ce1dc6fde38fd45ecfc81f",
+      "signer_seed_hex": "0102030405060708090a0b0c0d0e0f10",
+      "author_hex": "0b1b59fe721ec4f782ea1343e7a6db66a84289de7d626838f24571b389384f5e",
+      "signature_hex": "e01c7d9a1971cb5a56545f0423752ce4a752a41f4b930c41dd7afe3e2f6a9882ec6bf8950789837de4751e33e82994ff24ba9f86e1648db8474ed525ec79bc05"
+    },
+    {
+      "note": "the caption sibling: a text `document` sharing the attachment's effective_at",
+      "event": {
+        "id": "8200ecda8f37273c735dbf21d8475e67cb5f61134e911ccc78c1a37925adb9e1",
+        "kind": "document",
+        "code": null,
+        "effective_at": "2026-01-02T15:04:05Z",
+        "value": {
+          "text": "GI consult — Dr. Rao"
+        },
+        "provenance": {
+          "source": "self",
+          "source_doc": null
+        }
+      },
+      "canon_hex": "00000008646f63756d656e74000100000014323032362d30312d30325431353a30343a30355a010200000016474920636f6e73756c7420e280942044722e2052616f",
+      "id_hex": "8200ecda8f37273c735dbf21d8475e67cb5f61134e911ccc78c1a37925adb9e1"
     }
   ]
 }
