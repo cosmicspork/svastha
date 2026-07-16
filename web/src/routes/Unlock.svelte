@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { contract_version } from '../lib/svastha'
   import { unlock, unlockWithPasskey, listPasskeys, wipe, WrongPassphraseError, PasskeyUnlockError } from '../lib/keyvault'
   import { passkeysSupported, authenticate, PasskeyNotSupportedError, PasskeyCeremonyError } from '../lib/passkey'
   import { setSession } from '../lib/session.svelte'
@@ -19,6 +20,9 @@
   // Credential ids enrolled on this device; the passkey control shows only when
   // the browser supports WebAuthn and at least one is enrolled.
   let passkeyCredIds = $state<string[]>([])
+
+  // Safe to call synchronously: App gates rendering behind initSvastha().
+  const version = contract_version()
 
   onMount(async () => {
     pubkeyHex = await get<string>('prefs', 'ed25519-pub')
@@ -194,6 +198,11 @@
   <button type="button" class="ghost forgot" onclick={() => (showForgotSheet = true)} data-testid="forgot-passphrase">
     Forgot? Start over from your seed phrase
   </button>
+
+  <footer class="version">
+    <p data-testid="unlock-app-version">Svastha v{__APP_VERSION__}</p>
+    <p data-testid="unlock-contract-version">Trust contract v{version}</p>
+  </footer>
 </div>
 
 {#if showForgotSheet}
@@ -321,5 +330,12 @@
 
   .row button {
     flex: 1;
+  }
+
+  .version {
+    margin-top: var(--space-7);
+    font-size: var(--text-xs);
+    color: var(--muted);
+    line-height: 1.5;
   }
 </style>

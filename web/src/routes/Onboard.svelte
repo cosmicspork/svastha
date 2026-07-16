@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { initSvastha, WasmIdentity } from '../lib/svastha'
+  import { initSvastha, WasmIdentity, contract_version } from '../lib/svastha'
   import { initVault, unlock } from '../lib/keyvault'
   import { setSession } from '../lib/session.svelte'
   import { navigate } from '../lib/router.svelte'
@@ -10,6 +10,9 @@
   import { copySensitive } from '../lib/clipboard'
 
   let { onCreated }: { onCreated: () => void } = $props()
+
+  // Safe to call synchronously: App gates rendering behind initSvastha().
+  const version = contract_version()
 
   type Tab = 'create' | 'restore'
   const hashParams = new URLSearchParams(window.location.hash.split('?')[1] ?? '')
@@ -371,6 +374,11 @@
   <p class="muted" data-testid="persist-note">{persistNote}</p>
 {/if}
 
+<footer class="version">
+  <p data-testid="onboard-app-version">Svastha v{__APP_VERSION__}</p>
+  <p data-testid="onboard-contract-version">Trust contract v{version}</p>
+</footer>
+
 <style>
   .tabs {
     display: flex;
@@ -406,5 +414,13 @@
     color: var(--muted);
     border-left: 2px solid var(--flare);
     padding-left: var(--space-3);
+  }
+
+  .version {
+    margin-top: var(--space-7);
+    text-align: center;
+    font-size: var(--text-xs);
+    color: var(--muted);
+    line-height: 1.5;
   }
 </style>
