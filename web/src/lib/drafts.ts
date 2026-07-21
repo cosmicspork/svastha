@@ -232,7 +232,7 @@ export function gratitudeDrafts(items: string[], effectiveAt: string): Draft[] {
 
 // --- cycle ---
 
-/** Flow intensity as a 1–4 ordinal (light..very heavy) — a unitless quantity,
+/** Flow intensity as a 1–4 ordinal (spotting..heavy) — a unitless quantity,
  * same convention as mood's 1–5 score: an ordinal scale, not a measurement. */
 function flowSibling(level: number, effectiveAt: string): Draft {
   return { kind: 'observation', code: CYCLE_FLOW, effective_at: effectiveAt, value: quantity(String(level)) }
