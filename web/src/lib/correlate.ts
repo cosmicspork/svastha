@@ -6,7 +6,7 @@
 // their doc comments).
 import type { StoredEvent } from './events'
 import { categorize } from './category'
-import { MOOD } from './codes'
+import { MOOD, CYCLE_FLOW, CYCLE_START, CYCLE_END } from './codes'
 import { isoToMillis, dayKey } from './time'
 
 type Ev = StoredEvent['event']
@@ -56,9 +56,26 @@ export interface InputLane {
   ticks: InputTick[]
 }
 
+/** One day of the cycle band. `level` is the day's flow intensity (1–4) when a
+ * flow reading exists; null marks a period start/end day that carried no flow
+ * of its own — the band still shows the boundary, but imputes no intensity. */
+export interface CycleCell {
+  atIso: string
+  level: number | null
+}
+
+/** The single cycle band lane — modeled on the input tick lanes (a row of
+ * per-day cells), not a 0–10 severity lane. Present only when the window holds
+ * cycle events; the cycle-relevant symptom overlay lives in CycleStats, so this
+ * lane is deliberately just the flow band. */
+export interface CycleLane {
+  cells: CycleCell[]
+}
+
 export interface Lanes {
   symptoms: SymptomLane[]
   inputs: InputLane[]
+  cycle: CycleLane | null
 }
 
 /** A symptom lane point plus its lane's name — what a tapped/activated dot
@@ -116,6 +133,8 @@ export function lanes(events: StoredEvent[], fromIso: string, toIso: string): La
   const symptomGroups = new Map<string, SymptomPoint[]>()
   const moodPoints: SymptomPoint[] = []
   const inputGroups = new Map<InputCategory, InputTick[]>()
+  // One cell per calendar day that carries a flow reading or a start/end marker.
+  const cycleByDay = new Map<string, CycleCell>()
 
   for (const { event } of events) {
     if (!event.effective_at) continue
@@ -123,6 +142,26 @@ export function lanes(events: StoredEvent[], fromIso: string, toIso: string): La
     if (t < from || t > to) continue
 
     const category = categorize(event)
+    if (category === 'cycle') {
+      const code = event.code?.code
+      const isMarker = code === CYCLE_START.code || code === CYCLE_END.code
+      const flowLevel = code === CYCLE_FLOW.code ? severityOf(event) : null
+      // Clots (or any other cycle code) alone never opens a band cell — it only
+      // ever rides on a flow/start day, so the band stays "flow + boundaries".
+      if (flowLevel === null && !isMarker) continue
+
+      const day = dayKey(event.effective_at)
+      const cur = cycleByDay.get(day) ?? { atIso: event.effective_at, level: null }
+      if (flowLevel !== null && (cur.level === null || flowLevel >= cur.level)) {
+        // The day's strongest flow reading sets the level and dates the cell.
+        cur.atIso = event.effective_at
+        cur.level = flowLevel
+      } else if (cur.level === null) {
+        cur.atIso = event.effective_at
+      }
+      cycleByDay.set(day, cur)
+      continue
+    }
     if (category === 'symptom') {
       const name = event.code?.display ?? labelOf(event) ?? 'Symptom'
       const points = symptomGroups.get(name) ?? []
@@ -159,7 +198,12 @@ export function lanes(events: StoredEvent[], fromIso: string, toIso: string): La
     ticks: inputGroups.get(category)!.slice().sort((a, b) => isoToMillis(a.atIso) - isoToMillis(b.atIso)),
   }))
 
-  return { symptoms, inputs }
+  const cycle: CycleLane | null =
+    cycleByDay.size > 0
+      ? { cells: [...cycleByDay.values()].sort((a, b) => isoToMillis(a.atIso) - isoToMillis(b.atIso)) }
+      : null
+
+  return { symptoms, inputs, cycle }
 }
 
 // --- preceding ---

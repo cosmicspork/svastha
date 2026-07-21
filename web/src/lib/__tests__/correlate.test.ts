@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { lanes, preceding, shouldDownsample } from '../correlate'
 import type { StoredEvent } from '../events'
-import { SNOMED, LOINC, UCUM, MOOD, MOOD_NOTE, GRATITUDE } from '../codes'
+import { SNOMED, LOINC, UCUM, MOOD, MOOD_NOTE, GRATITUDE, CYCLE_START, CYCLE_END, CYCLE_FLOW, CYCLE_CLOTS } from '../codes'
 
 let nextId = 0
 function ev(partial: Partial<StoredEvent['event']> & { effective_at: string }): StoredEvent {
@@ -65,6 +65,22 @@ function moodNoteEvent(effective_at: string, note: string): StoredEvent {
 
 function gratitudeEvent(effective_at: string, item: string): StoredEvent {
   return ev({ effective_at, code: GRATITUDE, value: { text: item } })
+}
+
+function cycleStartEvent(effective_at: string): StoredEvent {
+  return ev({ effective_at, code: CYCLE_START, value: null })
+}
+
+function cycleEndEvent(effective_at: string): StoredEvent {
+  return ev({ effective_at, code: CYCLE_END, value: null })
+}
+
+function cycleFlowEvent(effective_at: string, level: number): StoredEvent {
+  return ev({ effective_at, code: CYCLE_FLOW, value: { quantity: { value: String(level), unit: null } } })
+}
+
+function cycleClotsEvent(effective_at: string): StoredEvent {
+  return ev({ effective_at, code: CYCLE_CLOTS, value: null })
 }
 
 describe('lanes', () => {
@@ -171,6 +187,75 @@ describe('lanes', () => {
       { atIso: '2026-01-05T20:00:00+00:00', severity: 9, eventId: events[1].event.id },
       { atIso: '2026-01-06T08:00:00+00:00', severity: 4, eventId: events[2].event.id },
     ])
+  })
+})
+
+describe('cycle lane', () => {
+  const from = '2026-01-01T00:00:00+00:00'
+  const to = '2026-01-31T00:00:00+00:00'
+
+  it('is null when no cycle events fall in the window', () => {
+    const { cycle } = lanes([symptomEvent('2026-01-05T08:00:00+00:00', 5)], from, to)
+    expect(cycle).toBeNull()
+  })
+
+  it('is present when cycle events fall in the window', () => {
+    const { cycle } = lanes([cycleFlowEvent('2026-01-05T08:00:00+00:00', 3)], from, to)
+    expect(cycle).not.toBeNull()
+    expect(cycle!.cells).toHaveLength(1)
+  })
+
+  it('is excluded when the only cycle events sit outside the window', () => {
+    const { cycle } = lanes([cycleFlowEvent('2025-12-20T08:00:00+00:00', 3)], from, to)
+    expect(cycle).toBeNull()
+  })
+
+  it('maps a flow observation to its 1–4 level on the band cell', () => {
+    const { cycle } = lanes([cycleFlowEvent('2026-01-05T08:00:00+00:00', 4)], from, to)
+    expect(cycle!.cells[0].level).toBe(4)
+  })
+
+  it('keeps the day’s strongest flow reading when a day has several', () => {
+    const { cycle } = lanes(
+      [cycleFlowEvent('2026-01-05T08:00:00+00:00', 2), cycleFlowEvent('2026-01-05T20:00:00+00:00', 4)],
+      from,
+      to,
+    )
+    expect(cycle!.cells).toHaveLength(1)
+    expect(cycle!.cells[0].level).toBe(4)
+  })
+
+  it('marks a start day with a null level even without flow', () => {
+    const { cycle } = lanes([cycleStartEvent('2026-01-03T09:00:00+00:00')], from, to)
+    expect(cycle!.cells).toEqual([{ atIso: '2026-01-03T09:00:00+00:00', level: null }])
+  })
+
+  it('lets a flow reading upgrade a same-day start marker from null to its level', () => {
+    const { cycle } = lanes(
+      [cycleStartEvent('2026-01-03T07:00:00+00:00'), cycleFlowEvent('2026-01-03T08:00:00+00:00', 3)],
+      from,
+      to,
+    )
+    expect(cycle!.cells).toHaveLength(1)
+    expect(cycle!.cells[0].level).toBe(3)
+  })
+
+  it('marks an end day too, and orders cells chronologically', () => {
+    const { cycle } = lanes(
+      [cycleEndEvent('2026-01-08T09:00:00+00:00'), cycleFlowEvent('2026-01-03T09:00:00+00:00', 2)],
+      from,
+      to,
+    )
+    expect(cycle!.cells.map((c) => c.atIso)).toEqual([
+      '2026-01-03T09:00:00+00:00',
+      '2026-01-08T09:00:00+00:00',
+    ])
+    expect(cycle!.cells.map((c) => c.level)).toEqual([2, null])
+  })
+
+  it('does not open a band cell for a clots reading with no flow or marker that day', () => {
+    const { cycle } = lanes([cycleClotsEvent('2026-01-05T09:00:00+00:00')], from, to)
+    expect(cycle).toBeNull()
   })
 })
 
