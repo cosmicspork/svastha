@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.0](https://github.com/cosmicspork/svastha/compare/v0.7.0...v0.8.0) (2026-07-21)
+
+
+### Features
+
+* **web:** cycle event modeling foundation ([#78](https://github.com/cosmicspork/svastha/issues/78)) ([42d3185](https://github.com/cosmicspork/svastha/commit/42d3185874b6f006b092f3a856ab8ed4d2c62c94))
+* **web:** cycle log form and timeline ([#80](https://github.com/cosmicspork/svastha/issues/80)) ([8d857a7](https://github.com/cosmicspork/svastha/commit/8d857a72ae77b087246ab9ae5cc07047ff29d138))
+* **web:** cycle stats and Patterns lane ([#82](https://github.com/cosmicspork/svastha/issues/82)) ([49532e2](https://github.com/cosmicspork/svastha/commit/49532e2729928d8957032d0698c27c0d0b9d7979))
+* **web:** opt-in sharing for sensitive categories and clinician cycle summary ([#81](https://github.com/cosmicspork/svastha/issues/81)) ([c989697](https://github.com/cosmicspork/svastha/commit/c989697de8521366f24538ca74f9271a0434e6ec))
+* **web:** show version info on unlock and onboard pages ([4f59d74](https://github.com/cosmicspork/svastha/commit/4f59d74cecbd6c1f1e8685b0aa1520aa8db52b2d))
+
 ## [0.7.0](https://github.com/cosmicspork/svastha/compare/v0.6.0...v0.7.0) (2026-07-15)
 
 

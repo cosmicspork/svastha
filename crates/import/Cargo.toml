@@ -1,6 +1,6 @@
 [package]
 name = "svastha-import"
-version = "0.7.0" # x-release-please-version
+version = "0.8.0" # x-release-please-version
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -10,7 +10,7 @@ keywords = ["ccda", "fhir", "import", "health", "svastha"]
 categories = ["parser-implementations"]
 
 [dependencies]
-svastha-core = { path = "../core", version = "0.7.0" } # x-release-please-version
+svastha-core = { path = "../core", version = "0.8.0" } # x-release-please-version
 # Namespace-agnostic, non-validating XML parsing for C-CDA documents.
 roxmltree = "0.21"
 serde = { version = "1", features = ["derive"] }
