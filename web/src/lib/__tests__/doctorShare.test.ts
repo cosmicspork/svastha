@@ -22,7 +22,7 @@ import {
 } from '../doctorShare'
 import { toHex, fromHex } from '../hex'
 import type { StoredEvent } from '../events'
-import { MOOD, BP_SYSTOLIC } from '../codes'
+import { MOOD, BP_SYSTOLIC, CYCLE_START } from '../codes'
 
 // The pure builders — token/key encoding, link assembly, bundle shape, and
 // scope filtering — are the pinned contract the recipient view parses against,
@@ -153,33 +153,49 @@ describe('referencedAttachmentShas', () => {
 })
 
 describe('filterEventsForScope', () => {
-  const mood = ev('mood', 'observation', '2026-03-15T09:00:00Z', MOOD) // 'mind'
-  const bp = ev('bp', 'observation', '2026-06-20T09:00:00Z', BP_SYSTOLIC) // 'vital'
+  const mood = ev('mood', 'observation', '2026-03-15T09:00:00Z', MOOD) // 'mind' — sensitive
+  const cycleStart = ev('cyc', 'observation', '2026-02-01T09:00:00Z', CYCLE_START) // 'cycle' — sensitive
+  const bpEarly = ev('bp-early', 'observation', '2026-02-15T09:00:00Z', BP_SYSTOLIC) // 'vital', in-window
+  const bp = ev('bp', 'observation', '2026-06-20T09:00:00Z', BP_SYSTOLIC) // 'vital', out of window
   const undatedMed = ev('med', 'medication_statement', null, null, { text: 'aspirin' }) // 'med'
-  const all = [mood, bp, undatedMed]
+  const all = [mood, cycleStart, bpEarly, bp, undatedMed]
 
   const open: ShareScope = { fromIso: null, toIso: null, categories: null }
 
-  it('includes everything (undated too) when the range and categories are open', () => {
+  it('excludes sensitive categories (cycle, mind) by default but includes every other one, undated included', () => {
     expect(new Set(filterEventsForScope(all, open).map((e) => e.event.id))).toEqual(
-      new Set(['mood', 'bp', 'med']),
+      new Set(['bp-early', 'bp', 'med']),
     )
   })
 
-  it('applies a date window and drops undated events once bounded', () => {
+  it('applies a date window on top of the sensitive exclusion, and still drops undated events once bounded', () => {
     const scope: ShareScope = { fromIso: '2026-01-01T00:00:00', toIso: '2026-04-01T00:00:00', categories: null }
     const ids = filterEventsForScope(all, scope).map((e) => e.event.id)
-    expect(ids).toEqual(['mood']) // bp is after the window; undated med is excluded
+    // mood and cycleStart fall in the window but are sensitive, so a null-scope
+    // share excludes them anyway; bp is after the window; undated med is excluded.
+    expect(ids).toEqual(['bp-early'])
   })
 
-  it('filters by category', () => {
+  it('filters by an explicit category list, which is honored verbatim', () => {
     const scope: ShareScope = { fromIso: null, toIso: null, categories: ['med'] }
     expect(filterEventsForScope(all, scope).map((e) => e.event.id)).toEqual(['med'])
   })
 
-  it('treats an empty category list as all categories', () => {
+  it('an explicit list naming a sensitive category is the opt-in path — it includes it', () => {
+    const scope: ShareScope = { fromIso: null, toIso: null, categories: ['cycle'] }
+    expect(filterEventsForScope(all, scope).map((e) => e.event.id)).toEqual(['cyc'])
+  })
+
+  it('an explicit list that omits cycle still excludes it, like any other unlisted category', () => {
+    const scope: ShareScope = { fromIso: null, toIso: null, categories: ['vital', 'med'] }
+    const ids = new Set(filterEventsForScope(all, scope).map((e) => e.event.id))
+    expect(ids).toEqual(new Set(['bp-early', 'bp', 'med']))
+  })
+
+  it('treats an empty category list as every non-sensitive category, not literally every category', () => {
     const scope: ShareScope = { fromIso: null, toIso: null, categories: [] }
-    expect(filterEventsForScope(all, scope)).toHaveLength(3)
+    const ids = new Set(filterEventsForScope(all, scope).map((e) => e.event.id))
+    expect(ids).toEqual(new Set(['bp-early', 'bp', 'med']))
   })
 })
 

@@ -12,6 +12,10 @@ import {
   MOOD,
   MOOD_NOTE,
   GRATITUDE,
+  CYCLE_START,
+  CYCLE_END,
+  CYCLE_FLOW,
+  CYCLE_CLOTS,
 } from './codes'
 
 /** Wire names of `EventKind` (serde `snake_case`); see crates/core/src/event.rs. */
@@ -36,12 +40,15 @@ export type EventValue =
   | { attachment: { sha256: string; mime: string; size: number } }
 
 /** An event ready to sign: everything but `id` (derived) and `provenance`
- * (stamped by logEvent). Quick-log always dates its facts. */
+ * (stamped by logEvent). Quick-log always dates its facts. `value` is
+ * nullable for a marker fact — e.g. cycle start/end — whose meaning is
+ * entirely in its code; core's `EventValue` is `Option`-typed for the same
+ * reason. */
 export interface Draft {
   kind: EventKind
   code?: Code
   effective_at: string
-  value: EventValue
+  value: EventValue | null
 }
 
 /** A draft with the timestamp stripped — the reusable part of a logged combo,
@@ -221,4 +228,43 @@ export function gratitudeDrafts(items: string[], effectiveAt: string): Draft[] {
       effective_at: effectiveAt,
       value: text(item),
     }))
+}
+
+// --- cycle ---
+
+/** Flow intensity as a 1–4 ordinal (spotting..heavy) — a unitless quantity,
+ * same convention as mood's 1–5 score: an ordinal scale, not a measurement. */
+function flowSibling(level: number, effectiveAt: string): Draft {
+  return { kind: 'observation', code: CYCLE_FLOW, effective_at: effectiveAt, value: quantity(String(level)) }
+}
+
+/** Clots is presence-only (no severity scale yet), so the sibling carries no
+ * value — the code alone is the fact. */
+function clotsSibling(effectiveAt: string): Draft {
+  return { kind: 'observation', code: CYCLE_CLOTS, effective_at: effectiveAt, value: null }
+}
+
+/** The first day of a period: a marker observation (no value — the code IS
+ * the fact, same "no value" shape core's `Option<EventValue>` already allows)
+ * plus optional flow/clots siblings sharing the timestamp — the same "one
+ * event per component" convention a BP pair or a mood note uses. */
+export function cycleStartDraft(flow: number | null, clots: boolean, effectiveAt: string): Draft[] {
+  const drafts: Draft[] = [{ kind: 'observation', code: CYCLE_START, effective_at: effectiveAt, value: null }]
+  if (flow !== null) drafts.push(flowSibling(flow, effectiveAt))
+  if (clots) drafts.push(clotsSibling(effectiveAt))
+  return drafts
+}
+
+/** A flow reading logged on any day the period is active (not just day one),
+ * plus an optional clots sibling. */
+export function cycleFlowDraft(level: number, clots: boolean, effectiveAt: string): Draft[] {
+  const drafts: Draft[] = [flowSibling(level, effectiveAt)]
+  if (clots) drafts.push(clotsSibling(effectiveAt))
+  return drafts
+}
+
+/** The last day of a period: a marker observation, no value, no siblings —
+ * flow and clots belong to the days the period is active. */
+export function cycleEndDraft(effectiveAt: string): Draft {
+  return { kind: 'observation', code: CYCLE_END, effective_at: effectiveAt, value: null }
 }

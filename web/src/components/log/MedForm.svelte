@@ -31,7 +31,7 @@
     // Recents/favorites carry the whole "name — dose unit" text; prefill it as
     // the name so re-saving reproduces the identical value (same content id
     // shape), rather than lossily re-parsing it into fields.
-    if (t && 'text' in t.value) {
+    if (t && t.value && 'text' in t.value) {
       name = t.value.text
       dose = ''
     }

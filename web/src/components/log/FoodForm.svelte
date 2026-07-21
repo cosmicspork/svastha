@@ -43,7 +43,7 @@
 
   function onPrefill(templates: DraftTemplate[]) {
     for (const t of templates) {
-      if (!('text' in t.value)) continue
+      if (!t.value || !('text' in t.value)) continue
       const text = t.value.text
       if (!items.some((i) => i.toLowerCase() === text.toLowerCase())) {
         items = [...items, text]

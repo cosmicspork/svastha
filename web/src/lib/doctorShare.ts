@@ -13,7 +13,7 @@
 import { WasmDataKey, type WasmIdentity } from './svastha'
 import type { RelayClient } from './relay'
 import type { StoredEvent } from './events'
-import { categorize, type Category } from './category'
+import { categorize, CATEGORY_META, type Category } from './category'
 import { isoToMillis } from './time'
 import { fromHex } from './hex'
 import { bytesToBase64, base64ToBytes } from './base64'
@@ -68,7 +68,11 @@ export interface ShareScope {
   fromIso: string | null
   /** Inclusive ISO upper bound on `effective_at`, or null for open-ended. */
   toIso: string | null
-  /** Categories to include; null (or empty) means every category. */
+  /** Categories to include; null (or empty) means every *non-sensitive*
+   * category (see `CATEGORY_META`'s `sensitive` flag) — a share the owner
+   * didn't scope explicitly should never carry cycle or mood data by
+   * default. An explicit list is honored verbatim, so naming a sensitive
+   * category here is exactly the opt-in path. */
   categories: Category[] | null
 }
 
@@ -83,7 +87,8 @@ export function filterEventsForScope(events: StoredEvent[], scope: ShareScope): 
   const toMs = scope.toIso ? isoToMillis(scope.toIso) : null
   const openRange = fromMs === null && toMs === null
   return events.filter((se) => {
-    if (cats && !cats.has(categorize(se.event))) return false
+    const category = categorize(se.event)
+    if (cats ? !cats.has(category) : CATEGORY_META[category].sensitive) return false
     const at = se.event.effective_at
     if (openRange) return true
     if (!at) return false

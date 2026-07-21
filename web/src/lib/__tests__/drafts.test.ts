@@ -11,6 +11,9 @@ import {
   moodDraft,
   gratitudeDrafts,
   paperRecordDrafts,
+  cycleStartDraft,
+  cycleFlowDraft,
+  cycleEndDraft,
   fromTemplates,
   toTemplate,
 } from '../drafts'
@@ -26,6 +29,10 @@ import {
   MOOD,
   MOOD_NOTE,
   GRATITUDE,
+  CYCLE_START,
+  CYCLE_END,
+  CYCLE_FLOW,
+  CYCLE_CLOTS,
 } from '../codes'
 
 const AT = '2026-07-04T08:30:00-05:00'
@@ -169,6 +176,61 @@ describe('gratitudeDrafts', () => {
 
   it('returns no drafts when every item is empty', () => {
     expect(gratitudeDrafts(['', '   '], AT)).toEqual([])
+  })
+})
+
+describe('cycleStartDraft', () => {
+  it('emits a value-less marker observation when flow and clots are both omitted', () => {
+    const drafts = cycleStartDraft(null, false, AT)
+    expect(drafts).toHaveLength(1)
+    expect(drafts[0].kind).toBe('observation')
+    expect(drafts[0].code).toEqual(CYCLE_START)
+    expect(drafts[0].value).toBeNull()
+    expect(drafts[0].effective_at).toBe(AT)
+  })
+
+  it('adds a flow sibling as an ordinal decimal-string quantity, sharing effective_at', () => {
+    const drafts = cycleStartDraft(3, false, AT)
+    expect(drafts).toHaveLength(2)
+    expect(drafts[1].code).toEqual(CYCLE_FLOW)
+    expect(drafts[1].value).toEqual({ quantity: { value: '3', unit: null } })
+    expect(drafts.every((d) => d.effective_at === AT)).toBe(true)
+  })
+
+  it('adds a clots sibling (also value-less) only when clots is true', () => {
+    const drafts = cycleStartDraft(2, true, AT)
+    expect(drafts).toHaveLength(3)
+    expect(drafts[2].code).toEqual(CYCLE_CLOTS)
+    expect(drafts[2].value).toBeNull()
+    expect(drafts.every((d) => d.effective_at === AT)).toBe(true)
+  })
+})
+
+describe('cycleFlowDraft', () => {
+  it('emits just the flow observation when clots is false', () => {
+    const drafts = cycleFlowDraft(1, false, AT)
+    expect(drafts).toHaveLength(1)
+    expect(drafts[0].code).toEqual(CYCLE_FLOW)
+    expect(drafts[0].value).toEqual({ quantity: { value: '1', unit: null } })
+  })
+
+  it('adds the clots sibling sharing effective_at when clots is true', () => {
+    const drafts = cycleFlowDraft(4, true, AT)
+    expect(drafts).toHaveLength(2)
+    expect(drafts[0].value).toEqual({ quantity: { value: '4', unit: null } })
+    expect(drafts[1].code).toEqual(CYCLE_CLOTS)
+    expect(drafts[1].value).toBeNull()
+    expect(drafts.every((d) => d.effective_at === AT)).toBe(true)
+  })
+})
+
+describe('cycleEndDraft', () => {
+  it('is a single value-less marker observation', () => {
+    const draft = cycleEndDraft(AT)
+    expect(draft.kind).toBe('observation')
+    expect(draft.code).toEqual(CYCLE_END)
+    expect(draft.value).toBeNull()
+    expect(draft.effective_at).toBe(AT)
   })
 })
 

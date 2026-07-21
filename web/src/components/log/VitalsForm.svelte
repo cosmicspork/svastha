@@ -90,7 +90,7 @@
   function onPrefill(templates: DraftTemplate[]) {
     const values = new Map<string, string>()
     for (const t of templates) {
-      if (t.code && 'quantity' in t.value) values.set(t.code.code, t.value.quantity.value)
+      if (t.code && t.value && 'quantity' in t.value) values.set(t.code.code, t.value.quantity.value)
     }
     const sys = values.get(BP_SYSTOLIC.code)
     const dia = values.get(BP_DIASTOLIC.code)
