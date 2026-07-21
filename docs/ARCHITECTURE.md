@@ -420,27 +420,12 @@ power users can run everything locally, from the same codebase.
 
 ## Roadmap
 
-- **v1 (shipped in v0.1.0).** Quick-log lifestyle events (vitals, symptoms, meds, food,
-  exercise, notes); local-first PWA with IndexedDB storage and a
-  passphrase-wrapped seed at rest (custody scheme specified in the Web section as
-  that work lands); encrypted relay backup with multi-device restore from the
-  mnemonic (client blob layout documented alongside the sync work);
-  single-writer, read-only household sharing (relay grants plus a wrapped-key
-  mailbox); client-side import of US EHR exports (Epic C-CDA in IHE XDM packages,
-  FHIR R4 bundles) keeping verbatim provenance blobs; correlation timeline over a
-  thin last-writer-wins curation overlay.
-- **Shipped since.** Passkey unlock (WebAuthn PRF over the keyvault's MK
-  indirection, platform authenticator only); the doctor share and its clinician
-  summary view; narrative-notes import (visit prose folded under its encounter);
-  paper-record capture with the `attachment` value, encrypted `att-*` blobs, and
-  an in-app viewer; render-time code display names with the opt-in offline
-  dictionary.
-- **Next.** OCR for captured documents (native OS OCR through the wrapper, or
-  the processing node; human-in-the-loop for handwriting); PDF attachments;
-  imported source documents rendered through the attachment viewer.
-- **Later.** Multi-writer sync, richer grant terms (family and caregiver access
-  beyond the household pair), the research marketplace, ABDM, native device and
-  health-app integration.
+Since v0.1.0 the vault has grown passkey unlock, the doctor share and its
+clinician summary view, narrative-notes import, paper-record capture with
+encrypted attachment blobs and an in-app viewer, and render-time code display
+names with the opt-in offline dictionary.
+
+Forward-looking plans live in `docs/ROADMAP.md`.
 
 ## Keep in sync
 
@@ -450,3 +435,4 @@ When the core patterns change, update together:
 - `spec/` (the written contract and test vectors) and
   `svastha_core::CONTRACT_VERSION`.
 - The `core` types that implement the contract.
+- `docs/ROADMAP.md`.
