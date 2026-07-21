@@ -10,6 +10,7 @@
   import { CATEGORIES, CATEGORY_META, type Category } from '../lib/category'
   import {
     createDoctorShare,
+    deriveShareCategories,
     filterEventsForScope,
     referencedAttachmentShas,
     listDoctorShares,
@@ -39,9 +40,21 @@
   let loaded = $state(false)
 
   // --- scope ---
+  // The chip row is the ordinary (non-sensitive) categories; the opt-in group
+  // below it is the sensitive ones (cycle, mind). Split once so both the UI and
+  // the description read from the same source of truth.
+  const nonSensitiveCategories = CATEGORIES.filter((c) => !CATEGORY_META[c].sensitive)
+  const sensitiveCategories = CATEGORIES.filter((c) => CATEGORY_META[c].sensitive)
+
   let fromDate = $state('')
   let toDate = $state('')
-  let selected = $state<Set<Category>>(new Set())
+  // Everything non-sensitive starts included: the sheet defaults to sharing the
+  // ordinary record, and the visual (active chips) matches the semantics —
+  // deselect to narrow, rather than an empty row that reads as "nothing".
+  let selected = $state<Set<Category>>(new Set(nonSensitiveCategories))
+  // Opt-in categories, off by default — a share never carries cycle or mood
+  // data unless the owner turns it on here.
+  let sensitiveOn = $state<Set<Category>>(new Set())
   let expiryDays = $state<number>(DEFAULT_EXPIRY_DAYS)
   let showPreview = $state(false)
 
@@ -53,40 +66,72 @@
     showPreview = false
   }
 
+  function toggleSensitive(cat: Category) {
+    const next = new Set(sensitiveOn)
+    if (next.has(cat)) next.delete(cat)
+    else next.add(cat)
+    sensitiveOn = next
+    showPreview = false
+  }
+
+  /** The materialized explicit scope, or null when nothing at all is selected. */
+  const categories = $derived(deriveShareCategories(selected, sensitiveOn))
+  // Nothing chosen — not "everything". The create button disables and says so
+  // rather than falling through to a share that carries the whole record.
+  const nothingSelected = $derived(categories === null)
+
   const scope = $derived<ShareScope>({
     // A day-granularity picker: include the whole "to" day, from the start of
     // the "from" day. Left local (no offset) — isoToMillis parses either way.
     fromIso: fromDate ? `${fromDate}T00:00:00` : null,
     toIso: toDate ? `${toDate}T23:59:59.999` : null,
-    categories: selected.size > 0 ? [...selected] : null,
+    categories,
   })
 
-  const filtered = $derived(filterEventsForScope(events, scope))
+  // Short-circuit the empty selection to no events (rather than leaning on
+  // filterEventsForScope's null = all-non-sensitive fallback) so the count and
+  // preview never imply data a disabled create couldn't send.
+  const filtered = $derived(nothingSelected ? [] : filterEventsForScope(events, scope))
   // Paper records travel inside the share bundle (their bytes are inlined), so
   // surface the page count honestly — it's what can push a share toward the
   // relay's size cap.
   const pageCount = $derived(referencedAttachmentShas(filtered).length)
 
-  // No explicit selection means every *non-sensitive* category (see
-  // filterEventsForScope) — sensitive ones (cycle, mind) are opt-in only, so
-  // the description says so rather than claiming "All categories".
-  const sensitiveLabels = CATEGORIES.filter((c) => CATEGORY_META[c].sensitive).map((c) => CATEGORY_META[c].label)
-
   const scopeDescription = $derived.by(() => {
-    const cats =
-      selected.size === 0
-        ? sensitiveLabels.length > 0
-          ? `All categories except ${sensitiveLabels.join(', ')}`
-          : 'All categories'
-        : CATEGORIES.filter((c) => selected.has(c))
-            .map((c) => CATEGORY_META[c].label)
-            .join(', ')
+    const allNonSensitive = nonSensitiveCategories.every((c) => selected.has(c))
+    const onSensitive = sensitiveCategories.filter((c) => sensitiveOn.has(c))
+    const offSensitive = sensitiveCategories.filter((c) => !sensitiveOn.has(c))
+    const label = (c: Category) => CATEGORY_META[c].label
+
+    let cats: string
+    if (allNonSensitive && offSensitive.length === 0) {
+      // Every category, sensitive included — "All categories" is then honest.
+      cats = 'All categories'
+    } else {
+      let start = ''
+      if (allNonSensitive) start = `All categories except ${offSensitive.map(label).join(', ')}`
+      else if (selected.size > 0)
+        start = CATEGORIES.filter((c) => selected.has(c))
+          .map(label)
+          .join(', ')
+      const on = onSensitive.map(label)
+      if (on.length > 0) cats = start ? `${start} · plus ${on.join(', ')}` : on.join(', ')
+      else cats = start
+    }
+
     let dates = 'all dates'
     if (fromDate && toDate) dates = `${fromDate} to ${toDate}`
     else if (fromDate) dates = `from ${fromDate}`
     else if (toDate) dates = `through ${toDate}`
     return `${cats}; ${dates}`
   })
+
+  /** Opt-in row sub-copy: a category-specific prefix (Mind names what it holds)
+   * plus the current-state clause. */
+  function optinSubcopy(cat: Category): string {
+    const prefix = cat === 'mind' ? 'Mood and gratitude. ' : ''
+    return prefix + (sensitiveOn.has(cat) ? 'Included in this share.' : 'Left out unless you turn it on.')
+  }
 
   // --- create / result ---
   let busy = $state(false)
@@ -218,7 +263,7 @@
       <p class="hint muted">Leave dates empty for your whole history.</p>
 
       <div class="chips" role="group" aria-label="Categories">
-        {#each CATEGORIES as cat (cat)}
+        {#each nonSensitiveCategories as cat (cat)}
           <button
             type="button"
             class="chip {CATEGORY_META[cat].hueClass}"
@@ -232,9 +277,37 @@
         {/each}
       </div>
       <p class="hint muted">
-        No category selected means every category except {sensitiveLabels.join(' and ')} — tap one of those
-        to include it.
+        Everything above starts included — deselect what you don't want to share. Cycle and Mind are
+        opt-in below.
       </p>
+      {#if nothingSelected}
+        <p class="hint warn" data-testid="share-nothing-selected">
+          Nothing selected — choose at least one category.
+        </p>
+      {/if}
+
+      <div class="optin" role="group" aria-label="Opt-in">
+        <p class="optin-label">Opt-in</p>
+        {#each sensitiveCategories as cat (cat)}
+          <button
+            type="button"
+            role="switch"
+            class="optin-row {CATEGORY_META[cat].hueClass}"
+            aria-checked={sensitiveOn.has(cat)}
+            onclick={() => toggleSensitive(cat)}
+            data-testid="optin-{cat}"
+          >
+            <span class="optin-text">
+              <span class="optin-name">
+                <span class="glyph">{CATEGORY_META[cat].glyph}</span>
+                {CATEGORY_META[cat].label}
+              </span>
+              <span class="optin-sub muted">{optinSubcopy(cat)}</span>
+            </span>
+            <span class="switch" aria-hidden="true"><span class="knob"></span></span>
+          </button>
+        {/each}
+      </div>
     </section>
 
     <section class="stack">
@@ -420,6 +493,100 @@
   .chip .glyph {
     /* Inherit the category hue class's color for just the glyph. */
     color: currentColor;
+  }
+
+  .hint.warn {
+    color: var(--danger);
+  }
+
+  /* The opt-in group: a bordered surface box that visually separates the
+     sensitive (cycle, mind) toggles from the ordinary category chips, so their
+     "off unless you say so" nature reads at a glance. */
+  .optin {
+    margin-top: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .optin-label {
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    margin: var(--space-1) 0;
+  }
+
+  .optin-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    padding: var(--space-2) 0;
+    background: none;
+    border: none;
+    border-top: 1px solid var(--border);
+    text-align: left;
+    color: var(--text);
+  }
+
+  .optin-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .optin-name {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-size: var(--text-sm);
+  }
+
+  .optin-name .glyph {
+    /* The hue class colors just the glyph, as the chips do. */
+    color: currentColor;
+  }
+
+  .optin-sub {
+    font-size: var(--text-xs);
+    color: var(--muted);
+  }
+
+  /* A checkbox-based switch built from the button's aria-checked state — no
+     dependency on a shared switch component (the app has none yet). The track
+     and knob are theme-token driven so it reads in light and dark. */
+  .switch {
+    flex: none;
+    position: relative;
+    width: 40px;
+    height: 24px;
+    border-radius: var(--radius-full);
+    background: var(--border);
+    transition: background 0.15s ease;
+  }
+
+  .knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--surface);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+    transition: transform 0.15s ease;
+  }
+
+  .optin-row[aria-checked='true'] .switch {
+    background: var(--action);
+  }
+
+  .optin-row[aria-checked='true'] .knob {
+    transform: translateX(16px);
   }
 
   .count {

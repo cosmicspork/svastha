@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { buildSummary } from '../summary'
 import type { StoredEvent } from '../events'
 import type { EventKind, EventValue } from '../drafts'
-import { SNOMED, LOINC, RXNORM, BP_SYSTOLIC, BP_DIASTOLIC, type Code } from '../codes'
+import { SNOMED, LOINC, RXNORM, BP_SYSTOLIC, BP_DIASTOLIC, CYCLE_START, CYCLE_END, type Code } from '../codes'
 
 let nextId = 0
 function ev(partial: {
@@ -163,6 +163,42 @@ describe('buildSummary: recent results', () => {
     expect(recentResults).toHaveLength(2)
     expect(recentResults.map((r) => r.label)).toEqual(['HbA1c', 'Sodium']) // newest first
     expect(recentResults[0].detail).toBe('5.4 %')
+  })
+})
+
+describe('buildSummary: cycle section', () => {
+  it('omits the cycle field entirely when no cycle events are present', () => {
+    const events = [ev({ kind: 'condition', code: HTN, effective_at: '2021-01-01T00:00:00+00:00' })]
+    expect(buildSummary(events).cycle).toBeUndefined()
+  })
+
+  it('includes the cycle summary exactly when cycle events are present', () => {
+    const events = [
+      ev({ code: CYCLE_START, effective_at: '2026-01-01T09:00:00' }),
+      ev({ code: CYCLE_END, effective_at: '2026-01-05T09:00:00' }),
+      ev({ code: CYCLE_START, effective_at: '2026-01-29T09:00:00' }),
+    ]
+    const { cycle } = buildSummary(events)
+    expect(cycle).toBeDefined()
+    expect(cycle!.cycleCount).toBe(2)
+    expect(cycle!.medianLength).toBe(28)
+    expect(cycle!.typicalPeriodDays).toBe(5)
+  })
+
+  it('degrades to the last-start-only shape with a single recorded start', () => {
+    const { cycle } = buildSummary([ev({ code: CYCLE_START, effective_at: '2026-07-01T09:00:00' })])
+    expect(cycle).toBeDefined()
+    expect(cycle!.cycleCount).toBe(1)
+    expect(cycle!.medianLength).toBeNull()
+    expect(cycle!.lastStartIso?.slice(0, 10)).toBe('2026-07-01')
+  })
+
+  it('drops a hidden cycle event before deriving — hides win here too', () => {
+    const { cycle } = buildSummary(
+      [ev({ code: CYCLE_START, effective_at: '2026-07-01T09:00:00', id: 'drop' })],
+      { hiddenIds: new Set(['drop']) },
+    )
+    expect(cycle).toBeUndefined()
   })
 })
 
