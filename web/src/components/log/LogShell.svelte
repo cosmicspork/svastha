@@ -15,6 +15,7 @@
     favoriteLabel,
     onPrefill,
     onReset,
+    saveLabel = 'Save',
     children,
   }: {
     title: string
@@ -25,6 +26,10 @@
     favoriteLabel: () => string
     onPrefill: (templates: DraftTemplate[]) => void
     onReset: () => void
+    /** Primary button text — most forms just "Save"; a form whose action
+     * varies by pane (e.g. CycleForm's "Log flow" / "Log period start") can
+     * override it. */
+    saveLabel?: string
     children: Snippet
   } = $props()
 
@@ -175,7 +180,7 @@
       onclick={() => save(false)}
       data-testid="save"
     >
-      Save
+      {saveLabel}
     </button>
   </div>
 </div>

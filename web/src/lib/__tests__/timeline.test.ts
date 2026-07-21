@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { buildTimeline } from '../timeline'
 import { dayKey } from '../time'
 import type { StoredEvent } from '../events'
-import { MOOD, MOOD_NOTE, GRATITUDE, LOINC, UCUM } from '../codes'
+import { MOOD, MOOD_NOTE, GRATITUDE, CYCLE_START, CYCLE_END, CYCLE_FLOW, CYCLE_CLOTS, LOINC, UCUM } from '../codes'
 
 let nextId = 0
 function ev(partial: Partial<StoredEvent['event']> & { effective_at: string }): StoredEvent {
@@ -49,6 +49,45 @@ describe('buildTimeline: mind category formatting', () => {
     const entry = buildTimeline(events, 'all')[0].entries[0]
     expect(entry.label).toBe('Gratitude')
     expect(entry.value).toBe('slow morning · call with mom')
+  })
+})
+
+describe('buildTimeline: cycle category formatting', () => {
+  it('formats a lone start marker as "Period started"', () => {
+    const at = '2026-01-01T09:00:00+00:00'
+    const events = [ev({ effective_at: at, code: CYCLE_START, value: null })]
+    const entry = buildTimeline(events, 'all')[0].entries[0]
+    expect(entry.category).toBe('cycle')
+    expect(entry.label).toBe('Period started')
+    expect(entry.value).toBe('')
+  })
+
+  it('folds a start marker with its flow and clots siblings into one line', () => {
+    const at = '2026-01-01T09:00:00+00:00'
+    const events = [
+      ev({ effective_at: at, code: CYCLE_START, value: null }),
+      ev({ effective_at: at, code: CYCLE_FLOW, value: { quantity: { value: '3', unit: null } } }),
+      ev({ effective_at: at, code: CYCLE_CLOTS, value: null }),
+    ]
+    const entry = buildTimeline(events, 'all')[0].entries[0]
+    expect(entry.label).toBe('Period started · Moderate · clots')
+  })
+
+  it('formats a flow reading with clots as its word plus a clots suffix', () => {
+    const at = '2026-01-02T09:00:00+00:00'
+    const events = [
+      ev({ effective_at: at, code: CYCLE_FLOW, value: { quantity: { value: '4', unit: null } } }),
+      ev({ effective_at: at, code: CYCLE_CLOTS, value: null }),
+    ]
+    const entry = buildTimeline(events, 'all')[0].entries[0]
+    expect(entry.label).toBe('Heavy · clots')
+  })
+
+  it('formats an end marker as "Period ended"', () => {
+    const at = '2026-01-10T09:00:00+00:00'
+    const events = [ev({ effective_at: at, code: CYCLE_END, value: null })]
+    const entry = buildTimeline(events, 'all')[0].entries[0]
+    expect(entry.label).toBe('Period ended')
   })
 })
 

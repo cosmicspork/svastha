@@ -9,6 +9,10 @@ import {
   EXERCISE_DURATION,
   MOOD,
   MOOD_NOTE,
+  CYCLE_START,
+  CYCLE_END,
+  CYCLE_FLOW,
+  CYCLE_CLOTS,
   shortenSystem,
   type Code,
 } from './codes'
@@ -210,6 +214,36 @@ function formatMind(events: Ev[]): { label: string; value: string } {
   return { label: 'Gratitude', value: items.join(' · ') }
 }
 
+/** Ordinal flow score (1–4, spotting..heavy) -> its word. Single source: the
+ * cycle form's picker labels, its favorite label, and this timeline
+ * formatting all read off the same mapping (same convention as MOOD_WORDS). */
+export const FLOW_WORDS: Record<number, string> = {
+  1: 'Spotting',
+  2: 'Light',
+  3: 'Moderate',
+  4: 'Heavy',
+}
+
+/** A cycle group folds a marker (start/end), an optional flow reading, and an
+ * optional clots sibling sharing one effective_at. A start marker with a flow
+ * sibling reads as one line ("Period started · Moderate"); clots always
+ * appends as a trailing " · clots" rather than a joined part, since it's a
+ * modifier on the flow/marker, not a fact of its own. */
+function formatCycle(events: Ev[]): { label: string; value: string } {
+  const parts: string[] = []
+  if (events.some((e) => e.code?.code === CYCLE_START.code)) parts.push('Period started')
+  if (events.some((e) => e.code?.code === CYCLE_END.code)) parts.push('Period ended')
+  const flow = events.find((e) => e.code?.code === CYCLE_FLOW.code)
+  if (flow) {
+    const q = quantityOf(flow)
+    const level = q ? Number(q.value) : NaN
+    parts.push(FLOW_WORDS[level] ?? q?.value ?? 'Flow')
+  }
+  let label = parts.length > 0 ? parts.join(' · ') : 'Cycle'
+  if (events.some((e) => e.code?.code === CYCLE_CLOTS.code)) label += ' · clots'
+  return { label, value: '' }
+}
+
 function formatGroup(
   category: Category,
   events: Ev[],
@@ -225,6 +259,8 @@ function formatGroup(
       return { ...formatExercise(events), flare: false }
     case 'mind':
       return { ...formatMind(events), flare: false }
+    case 'cycle':
+      return { ...formatCycle(events), flare: false }
     case 'med':
     case 'food': {
       // Per-item events carry no sequence (the store returns id order, i.e.
