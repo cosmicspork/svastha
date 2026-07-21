@@ -2,10 +2,12 @@
   import { onMount } from 'svelte'
   import { allEvents, type StoredEvent } from '../lib/events'
   import { lanes, type Lanes, type InputCategory, type FlareSymptom } from '../lib/correlate'
+  import { cycleStats } from '../lib/cycle'
   import { allCurationByPrefix, allTags } from '../lib/curation'
   import { toLocalIso } from '../lib/time'
   import TagChips from '../components/TagChips.svelte'
   import FlarePanel from '../components/FlarePanel.svelte'
+  import CycleStats from '../components/CycleStats.svelte'
 
   const RANGE_PRESETS = [7, 30, 90] as const
   const INPUT_LABELS: Record<InputCategory, string> = { food: 'Food', med: 'Meds', exercise: 'Move' }
@@ -54,6 +56,10 @@
   const fromMs = $derived(new Date(range.from).getTime())
   const toMs = $derived(new Date(range.to).getTime())
 
+  // The cycle overview reads the whole log, not the range/tag-filtered slice —
+  // it's an at-a-glance state ("Day N"), not a windowed pattern like the lanes.
+  const showCycleStats = $derived(cycleStats(events) !== null)
+
   // The viewBox is 1000 units wide, but a dot/tick plotted at exactly x=0 or
   // x=1000 gets its far half clipped by the SVG's default viewBox overflow —
   // and a browser's hit-test (and Playwright's click-target resolution) is
@@ -93,6 +99,11 @@
     return 0.4 + (severity / max) * 0.6 // 0.4..1
   }
 
+  /** Flow intensity (1–4) as an opacity step of --cat-cycle. */
+  function cycleOpacity(level: number): number {
+    return 0.15 + (level / 4) * 0.85 // 0.36..1
+  }
+
   function setPreset(days: number) {
     rangeDays = days
     showCustom = false
@@ -120,6 +131,10 @@
 <h1>Patterns</h1>
 
 {#if loaded}
+  {#if showCycleStats}
+    <CycleStats {events} />
+  {/if}
+
   <div class="range-row">
     {#each RANGE_PRESETS as days (days)}
       <button
@@ -158,7 +173,7 @@
 
   <TagChips tags={allTagsList} selected={selectedTags} onToggle={toggleTag} testIdPrefix="correlate-tag-filter" />
 
-  {#if data.symptoms.length === 0 && data.inputs.length === 0}
+  {#if data.symptoms.length === 0 && data.inputs.length === 0 && data.cycle === null}
     <p class="muted" data-testid="correlate-empty">
       Not enough data yet — log symptoms and meals for a few days and patterns will appear here.
     </p>
@@ -200,6 +215,53 @@
         </div>
       {/each}
     </div>
+
+    {#if data.cycle}
+      <div class="cycle-band" data-testid="cycle-lane">
+        <div class="lane-row">
+          <span class="lane-label cat-cycle">Cycle</span>
+          <svg
+            class="lane-svg"
+            viewBox="0 0 1000 32"
+            preserveAspectRatio="none"
+            role="img"
+            aria-label="Cycle flow band"
+          >
+            {#each data.cycle.cells as cell (cell.atIso)}
+              {#if cell.level !== null}
+                <rect
+                  x={xOf(cell.atIso) - 4}
+                  y="4"
+                  width="8"
+                  height="24"
+                  rx="1"
+                  fill="var(--cat-cycle)"
+                  opacity={cycleOpacity(cell.level)}
+                  data-testid="cycle-cell"
+                >
+                  <title>Flow {cell.level}/4</title>
+                </rect>
+              {:else}
+                <rect
+                  x={xOf(cell.atIso) - 1}
+                  y="4"
+                  width="2"
+                  height="24"
+                  fill="none"
+                  stroke="var(--cat-cycle)"
+                  stroke-width="1.5"
+                  opacity="0.8"
+                  data-testid="cycle-cell"
+                >
+                  <title>Period boundary</title>
+                </rect>
+              {/if}
+            {/each}
+          </svg>
+          <span class="lane-count muted data">{data.cycle.cells.length}</span>
+        </div>
+      </div>
+    {/if}
 
     <div class="input-band" data-testid="input-lanes">
       {#each data.inputs as lane (lane.category)}
@@ -285,7 +347,8 @@
     gap: var(--space-2);
   }
 
-  .input-band {
+  .input-band,
+  .cycle-band {
     margin-top: var(--space-4);
     padding-top: var(--space-3);
     border-top: 1px solid var(--border);
