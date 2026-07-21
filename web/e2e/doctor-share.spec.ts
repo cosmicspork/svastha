@@ -78,6 +78,80 @@ test('create a doctor share and fetch the sealed bundle from the relay', async (
   expect(afterRevoke.status()).toBe(410)
 })
 
+// Sensitive-by-default: cycle rides along only when the owner opts it in. The
+// default share must not carry a period-start event, and the preview must not
+// grow a cycle section until the opt-in toggle is on. This is the privacy
+// guarantee of the sensitive-sharing work, exercised end to end against the
+// live relay.
+test('doctor share opt-in: cycle is excluded by default and included only when toggled on', async ({
+  page,
+}) => {
+  await onboardViaUI(page)
+  await connectRelayViaUI(page)
+  await logBP(page, '118', '76')
+
+  // The cycle log form lands in a sibling PR, so seed a period-start event
+  // through the same signed-append path the UI uses (logEvent), not the DB
+  // directly — a real signed StoredEvent is what the share must exclude.
+  await page.evaluate(async () => {
+    const { logEvent } = await import('/src/lib/events.ts')
+    const { CYCLE_START } = await import('/src/lib/codes.ts')
+    await logEvent([
+      { kind: 'observation', code: CYCLE_START, effective_at: '2026-07-01T09:00:00+00:00', value: null },
+    ])
+  })
+
+  await page.evaluate(() => {
+    window.location.hash = '#/share'
+  })
+  await page.getByTestId('open-doctor-share').click()
+
+  // Default scope (all non-sensitive chips selected, opt-in off): the preview
+  // carries no cycle section.
+  await page.getByTestId('share-preview-toggle').click()
+  await expect(page.getByTestId('clinician-summary')).toBeVisible()
+  await expect(page.getByTestId('summary-section-cycle')).toHaveCount(0)
+
+  // Create the default share and confirm the sealed bundle carries no cycle event.
+  await page.getByTestId('share-create').click()
+  await expect(page.getByTestId('share-link')).toBeVisible()
+  const link = (await page.getByTestId('share-link').innerText()).trim()
+  const frag = link.split('/#/s/')[1]
+  const [token, keySeg, relaySeg] = frag.split('.')
+
+  const defaultBundle = await page.evaluate(
+    async ({ token, keySeg, relaySeg }) => {
+      const b64urlToBytes = (s: string) => {
+        const b64 = s.replace(/-/g, '+').replace(/_/g, '/')
+        const pad = b64.length % 4 === 0 ? '' : '='.repeat(4 - (b64.length % 4))
+        return Uint8Array.from(atob(b64 + pad), (c) => c.charCodeAt(0))
+      }
+      const relayOrigin = new TextDecoder().decode(b64urlToBytes(relaySeg))
+      const res = await fetch(`${relayOrigin}/v0/share/${token}`)
+      const sealed = new Uint8Array(await res.arrayBuffer())
+      const { initSvastha, WasmDataKey } = await import('/src/lib/svastha.ts')
+      await initSvastha()
+      const key = WasmDataKey.from_bytes(b64urlToBytes(keySeg))
+      const json = new TextDecoder().decode(key.open(sealed, new TextEncoder().encode(token)))
+      const parsed = JSON.parse(json)
+      return {
+        eventCount: parsed.events.length,
+        hasCycle: parsed.events.some((e: { event?: { code?: { code?: string } } }) => e?.event?.code?.code === 'cycle-start'),
+      }
+    },
+    { token, keySeg, relaySeg },
+  )
+
+  expect(defaultBundle.hasCycle).toBe(false) // the privacy guarantee
+  expect(defaultBundle.eventCount).toBeGreaterThanOrEqual(2) // the BP pair, cycle excluded
+
+  // Turn Cycle on and the preview grows a cycle section over the same events.
+  await page.getByTestId('share-another').click()
+  await page.getByTestId('optin-cycle').click()
+  await page.getByTestId('share-preview-toggle').click()
+  await expect(page.getByTestId('summary-section-cycle')).toBeVisible()
+})
+
 // The create half above and share-recipient.spec.ts's cold-load half were each
 // written on their own branch, so neither could exercise the seam: a real
 // share minted through the UI, opened by a browser that never ran Svastha, and

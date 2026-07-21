@@ -13,7 +13,7 @@
 import { WasmDataKey, type WasmIdentity } from './svastha'
 import type { RelayClient } from './relay'
 import type { StoredEvent } from './events'
-import { categorize, CATEGORY_META, type Category } from './category'
+import { categorize, CATEGORIES, CATEGORY_META, type Category } from './category'
 import { isoToMillis } from './time'
 import { fromHex } from './hex'
 import { bytesToBase64, base64ToBytes } from './base64'
@@ -97,6 +97,26 @@ export function filterEventsForScope(events: StoredEvent[], scope: ShareScope): 
     if (toMs !== null && ms > toMs) return false
     return true
   })
+}
+
+/** Materialize the explicit category scope a new share carries, from the sheet's
+ * two independent selections: `selected` (the non-sensitive category chips) and
+ * `sensitiveOn` (the opt-in toggles, `cycle`/`mind`). The result is ALWAYS an
+ * explicit list in {@link CATEGORIES} order — a share never rides on the
+ * null "every non-sensitive category" fallback, so a sensitive category is
+ * included only by literally naming it, and can never be swept in implicitly.
+ *
+ * Returns null as the empty sentinel — nothing selected and nothing opted in —
+ * which the sheet uses to disable creation rather than silently treating "no
+ * selection" as "everything". (`filterEventsForScope` still honors a null scope
+ * as every non-sensitive category, kept as API-level defense-in-depth; this
+ * builder just never produces one for a real share.) */
+export function deriveShareCategories(
+  selected: ReadonlySet<Category>,
+  sensitiveOn: ReadonlySet<Category>,
+): Category[] | null {
+  const list = CATEGORIES.filter((c) => selected.has(c) || sensitiveOn.has(c))
+  return list.length > 0 ? list : null
 }
 
 /** The bundle plaintext, before sealing. `events` are `SignedEvent`s in exactly

@@ -11,8 +11,12 @@ import { VITALS, BP_SYSTOLIC, BP_DIASTOLIC, VITAL_LOINC_CODES, shortenSystem, ty
 import { categorize } from './category'
 import { buildCodeNameIndex, resolveDisplay } from './code-names'
 import { quantityOf, renderQuantity } from './timeline'
+import { cycleStats, type CycleStats } from './cycle'
 import type { StoredEvent } from './events'
 import { isoToMillis } from './time'
+
+/** The cycle section's shape: exactly {@link cycleStats}' non-null result. */
+export type CycleSummary = CycleStats
 
 export interface SummaryRow {
   /** `${kind}|${system}|${code}` — the folded clinical concept. For allergies
@@ -39,6 +43,11 @@ export interface ClinicianSummary {
   immunizations: SummaryRow[]
   latestVitals: SummaryRow[]
   recentResults: SummaryRow[]
+  /** Present iff the events carry cycle data. Because it derives from the same
+   * events the section renders over, a share preview shows a cycle section
+   * exactly when cycle was opted into the scope — no separate flag to keep in
+   * sync, and no way for the preview to claim data the share won't carry. */
+  cycle?: CycleSummary
 }
 
 type Ev = StoredEvent['event']
@@ -230,6 +239,10 @@ export function buildSummary(
   // so 'clinical' is exactly the lab-result bucket.
   const results = observations.filter((e) => categorize(e) === 'clinical')
 
+  // Undefined (not an empty object) when there are no cycle events, so the
+  // section is absent — not a blank shell — from a share that didn't opt in.
+  const cycle = cycleStats(visible) ?? undefined
+
   return {
     problems: foldSection(conditions, 'earliest', () => '', nameIndex, dictionary).sort(byDateDescNullLast),
     medications: foldSection(meds, 'latest', (ls) => quantityString(ls), nameIndex, dictionary).sort(
@@ -255,5 +268,6 @@ export function buildSummary(
     )
       .sort(byDateDescNullLast)
       .slice(0, resultLimit),
+    cycle,
   }
 }

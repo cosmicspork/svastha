@@ -12,6 +12,7 @@ import {
   base64urlToBytes,
   buildBundle,
   buildShareLink,
+  deriveShareCategories,
   filterEventsForScope,
   generateShareToken,
   referencedAttachmentShas,
@@ -22,7 +23,11 @@ import {
 } from '../doctorShare'
 import { toHex, fromHex } from '../hex'
 import type { StoredEvent } from '../events'
+import { CATEGORIES, CATEGORY_META, type Category } from '../category'
 import { MOOD, BP_SYSTOLIC, CYCLE_START } from '../codes'
+
+const NON_SENSITIVE = CATEGORIES.filter((c) => !CATEGORY_META[c].sensitive)
+const set = (...cats: Category[]) => new Set<Category>(cats)
 
 // The pure builders — token/key encoding, link assembly, bundle shape, and
 // scope filtering — are the pinned contract the recipient view parses against,
@@ -196,6 +201,39 @@ describe('filterEventsForScope', () => {
     const scope: ShareScope = { fromIso: null, toIso: null, categories: [] }
     const ids = new Set(filterEventsForScope(all, scope).map((e) => e.event.id))
     expect(ids).toEqual(new Set(['bp-early', 'bp', 'med']))
+  })
+})
+
+describe('deriveShareCategories', () => {
+  it('materializes an explicit list of every non-sensitive category for the default full selection', () => {
+    // The sheet opens with all non-sensitive chips selected and no opt-in on.
+    const result = deriveShareCategories(set(...NON_SENSITIVE), set())
+    expect(result).toEqual(NON_SENSITIVE)
+    expect(result).not.toBeNull() // never rides on the null fallback
+  })
+
+  it('honors a subset of chips verbatim, in CATEGORIES order regardless of insertion order', () => {
+    expect(deriveShareCategories(set('med', 'vital'), set())).toEqual(['vital', 'med'])
+  })
+
+  it('adds an opted-in sensitive category to the explicit list, in CATEGORIES order', () => {
+    const result = deriveShareCategories(set(...NON_SENSITIVE), set('cycle'))
+    expect(result).toContain('cycle')
+    // cycle sits before note/clinical/other in CATEGORIES, so order is preserved.
+    expect(result).toEqual(CATEGORIES.filter((c) => c !== 'mind'))
+  })
+
+  it('returns just the opted-in category when no chips are selected (opt-in only)', () => {
+    expect(deriveShareCategories(set(), set('cycle'))).toEqual(['cycle'])
+  })
+
+  it('materializes both opt-ins plus the chips when everything is on', () => {
+    expect(deriveShareCategories(set(...NON_SENSITIVE), set('cycle', 'mind'))).toEqual(CATEGORIES)
+  })
+
+  it('returns null — the empty sentinel — when nothing is selected and nothing is opted in', () => {
+    // The sheet uses this to disable creation; it never becomes a share scope.
+    expect(deriveShareCategories(set(), set())).toBeNull()
   })
 })
 
