@@ -8,13 +8,7 @@ into the sections below.
 
 ## Now
 
-- **Menstrual cycle tracking** — period start/end, flow, and clots as
-  locally-coded observations; cramps and breast tenderness as cycle-relevant
-  symptoms; cycle stats (current day, length history, variability) in
-  Patterns. Introduces sensitive-by-default share categories: cycle and
-  mindfulness data stay out of doctor shares unless explicitly included.
-  Household sharing remains whole-vault by design — a household reader sees
-  everything.
+Nothing in flight.
 
 ## Next
 
