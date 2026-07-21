@@ -70,7 +70,7 @@ export function eventsBetween(fromIso: string, toIso: string): Promise<StoredEve
  * the text value. */
 export function templateLabel(template: DraftTemplate): string {
   if (template.code?.display) return template.code.display
-  if ('text' in template.value) return template.value.text
+  if (template.value && 'text' in template.value) return template.value.text
   return template.code?.code ?? template.kind
 }
 
@@ -78,7 +78,7 @@ function templateKey(t: DraftTemplate): string {
   // Recents dedupe on what a chip would re-log: the code identifies coded
   // entries regardless of the measured value; text entries ARE their value.
   if (t.code) return `${t.kind}|${t.code.system}|${t.code.code}`
-  return `${t.kind}|${'text' in t.value ? t.value.text.toLowerCase() : JSON.stringify(t.value)}`
+  return `${t.kind}|${t.value && 'text' in t.value ? t.value.text.toLowerCase() : JSON.stringify(t.value)}`
 }
 
 /** Per-category event counts over the last `days` days — the bloom's

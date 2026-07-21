@@ -26,9 +26,9 @@
 
   function onPrefill(templates: DraftTemplate[]) {
     for (const t of templates) {
-      if (t.code?.code === EXERCISE_DURATION.code && 'quantity' in t.value) {
+      if (t.code?.code === EXERCISE_DURATION.code && t.value && 'quantity' in t.value) {
         minutes = t.value.quantity.value
-      } else if ('text' in t.value) {
+      } else if (t.value && 'text' in t.value) {
         activity = t.value.text
       }
     }

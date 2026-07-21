@@ -14,8 +14,8 @@ export const SNOMED = 'http://snomed.info/sct'
 export const UCUM = 'http://unitsofmeasure.org'
 export const RXNORM = 'http://www.nlm.nih.gov/research/umls/rxnorm'
 /** App-local concepts with no LOINC/SNOMED equivalent worth forcing (mood,
- * gratitude). Never leaves this app, so there's no external terminology to
- * defer to. */
+ * gratitude, cycle tracking). Never leaves this app, so there's no external
+ * terminology to defer to. */
 export const SVASTHA = 'urn:svastha:codes'
 
 /** Well-known terminology system URIs -> the short label a clinician reads
@@ -164,6 +164,10 @@ export interface SymptomDef {
   key: string
   label: string
   snomed: Code
+  /** Surfaced in the cycle log alongside the flow/clots fields, in addition to
+   * the general symptom picker — not a different category, just a hint for
+   * where else this entry is worth showing. */
+  cycleRelevant?: boolean
 }
 
 /** Starter set of common self-reported symptoms; free text covers the rest. */
@@ -187,6 +191,18 @@ export const SYMPTOMS: SymptomDef[] = [
   },
   { key: 'muscle-cramp', label: 'Muscle cramp', snomed: snomed('55300003', 'Muscle cramp') },
   { key: 'rash', label: 'Rash', snomed: snomed('271807003', 'Eruption of skin') },
+  {
+    key: 'menstrual-cramps',
+    label: 'Menstrual cramps',
+    snomed: snomed('266599000', 'Dysmenorrhea'),
+    cycleRelevant: true,
+  },
+  {
+    key: 'breast-tenderness',
+    label: 'Breast tenderness',
+    snomed: snomed('55222007', 'Breast tenderness'),
+    cycleRelevant: true,
+  },
 ]
 
 // --- exercise ---
@@ -200,3 +216,20 @@ export const MINUTES = ucum('min')
 export const MOOD = svastha('mood', 'Mood')
 export const MOOD_NOTE = svastha('mood-note', 'Mood note')
 export const GRATITUDE = svastha('gratitude', 'Gratitude')
+
+// --- cycle ---
+
+export const CYCLE_START = svastha('cycle-start', 'Period start')
+export const CYCLE_END = svastha('cycle-end', 'Period end')
+export const CYCLE_FLOW = svastha('menstrual-flow', 'Menstrual flow')
+export const CYCLE_CLOTS = svastha('menstrual-clots', 'Clots')
+
+/** Every SVASTHA code that belongs to cycle tracking, not mindfulness — the
+ * two share one system (there's no separate namespace per app-local feature),
+ * so `categorize` needs this set to split them. */
+export const CYCLE_CODES: ReadonlySet<string> = new Set([
+  CYCLE_START.code,
+  CYCLE_END.code,
+  CYCLE_FLOW.code,
+  CYCLE_CLOTS.code,
+])

@@ -74,16 +74,16 @@
 
   function onPrefill(templates: DraftTemplate[]) {
     const moodTemplate = templates.find((t) => t.code?.code === MOOD.code)
-    if (moodTemplate && 'quantity' in moodTemplate.value) {
+    if (moodTemplate && moodTemplate.value && 'quantity' in moodTemplate.value) {
       pane = 'mood'
       moodScore = Number(moodTemplate.value.quantity.value)
       const noteTemplate = templates.find((t) => t.code?.code === MOOD_NOTE.code)
-      moodNote = noteTemplate && 'text' in noteTemplate.value ? noteTemplate.value.text : ''
+      moodNote = noteTemplate && noteTemplate.value && 'text' in noteTemplate.value ? noteTemplate.value.text : ''
       return
     }
     pane = 'gratitude'
     for (const t of templates) {
-      if (t.code?.code !== GRATITUDE.code || !('text' in t.value)) continue
+      if (t.code?.code !== GRATITUDE.code || !t.value || !('text' in t.value)) continue
       const text = t.value.text
       if (!items.some((i) => i.toLowerCase() === text.toLowerCase())) {
         items = [...items, text]

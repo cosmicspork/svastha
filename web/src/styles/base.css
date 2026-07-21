@@ -208,6 +208,9 @@ textarea:disabled {
 .cat-symptom {
   color: var(--cat-symptom);
 }
+.cat-cycle {
+  color: var(--cat-cycle);
+}
 .cat-med {
   color: var(--cat-med);
 }

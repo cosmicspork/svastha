@@ -1,6 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import { categorize, CATEGORY_META, CATEGORIES } from '../category'
-import { LOINC, SNOMED, VITALS, BP_DIASTOLIC, EXERCISE_ACTIVITY, EXERCISE_DURATION, MOOD, GRATITUDE } from '../codes'
+import {
+  LOINC,
+  SNOMED,
+  VITALS,
+  BP_DIASTOLIC,
+  EXERCISE_ACTIVITY,
+  EXERCISE_DURATION,
+  MOOD,
+  GRATITUDE,
+  CYCLE_START,
+  CYCLE_END,
+  CYCLE_FLOW,
+  CYCLE_CLOTS,
+} from '../codes'
 
 describe('categorize by kind', () => {
   it('maps non-observation kinds directly', () => {
@@ -38,7 +51,17 @@ describe('categorize observations', () => {
     expect(categorize({ kind: 'observation', code: EXERCISE_DURATION })).toBe('exercise')
   })
 
-  it('classes any svastha-system observation as mind', () => {
+  it('classes a non-cycle svastha-system observation as mind', () => {
+    expect(categorize({ kind: 'observation', code: MOOD })).toBe('mind')
+    expect(categorize({ kind: 'observation', code: GRATITUDE })).toBe('mind')
+  })
+
+  it('classes the cycle svastha codes as cycle, not mind — a regression guard on the shared SVASTHA system', () => {
+    expect(categorize({ kind: 'observation', code: CYCLE_START })).toBe('cycle')
+    expect(categorize({ kind: 'observation', code: CYCLE_END })).toBe('cycle')
+    expect(categorize({ kind: 'observation', code: CYCLE_FLOW })).toBe('cycle')
+    expect(categorize({ kind: 'observation', code: CYCLE_CLOTS })).toBe('cycle')
+    // Mood and gratitude still land on mind once a sibling category shares the system.
     expect(categorize({ kind: 'observation', code: MOOD })).toBe('mind')
     expect(categorize({ kind: 'observation', code: GRATITUDE })).toBe('mind')
   })
@@ -73,6 +96,13 @@ describe('CATEGORY_META', () => {
       expect(meta.label).toBeTruthy()
       expect(meta.glyph.length).toBeGreaterThan(0)
       expect(meta.hueClass).toBe(`cat-${category}`)
+    }
+  })
+
+  it('flags cycle and mind sensitive, and no other category', () => {
+    for (const category of CATEGORIES) {
+      const expected = category === 'cycle' || category === 'mind'
+      expect(!!CATEGORY_META[category].sensitive).toBe(expected)
     }
   })
 })

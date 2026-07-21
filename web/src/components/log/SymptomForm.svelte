@@ -40,12 +40,12 @@
       if (def) {
         selectedKey = def.key
         freeText = ''
-        if ('quantity' in t.value) {
+        if (t.value && 'quantity' in t.value) {
           const n = Number(t.value.quantity.value)
           if (Number.isFinite(n)) severity = Math.min(10, Math.max(0, Math.round(n)))
         }
       }
-    } else if ('text' in t.value) {
+    } else if (t.value && 'text' in t.value) {
       selectedKey = null
       freeText = t.value.text
     }

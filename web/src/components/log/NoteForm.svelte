@@ -20,7 +20,7 @@
 
   function onPrefill(templates: DraftTemplate[]) {
     const t = templates[0]
-    if (t && 'text' in t.value) body = t.value.text
+    if (t && t.value && 'text' in t.value) body = t.value.text
   }
 </script>
 

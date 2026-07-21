@@ -2,12 +2,13 @@
 // filters events (spine, chips, recents) goes through `categorize`, so an
 // event can never appear under two different categories in two places.
 import type { Code } from './codes'
-import { SNOMED, SVASTHA, VITAL_LOINC_CODES, EXERCISE_ACTIVITY, EXERCISE_DURATION } from './codes'
+import { SNOMED, SVASTHA, VITAL_LOINC_CODES, EXERCISE_ACTIVITY, EXERCISE_DURATION, CYCLE_CODES } from './codes'
 import type { EventKind, EventValue } from './drafts'
 
 export type Category =
   | 'vital'
   | 'symptom'
+  | 'cycle'
   | 'med'
   | 'food'
   | 'exercise'
@@ -20,6 +21,7 @@ export type Category =
 export const CATEGORIES: Category[] = [
   'vital',
   'symptom',
+  'cycle',
   'med',
   'food',
   'exercise',
@@ -63,7 +65,7 @@ export function categorize(event: Categorizable): Category {
     case 'observation': {
       const code = event.code
       if (code) {
-        if (code.system === SVASTHA) return 'mind'
+        if (code.system === SVASTHA) return CYCLE_CODES.has(code.code) ? 'cycle' : 'mind'
         if (VITAL_LOINC_CODES.has(code.code)) return 'vital'
         if (EXERCISE_CODES.has(code.code)) return 'exercise'
         if (code.system === SNOMED) return 'symptom'
@@ -85,15 +87,20 @@ export interface CategoryMeta {
   glyph: string
   /** Class from base.css that sets `color` to the category hue. */
   hueClass: string
+  /** Excluded from a doctor share whose scope names no explicit categories —
+   * see doctorShare.ts's `filterEventsForScope`. Absent (or false) means the
+   * category rides along with a default-scoped share like any other. */
+  sensitive?: boolean
 }
 
 export const CATEGORY_META: Record<Category, CategoryMeta> = {
   vital: { label: 'Vitals', glyph: '♥', hueClass: 'cat-vital' },
   symptom: { label: 'Symptoms', glyph: '✱', hueClass: 'cat-symptom' },
+  cycle: { label: 'Cycle', glyph: '◐', hueClass: 'cat-cycle', sensitive: true },
   med: { label: 'Meds', glyph: '⬡', hueClass: 'cat-med' },
   food: { label: 'Food', glyph: '◈', hueClass: 'cat-food' },
   exercise: { label: 'Move', glyph: '➚', hueClass: 'cat-exercise' },
-  mind: { label: 'Mind', glyph: '✿', hueClass: 'cat-mind' },
+  mind: { label: 'Mind', glyph: '✿', hueClass: 'cat-mind', sensitive: true },
   note: { label: 'Notes', glyph: '✎', hueClass: 'cat-note' },
   clinical: { label: 'Clinical', glyph: '✚', hueClass: 'cat-clinical' },
   other: { label: 'Other', glyph: '◦', hueClass: 'cat-other' },

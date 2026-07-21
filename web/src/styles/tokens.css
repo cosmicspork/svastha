@@ -35,6 +35,7 @@
      anything that reads them. */
   --cat-vital: light-dark(#3d6f91, #7fa8c8);
   --cat-symptom: light-dark(#8a4a6e, #c98bab);
+  --cat-cycle: light-dark(#a04a3a, #cf8273);
   --cat-med: light-dark(#5c56a0, #a79bdb);
   --cat-food: light-dark(#a98a2e, #d1b45e);
   --cat-exercise: light-dark(#2f7f7a, #5fb3ac);

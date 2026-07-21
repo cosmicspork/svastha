@@ -67,10 +67,17 @@
   // relay's size cap.
   const pageCount = $derived(referencedAttachmentShas(filtered).length)
 
+  // No explicit selection means every *non-sensitive* category (see
+  // filterEventsForScope) — sensitive ones (cycle, mind) are opt-in only, so
+  // the description says so rather than claiming "All categories".
+  const sensitiveLabels = CATEGORIES.filter((c) => CATEGORY_META[c].sensitive).map((c) => CATEGORY_META[c].label)
+
   const scopeDescription = $derived.by(() => {
     const cats =
       selected.size === 0
-        ? 'All categories'
+        ? sensitiveLabels.length > 0
+          ? `All categories except ${sensitiveLabels.join(', ')}`
+          : 'All categories'
         : CATEGORIES.filter((c) => selected.has(c))
             .map((c) => CATEGORY_META[c].label)
             .join(', ')
@@ -224,7 +231,10 @@
           </button>
         {/each}
       </div>
-      <p class="hint muted">No category selected means every category.</p>
+      <p class="hint muted">
+        No category selected means every category except {sensitiveLabels.join(' and ')} — tap one of those
+        to include it.
+      </p>
     </section>
 
     <section class="stack">
