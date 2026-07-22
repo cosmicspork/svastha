@@ -4,7 +4,13 @@
   import { navigate } from '../lib/router.svelte'
   import { CATEGORY_META } from '../lib/category'
   import { LOG_KINDS, type LogKind } from '../lib/log-kinds'
-  import { orderByFrequency, selectPetals } from '../lib/bloom-order'
+  import {
+    applyStoredOrder,
+    BLOOM_ORDER_ON_PREF,
+    BLOOM_ORDER_PREF,
+    orderByFrequency,
+    selectPetals,
+  } from '../lib/bloom-order'
   import { categoryLogCounts } from '../lib/events'
   import Sheet from './Sheet.svelte'
 
@@ -16,11 +22,26 @@
   let showMore = $state(false)
   let fab: HTMLButtonElement | undefined = $state()
 
+  // Effective order: a manual order turned on in Settings → Appearance wins
+  // outright; otherwise frequency. Called on mount AND each time the fan
+  // opens — this component outlives route changes (App.svelte keeps it
+  // mounted across home and settings), so a mount-only read would show a
+  // stale fan right after reordering, or after new logs shift the counts.
+  async function loadOrder(): Promise<void> {
+    const customOn = (await get<boolean>('prefs', BLOOM_ORDER_ON_PREF)) === true
+    const manual = customOn ? await get<string[]>('prefs', BLOOM_ORDER_PREF) : null
+    if (manual) {
+      ordered = applyStoredOrder(LOG_KINDS, manual, (k) => k.kind)
+    } else {
+      const counts = await categoryLogCounts()
+      ordered = orderByFrequency(LOG_KINDS, (k) => counts[k.category] ?? 0)
+    }
+  }
+
   onMount(async () => {
     const storedHand = await get<'left' | 'right'>('prefs', 'fab-hand')
     if (storedHand) hand = storedHand
-    const counts = await categoryLogCounts()
-    ordered = orderByFrequency(LOG_KINDS, (k) => counts[k.category] ?? 0)
+    await loadOrder()
   })
 
   const dir = $derived(hand === 'left' ? -1 : 1)
@@ -58,6 +79,13 @@
 
   function setOpen(next: boolean) {
     open = next
+  }
+
+  // One IndexedDB read before the fan animates open — imperceptible, and it
+  // guarantees the petals reflect the latest order and counts (see loadOrder).
+  async function toggleOpen(): Promise<void> {
+    if (!open) await loadOrder()
+    setOpen(!open)
   }
 
   function selectKind(kind: string) {
@@ -134,7 +162,7 @@
     aria-label="Log an entry"
     aria-expanded={open}
     data-testid="fab"
-    onclick={() => setOpen(!open)}
+    onclick={toggleOpen}
   >
     <span>+</span>
   </button>

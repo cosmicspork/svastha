@@ -82,7 +82,7 @@
       <span class="card-text">
         <span class="card-title">Your people</span>
         <span class="card-sub muted" data-testid="people-counts">
-          Ongoing, read-only access for a partner. {grantCount} active grant{grantCount === 1
+          Ongoing, read-only access for someone you trust. {grantCount} active grant{grantCount === 1
             ? ''
             : 's'} · {sharedWithMeCount} shared with you.
         </span>

@@ -119,7 +119,11 @@
     dictError = ''
     dictBusy = true
     try {
-      await downloadDictionary(dictManifest ?? (await fetchManifest()))
+      // Snapshot, not the raw $state proxy: downloadDictionary stores the
+      // manifest via IndexedDB's structured-clone put, which cannot serialize
+      // a reactivity proxy ("The object can not be cloned") — same pitfall as
+      // TagEditor's commit().
+      await downloadDictionary(dictManifest ? $state.snapshot(dictManifest) : undefined)
       dictManifest = null
       dictUpdate = ''
     } catch (err) {
@@ -461,10 +465,11 @@
     gap: var(--space-3);
   }
 
-  /* Sub-heading within a section (Restore, under Export & backup). */
+  /* Sub-heading within a section (Restore, under Export & backup); extra top
+     margin so it reads as a new block, not a caption on the export button. */
   h3 {
     font-size: var(--text-sm);
-    margin: var(--space-2) 0 0;
+    margin: var(--space-5) 0 0;
   }
 
   /* A file <input> wrapped in a label, styled to read as a tonal button — the

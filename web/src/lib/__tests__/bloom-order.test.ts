@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { orderByFrequency, selectPetals } from '../bloom-order'
+import { applyStoredOrder, orderByFrequency, selectPetals } from '../bloom-order'
 
 describe('orderByFrequency', () => {
   it('keeps the default order when every count is zero', () => {
@@ -26,6 +26,27 @@ describe('orderByFrequency', () => {
       { id: 3, count: 5 },
     ]
     expect(orderByFrequency(items, (item) => item.count).map((i) => i.id)).toEqual([1, 2, 3])
+  })
+})
+
+describe('applyStoredOrder', () => {
+  const kindOf = (s: string) => s
+
+  it('follows the stored order exactly when it covers every item', () => {
+    expect(applyStoredOrder(['a', 'b', 'c'], ['c', 'a', 'b'], kindOf)).toEqual(['c', 'a', 'b'])
+  })
+
+  it('appends kinds the stored order does not know, keeping their default order', () => {
+    // 'd' and 'e' were added after the order was saved.
+    expect(applyStoredOrder(['a', 'd', 'b', 'e'], ['b', 'a'], kindOf)).toEqual(['b', 'a', 'd', 'e'])
+  })
+
+  it('ignores stored kinds that no longer exist', () => {
+    expect(applyStoredOrder(['a', 'b'], ['gone', 'b', 'a'], kindOf)).toEqual(['b', 'a'])
+  })
+
+  it('returns the default order for an empty stored list', () => {
+    expect(applyStoredOrder(['a', 'b', 'c'], [], kindOf)).toEqual(['a', 'b', 'c'])
   })
 })
 
