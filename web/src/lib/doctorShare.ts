@@ -13,6 +13,8 @@
 import { WasmDataKey, type WasmIdentity } from './svastha'
 import type { RelayClient } from './relay'
 import type { StoredEvent } from './events'
+import type { SignedCurationRecord, ConceptStatus } from './curation'
+import { conceptKey, conceptKeysForEvents } from './summary'
 import { categorize, CATEGORIES, CATEGORY_META, type Category } from './category'
 import { isoToMillis } from './time'
 import { fromHex } from './hex'
@@ -133,6 +135,13 @@ export interface ShareBundle {
   signer: string
   events: StoredEvent[]
   attachments?: Record<string, string>
+  /** The owner's `status:`/`name:` concept curation for the concepts these
+   * events fold into — signed records the recipient verifies-or-drops against
+   * `signer`, exactly as it does the events. Only these two namespaces cross
+   * the vault boundary (never tags/hides/notes/favorites), and only for
+   * concepts actually in `events`. Omitted when the scope carries none; an old
+   * recipient ignores the unknown field. See {@link curationForBundle}. */
+  curation?: SignedCurationRecord[]
 }
 
 /** The distinct content hashes of every attachment referenced by these events,
@@ -147,15 +156,61 @@ export function referencedAttachmentShas(events: StoredEvent[]): string[] {
   return [...shas].sort()
 }
 
+/** The concept `status:`/`name:` curation records to carry alongside a bundle's
+ * events: only those two namespaces, and only for a concept some event in the
+ * bundle folds into. Tags, hides, notes, and favorites never leave the vault
+ * this way (they are the owner's private working state), and a record for an
+ * excluded concept is dropped so the carriage can't leak the shape of what was
+ * left out. Unsigned records (a not-yet-migrated pre-signing write) are skipped
+ * too — a recipient outside the vault can only trust a signature, so an
+ * unsignable record has nothing to carry. Pure over the record list the sheet
+ * loads, mirroring the other bundle builders. */
+export function curationForBundle(
+  events: StoredEvent[],
+  records: SignedCurationRecord[],
+): SignedCurationRecord[] {
+  const concepts = conceptKeysForEvents(events)
+  const carried: SignedCurationRecord[] = []
+  for (const r of records) {
+    const prefix = r.key.startsWith('status:') ? 'status:' : r.key.startsWith('name:') ? 'name:' : null
+    if (!prefix) continue
+    if (typeof r.signature !== 'string' || r.signature.length === 0) continue
+    if (concepts.has(r.key.slice(prefix.length))) carried.push(r)
+  }
+  return carried
+}
+
+/** Apply the meds scope choice: unless `includePastMeds`, drop the events of a
+ * medication concept the owner has marked inactive (past), so the default share
+ * is a current-only med list. Problems are never dropped here — a resolved
+ * problem is clinically informative history, so both active and resolved
+ * always ride along (their `status:` records group them for the recipient).
+ * Non-medication events pass through untouched. Pure; the sheet reflects its
+ * result in the entry count and preview. */
+export function applyMedScope(
+  events: StoredEvent[],
+  statuses: Map<string, ConceptStatus>,
+  includePastMeds: boolean,
+): StoredEvent[] {
+  if (includePastMeds) return events
+  return events.filter((se) => {
+    if (se.event.kind !== 'medication_statement') return true
+    return (statuses.get(conceptKey(se.event)) ?? 'active') === 'active'
+  })
+}
+
 /** Build the bundle plaintext. `signerEd25519Hex` is the owner's 64-hex-char
  * Ed25519 public key; it is re-encoded to base64url so the recipient can pin
- * every event's `author` to the one signer named by the bundle. `attachments`
- * (sha256 → base64 plaintext bytes) is inlined only when non-empty. */
+ * every event's `author` (and every carried curation record's `author`) to the
+ * one signer named by the bundle. `attachments` (sha256 → base64 plaintext
+ * bytes) and `curation` (signed `status:`/`name:` records) are inlined only
+ * when non-empty. */
 export function buildBundle(
   events: StoredEvent[],
   signerEd25519Hex: string,
   createdAtIso: string,
   attachments: Record<string, string> = {},
+  curation: SignedCurationRecord[] = [],
 ): ShareBundle {
   const bundle: ShareBundle = {
     v: 1,
@@ -164,6 +219,7 @@ export function buildBundle(
     events,
   }
   if (Object.keys(attachments).length > 0) bundle.attachments = attachments
+  if (curation.length > 0) bundle.curation = curation
   return bundle
 }
 
@@ -224,12 +280,16 @@ export async function createDoctorShare(params: {
   relay: RelayClient
   identity: WasmIdentity
   events: StoredEvent[]
+  /** The signed `status:`/`name:` records to carry — already narrowed to the
+   * concepts in `events` (see {@link curationForBundle}). */
+  curation?: SignedCurationRecord[]
   scopeDescription: string
   expiryDays: number
   appOrigin: string
   relayOrigin: string
 }): Promise<{ record: DoctorShareRecord; link: string }> {
-  const { relay, identity, events, scopeDescription, expiryDays, appOrigin, relayOrigin } = params
+  const { relay, identity, events, curation = [], scopeDescription, expiryDays, appOrigin, relayOrigin } =
+    params
 
   const token = generateShareToken()
   const keyBytes = crypto.getRandomValues(new Uint8Array(SHARE_KEY_BYTES))
@@ -243,7 +303,7 @@ export async function createDoctorShare(params: {
     const bytes = await attachmentBytes(sha256)
     if (bytes) attachments[sha256] = bytesToBase64(bytes)
   }
-  const bundle = buildBundle(events, identity.ed25519_public_hex, createdAtIso, attachments)
+  const bundle = buildBundle(events, identity.ed25519_public_hex, createdAtIso, attachments, curation)
   const plaintext = new TextEncoder().encode(JSON.stringify(bundle))
   // A share is capped tighter than a blob (relay's 8 MiB share ceiling). Catch
   // it here with an honest message rather than letting the PUT 413 — attachments

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // The wasm module needs a browser, so unit tests run in node without it (see
 // vitest.config.ts) and mock `../svastha`, mirroring keyvault.test.ts. The fake
@@ -36,17 +36,35 @@ vi.mock('../svastha', () => {
     }
   }
 
-  return { WasmDataKey: FakeDataKey, verify_event }
+  // Curation verification is driven per-test (the verify-or-drop cases set an
+  // implementation that mirrors the shared spec vectors); default accept.
+  const verify_curation = vi.fn(() => true)
+
+  return { WasmDataKey: FakeDataKey, verify_event, verify_curation }
 })
 
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 import {
   parseShareFragment,
   validateBundle,
   verifyBundleEvents,
+  verifyBundleCuration,
   openShareBundle,
 } from '../shareRecipient'
-import { WasmDataKey } from '../svastha'
+import { WasmDataKey, verify_curation } from '../svastha'
 import type { StoredEvent } from '../events'
+import type { SignedCurationRecord } from '../curation'
+
+const mockVerifyCuration = vi.mocked(verify_curation)
+
+// Default: accept every curation signature. The verify-or-drop describe below
+// overrides this for its own tests (an inner beforeEach runs after this one).
+beforeEach(() => {
+  mockVerifyCuration.mockReset()
+  mockVerifyCuration.mockReturnValue(true)
+})
 
 // base64url unpadded, matching the pinned link contract's encoding.
 function b64url(bytes: Uint8Array): string {
@@ -155,6 +173,23 @@ describe('validateBundle', () => {
     ).toBeNull()
   })
 
+  it('tolerates curation in both directions: absent → empty, present → carried through', () => {
+    // An old bundle (field absent) opens identically, with an empty curation array.
+    const legacy = validateBundle(JSON.stringify({ v: 1, created_at: 'x', signer, events: [] }))
+    expect(legacy).not.toBeNull()
+    expect(legacy!.curation).toEqual([])
+
+    // A new bundle's array is passed through untouched (signatures are checked
+    // later, by verifyBundleCuration).
+    const curation = [{ key: 'status:x', value: { status: 'inactive' }, updated_at: 1, author: 'aa', signature: 'ss' }]
+    const withCur = validateBundle(JSON.stringify({ v: 1, created_at: 'x', signer, events: [], curation }))
+    expect(withCur!.curation).toEqual(curation)
+  })
+
+  it('rejects a curation field that is not an array (damaged, like a bad attachments map)', () => {
+    expect(validateBundle(JSON.stringify({ v: 1, created_at: 'x', signer, events: [], curation: {} }))).toBeNull()
+  })
+
   it('rejects malformed JSON', () => {
     expect(validateBundle('{not json')).toBeNull()
   })
@@ -197,6 +232,53 @@ describe('verifyBundleEvents', () => {
   })
 })
 
+describe('verifyBundleCuration (verify-or-drop against the bundle signer)', () => {
+  // The shared trust-contract vectors: one valid signed record plus three tamper
+  // cases (mutated value, mutated key, re-attributed author) each pinned
+  // `valid: false`. Drive verify_curation off exactly these so the recipient's
+  // verify-or-drop is exercised against the real patterns a bundle-builder could
+  // tamper with, not an ad-hoc fake.
+  const here = dirname(fileURLToPath(import.meta.url))
+  const vectors = JSON.parse(
+    new TextDecoder().decode(readFileSync(join(here, '../../../../spec/vectors/curation.json'))),
+  ) as { records: { valid: boolean; record: SignedCurationRecord }[] }
+  const valid = vectors.records.find((r) => r.valid)!.record
+  const signerHex = valid.author
+
+  beforeEach(() => {
+    mockVerifyCuration.mockReset()
+    // Mirror core: a record verifies iff it byte-matches the valid vector; every
+    // tamper case differs and so fails. (The wrong-author case is dropped before
+    // verify is even reached, on the author mismatch — this is belt-and-braces.)
+    mockVerifyCuration.mockImplementation((json: string) => json === JSON.stringify(valid))
+  })
+
+  it('keeps the valid record and drops+counts each tampered one', () => {
+    const records = vectors.records.map((r) => r.record)
+    const result = verifyBundleCuration(records, signerHex)
+    expect(result.records).toEqual([valid])
+    expect(result.dropped).toBe(3) // mutated value, mutated key, wrong author
+  })
+
+  it('drops a record whose author is not the bundle signer, without trusting its signature', () => {
+    const foreign: SignedCurationRecord = { ...valid, author: 'f'.repeat(64) }
+    const result = verifyBundleCuration([foreign], signerHex)
+    expect(result.records).toEqual([])
+    expect(result.dropped).toBe(1)
+    // Short-circuited on the author mismatch — verify was never consulted.
+    expect(mockVerifyCuration).not.toHaveBeenCalled()
+  })
+
+  it('drops an unsigned record — a share recipient cannot grandfather one in', () => {
+    const unsigned = { ...valid, signature: undefined } as unknown as SignedCurationRecord
+    expect(verifyBundleCuration([unsigned], signerHex).dropped).toBe(1)
+  })
+
+  it('reports zero of each for an empty list', () => {
+    expect(verifyBundleCuration([], signerHex)).toEqual({ records: [], dropped: 0 })
+  })
+})
+
 describe('openShareBundle (round-trip through the mocked envelope)', () => {
   const signerBytes = new Uint8Array(32).fill(3)
   const signer = b64url(signerBytes)
@@ -207,13 +289,19 @@ describe('openShareBundle (round-trip through the mocked envelope)', () => {
     return key.seal(new TextEncoder().encode(JSON.stringify(bundleObj)), new TextEncoder().encode(TOKEN))
   }
 
-  it('opens, validates, and verifies a good bundle, carrying attachments through', () => {
+  it('opens, validates, and verifies a good bundle, carrying attachments and curation through', () => {
+    // One curation record by the signer (kept) and one by a foreign author
+    // (dropped on the author check) — so the opened bundle exposes both the
+    // verified overlay and the dropped-curation count.
+    const good = { key: 'status:x', value: { status: 'inactive' }, updated_at: 1, author: signerHex, signature: 'ok' }
+    const foreign = { key: 'name:y', value: { display: 'Z' }, updated_at: 1, author: 'ff'.repeat(32), signature: 'ok' }
     const bytes = sealed({
       v: 1,
       created_at: '2026-07-14T00:00:00Z',
       signer,
       events: [event('a', signerHex, 'ok'), event('b', signerHex, 'bad')],
       attachments: { deadbeef: 'AQID' },
+      curation: [good, foreign],
     })
     const opened = openShareBundle(bytes, TOKEN, KEY)
     expect(opened).not.toBeNull()
@@ -222,6 +310,8 @@ describe('openShareBundle (round-trip through the mocked envelope)', () => {
     expect(opened!.verified).toBe(1)
     expect(opened!.dropped).toBe(1)
     expect(opened!.attachments).toEqual({ deadbeef: 'AQID' })
+    expect(opened!.curation).toEqual([good])
+    expect(opened!.droppedCuration).toBe(1)
   })
 
   it('returns null when the wrong key is supplied (open throws → damaged)', () => {

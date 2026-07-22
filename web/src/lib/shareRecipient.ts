@@ -7,10 +7,11 @@
 // authenticated, persisted trust boundary, and a share view is neither.
 //
 // See docs/ARCHITECTURE.md ("Vaults and grants") and spec/README.md ("Shares").
-import { WasmDataKey, verify_event } from './svastha'
+import { WasmDataKey, verify_event, verify_curation } from './svastha'
 import { base64ToBytes } from './base64'
 import { toHex } from './hex'
 import type { StoredEvent } from './events'
+import type { SignedCurationRecord } from './curation'
 
 /** A share token is exactly the relay's charset and length (see
  * `crates/relay/src/routes.rs`'s `valid_share_token`): 26 chars of the blob-id
@@ -43,6 +44,15 @@ export interface OpenedBundle {
    * viewer to render paper records the events reference. Empty when the share
    * carried none. */
   attachments: Record<string, string>
+  /** Only the `status:`/`name:` curation records whose signature verified
+   * against `signerHex` — folded into the summary's Current/Past + Active/
+   * Resolved grouping and name overrides, the same view the owner sees. Empty
+   * when the share carried none. */
+  curation: SignedCurationRecord[]
+  /** Curation records dropped because their signature failed verification —
+   * counted and surfaced like {@link dropped}, so a tampered status/name record
+   * is visibly rejected rather than silently rendered. */
+  droppedCuration: number
 }
 
 /** Each maps to one specific, honest error state in the UI. `expired` and
@@ -104,12 +114,20 @@ export function parseShareFragment(hash: string): ParsedFragment | null {
  * `{ v: 1, created_at, signer, events: [...] }`, with `signer` a base64url
  * unpadded 32-byte Ed25519 key. Returns null (→ "damaged link") on malformed
  * JSON, a version other than 1, or any missing/mistyped field. Does NOT verify
- * signatures — that is `verifyBundleEvents`, split out so the pure-JSON shape
- * check is testable without wasm.
+ * signatures — that is `verifyBundleEvents`/`verifyBundleCuration`, split out so
+ * the pure-JSON shape check is testable without wasm. `attachments` and
+ * `curation` are both optional: a bundle from before this field existed omits
+ * them and must still validate identically (they default to empty), and a
+ * present field is only shape-checked here — its records are verified-or-dropped
+ * later.
  */
-export function validateBundle(
-  json: string,
-): { createdAt: string; signerHex: string; events: StoredEvent[]; attachments: Record<string, string> } | null {
+export function validateBundle(json: string): {
+  createdAt: string
+  signerHex: string
+  events: StoredEvent[]
+  attachments: Record<string, string>
+  curation: SignedCurationRecord[]
+} | null {
   let parsed: unknown
   try {
     parsed = JSON.parse(json)
@@ -143,7 +161,18 @@ export function validateBundle(
     attachments = Object.fromEntries(entries) as Record<string, string>
   }
 
-  return { createdAt: b.created_at, signerHex, events: b.events as StoredEvent[], attachments }
+  // `curation` is optional (older bundles and curation-free scopes omit it).
+  // When present it must be an array; the per-record shape and signature are
+  // not checked here — `verifyBundleCuration` verifies-or-drops each, so a
+  // malformed or forged element is dropped and counted rather than damaging the
+  // whole bundle.
+  let curation: SignedCurationRecord[] = []
+  if (b.curation !== undefined) {
+    if (!Array.isArray(b.curation)) return null
+    curation = b.curation as SignedCurationRecord[]
+  }
+
+  return { createdAt: b.created_at, signerHex, events: b.events as StoredEvent[], attachments, curation }
 }
 
 /**
@@ -173,6 +202,35 @@ export function verifyBundleEvents(
 }
 
 /**
+ * Verify each carried curation record, dropping and counting the failures — the
+ * same two-part check `verifyBundleEvents` makes: the record's own signature
+ * must verify (`verify_curation`) AND its `author` must equal the bundle's
+ * declared signer. A record outside the vault carries no AEAD seal a recipient
+ * can trust, so an unsigned or foreign-authored record has no standing here and
+ * is dropped (unlike the owner's own-vault pull, which grandfathers a
+ * pre-signing record). `verify_curation` throws on a malformed record, which the
+ * catch folds into a drop as well.
+ */
+export function verifyBundleCuration(
+  records: SignedCurationRecord[],
+  signerHex: string,
+): { records: SignedCurationRecord[]; dropped: number } {
+  const good: SignedCurationRecord[] = []
+  let dropped = 0
+  for (const r of records) {
+    let ok = false
+    try {
+      ok = r?.author === signerHex && typeof r.signature === 'string' && verify_curation(JSON.stringify(r))
+    } catch {
+      ok = false
+    }
+    if (ok) good.push(r)
+    else dropped++
+  }
+  return { records: good, dropped }
+}
+
+/**
  * Decrypt the sealed bundle in memory and verify it. AAD is the token string's
  * UTF-8 bytes (the pinned contract), binding the ciphertext to the token it was
  * fetched under. Returns null (→ "damaged link") on any decrypt/parse/shape
@@ -195,6 +253,7 @@ export function openShareBundle(
   if (!validated) return null
 
   const { events, verified, dropped } = verifyBundleEvents(validated.events, validated.signerHex)
+  const curation = verifyBundleCuration(validated.curation, validated.signerHex)
   return {
     createdAt: validated.createdAt,
     signerHex: validated.signerHex,
@@ -202,6 +261,8 @@ export function openShareBundle(
     verified,
     dropped,
     attachments: validated.attachments,
+    curation: curation.records,
+    droppedCuration: curation.dropped,
   }
 }
 

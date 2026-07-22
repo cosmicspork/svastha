@@ -392,12 +392,27 @@ it travels only in the link's URL *fragment* (`#…`), which browsers never send
 to the server — so it never reaches the relay.
 
 The bundle's internal structure is app-level (opaque to the relay, documented in
-`docs/ARCHITECTURE.md`). A follow-up will let a bundle **MAY** carry an optional
-`curation` array of `SignedCurationRecord`s (see "Curation record" above)
-alongside its events, so a share can include the owner's relevant tags and notes;
-the recipient **verifies each signature and drops any that fail** before showing
-them. This is the reason the curation record is signed and its verification lives
-in the trust contract; the bundle field itself lands with that follow-up PR.
+`docs/ARCHITECTURE.md`). A bundle **MAY** carry an optional `curation` array of
+`SignedCurationRecord`s (see "Curation record" above) alongside its `events`, so
+a share can include the owner's per-concept **status** (current/past,
+active/resolved) and **name** overrides:
+
+- Only the `status:` and `name:` namespaces cross the vault boundary — never
+  `tag:`/`hide:`/`note:`/`fav:` (the owner's private working state) — and only
+  for a concept some event in the same bundle folds into. A record for an
+  excluded concept is never carried, so the array cannot leak the shape of what
+  the scope left out.
+- The recipient **verifies each record's signature against the bundle's declared
+  `signer`** — the same signer every event's `author` is pinned to — and **drops
+  (and counts) any that fail**, exactly as it does a tampered or spliced event.
+  A record whose `author` is not the signer, or that carries no signature, is
+  dropped; a share recipient outside the vault cannot grandfather an unsigned
+  record the way a device merging its own vault can.
+
+The field is optional and additive: a bundle from before it existed omits it and
+opens identically, and a recipient that predates it ignores the unknown field.
+This is the reason the curation record is signed and its verification lives in
+the trust contract.
 
 | Method & path | Auth | Body | Success | Notes |
 |---|---|---|---|---|

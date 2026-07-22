@@ -120,6 +120,22 @@ function keyFor(e: Ev): string {
   return `${e.kind}|${system}|${code}`
 }
 
+/** The folded clinical-concept key of one event — the same `${kind}|${system}
+ * |${code}` the summary groups on and the `status:`/`name:` curation namespaces
+ * key against. Exported so the doctor-share builder can decide which of the
+ * owner's status/name records apply to a given bundle of events without
+ * duplicating this grouping rule. */
+export function conceptKey(event: Ev): string {
+  return keyFor(event)
+}
+
+/** The distinct concept keys present across a set of events — the intersection
+ * target when selecting which `status:`/`name:` curation records a share bundle
+ * should carry. */
+export function conceptKeysForEvents(events: StoredEvent[]): Set<string> {
+  return new Set(events.map((se) => keyFor(se.event)))
+}
+
 /** Ordering millis; undated ranks oldest so a dated event always wins the
  * "latest" comparisons (label source, representative date). */
 function millis(e: Ev): number {

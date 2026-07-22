@@ -93,6 +93,20 @@ relay: a grant is an ongoing feed to a *keyed* identity, a share is a bounded
 handoff to a *keyless* one. The wire contract is `spec/README.md`'s "Shares"
 section.
 
+A share bundle also carries the owner's per-concept **curation** — the `status:`
+(current/past, active/resolved) and `name:` overrides for the concepts its
+events fold into — as signed records alongside the events, so the recipient's
+clinician summary shows the owner's real current-vs-past list and display-name
+overrides, not a flat all-active guess. Only those two namespaces cross the
+boundary (never tags, hides, notes, or favorites), and only for concepts
+actually in the bundle. The recipient **verifies each record against the same
+signer that signed the events and drops any that fail** — the point of signing
+curation: a keyless recipient holds the per-share key but is not the author, so
+only a signature, not the AEAD seal, can attest a record wasn't tampered with in
+transit. The create side excludes past-medication events by default (a
+current-only list), with an opt-in to include them; resolved problems always
+ride along, since a resolved problem is informative history.
+
 Identity exchange for this slice is a single self-describing code —
 `svastha1:{ed25519_hex}:{x25519_hex}:{label}` — shown as a QR and as
 selectable text, exchanged out of band (in person, or over a channel both
@@ -169,11 +183,11 @@ verifies-or-drops first, then merges only what verified.
 
 **Now signed.** Every other record in this system is signed, and curation
 records now are too, for two reasons the earlier single-writer design could
-defer. First, curation is about to **cross the vault boundary**: doctor-share
-bundles will optionally carry a `curation` array so a share can include the
-owner's relevant tags and notes, and the recipient — who holds the per-share key
-but is not the author — must be able to reject a record the bundle-builder
-tampered with. The AEAD seal that authenticated a `cur-*` blob inside the owner's
+defer. First, curation **crosses the vault boundary**: a doctor-share
+bundle optionally carries a `curation` array so a share can include the owner's
+per-concept status and name overrides (see the doctor-share paragraph above),
+and the recipient — who holds the per-share key but is not the author — must be
+able to reject a record the bundle-builder tampered with. The AEAD seal that authenticated a `cur-*` blob inside the owner's
 own vault says nothing to a recipient outside it; only a signature does.
 Second, **multi-writer vaults** are on the roadmap, where two writers sharing one
 vault key can no longer be told apart by `author` alone — the exact assumption
@@ -214,9 +228,12 @@ per-blob etag) is adequate for v1; both are natural future hardening as the
 
 **Owner-only in v1.** Shared (read-only household) pulls fetch only `ev-*` and
 `att-*` blobs (the record and the captured documents its events point at) — a
-share never touches `cur-*`. The owner's tags, hides, and notes are their own
-working state, not something to project onto someone reading their shared
-record.
+household grant never touches `cur-*`. The owner's tags, hides, and notes are
+their own working state, not something to project onto someone reading their
+shared record. The one exception is the *doctor share*, which bundles the
+owner's `status:`/`name:` records for the shared concepts inside the sealed
+bundle (not via a `cur-*` pull) so the clinician summary reads correctly; tags,
+hides, notes, and favorites still never leave the vault.
 
 **Favorites migration.** Favorited quick-log templates used to live in a
 single device-local `prefs` key; they now live under `fav:` curation records

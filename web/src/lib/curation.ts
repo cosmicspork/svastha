@@ -341,29 +341,47 @@ export async function setName(conceptKey: string, display: string): Promise<void
   await setCuration(`name:${conceptKey}`, { display: display.trim() })
 }
 
-/** Concept -> status, for the whole summary (see summary.ts's `buildSummary`,
- * which takes this map). Keyed on the bare `${kind}|${system}|${code}`, the
- * `status:` prefix stripped. */
-export async function allStatuses(): Promise<Map<string, ConceptStatus>> {
-  const records = await allCurationByPrefix('status:')
+/** Build the concept -> status map from a set of curation records: reads the
+ * `status:` records, keying on the bare `${kind}|${system}|${code}`. Pure over
+ * an in-memory record list, so the same reduction serves both {@link
+ * allStatuses} (the local store) and a doctor-share recipient folding the
+ * verified `status:` records carried in a bundle. Non-`status:` records are
+ * skipped, so a mixed array (status + name) is fine to pass. */
+export function statusMapFrom(records: CurationRecord[]): Map<string, ConceptStatus> {
   const map = new Map<string, ConceptStatus>()
   for (const r of records) {
+    if (!r.key.startsWith('status:')) continue
     const status = (r.value as { status?: ConceptStatus } | undefined)?.status
     if (status) map.set(r.key.slice('status:'.length), status)
   }
   return map
 }
 
-/** Concept -> display-name override. Empty overrides (a cleared name) are
- * dropped, so a caller sees only real overrides. */
-export async function allNames(): Promise<Map<string, string>> {
-  const records = await allCurationByPrefix('name:')
+/** Build the concept -> display-name override map from a set of curation
+ * records (the `name:` ones). Empty overrides (a cleared name) are dropped, so
+ * a caller sees only real overrides. The pure analogue of {@link allNames}, and
+ * likewise tolerant of a mixed (status + name) array. */
+export function nameMapFrom(records: CurationRecord[]): Map<string, string> {
   const map = new Map<string, string>()
   for (const r of records) {
+    if (!r.key.startsWith('name:')) continue
     const display = ((r.value as { display?: string } | undefined)?.display ?? '').trim()
     if (display) map.set(r.key.slice('name:'.length), display)
   }
   return map
+}
+
+/** Concept -> status, for the whole summary (see summary.ts's `buildSummary`,
+ * which takes this map). Keyed on the bare `${kind}|${system}|${code}`, the
+ * `status:` prefix stripped. */
+export async function allStatuses(): Promise<Map<string, ConceptStatus>> {
+  return statusMapFrom(await allCurationByPrefix('status:'))
+}
+
+/** Concept -> display-name override. Empty overrides (a cleared name) are
+ * dropped, so a caller sees only real overrides. */
+export async function allNames(): Promise<Map<string, string>> {
+  return nameMapFrom(await allCurationByPrefix('name:'))
 }
 
 // --- favorites migration ---

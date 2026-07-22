@@ -1,5 +1,7 @@
-import { test, expect } from '@playwright/test'
-import { onboardViaUI, connectRelayViaUI, logBP, logFood, RELAY } from './helpers'
+import { test, expect, type Page } from '@playwright/test'
+import { onboardViaUI, connectRelayViaUI, logBP, logFood, PASSPHRASE, RELAY } from './helpers'
+
+const RXNORM = 'http://www.nlm.nih.gov/research/umls/rxnorm'
 
 // Owner-side doctor share, end to end against the live relay: log an event,
 // mint a share through the real UI, then confirm the relay serves the sealed
@@ -259,3 +261,121 @@ test('the Doctor screen lists and revokes an existing link without opening the c
   })
   expect(afterRevoke.status()).toBe(410)
 })
+
+// The finale: the owner's signed concept curation crosses the vault boundary
+// inside a share, and the recipient renders the owner's real Current/Past split
+// and name override — verified against the same signer that signed the events.
+// Exercises the whole chain end to end: mark a med past and rename another
+// through the owner's summary (real signed `cur-` writes), then mint two shares
+// (default current-only, and include-past) and read each in a fresh browser.
+test('doctor share carries verified curation: current-only by default, past on opt-in, and a name override', async ({
+  browser,
+}) => {
+  const ownerContext = await browser.newContext()
+  const ownerPage = await ownerContext.newPage()
+  await onboardViaUI(ownerPage)
+
+  // Two coded meds (the quick-log form only writes free-text meds, which carry
+  // no code line to demote under a rename), seeded through the signing path.
+  await ownerPage.evaluate(
+    async ({ rxnorm }) => {
+      const { logEvent } = await import('/src/lib/events.ts')
+      await logEvent([
+        { kind: 'medication_statement', code: { system: rxnorm, code: '29046', display: 'Lisinopril' }, effective_at: '2024-01-01T00:00:00+00:00', value: null },
+        { kind: 'medication_statement', code: { system: rxnorm, code: '6809', display: 'Metformin' }, effective_at: '2024-02-01T00:00:00+00:00', value: null },
+      ])
+    },
+    { rxnorm: RXNORM },
+  )
+
+  // Reload so the seeded events hydrate the summary from IndexedDB, then curate.
+  await ownerPage.reload()
+  await unlock(ownerPage)
+  await openSummary(ownerPage)
+  await expect(currentMeds(ownerPage).filter({ hasText: 'Lisinopril' })).toHaveCount(1)
+
+  // Mark Lisinopril past (leaves Current for the collapsed Past group).
+  await currentMeds(ownerPage).filter({ hasText: 'Lisinopril' }).click()
+  await ownerPage.getByTestId('action-toggle-status').click()
+  await expect(currentMeds(ownerPage).filter({ hasText: 'Lisinopril' })).toHaveCount(0)
+
+  // Rename Metformin — the override leads, the code line stays demoted.
+  await currentMeds(ownerPage).filter({ hasText: 'Metformin' }).click()
+  await ownerPage.getByTestId('action-name-input').fill('BP + sugar combo')
+  await ownerPage.getByTestId('action-save-name').click()
+  await expect(currentMeds(ownerPage).filter({ hasText: 'BP + sugar combo' })).toHaveCount(1)
+
+  // Connect the relay now (after curating) and open the share screen.
+  await connectRelayViaUI(ownerPage)
+  await ownerPage.evaluate(() => (window.location.hash = '#/share/doctor'))
+
+  // --- Default scope: current-only. The recipient sees the renamed current med
+  // and NO past med at all. ---
+  await ownerPage.getByTestId('new-doctor-link').click()
+  await ownerPage.getByTestId('share-create').click()
+  await expect(ownerPage.getByTestId('share-link')).toBeVisible()
+  const defaultLink = (await ownerPage.getByTestId('share-link').innerText()).trim()
+
+  const defaultDoc = await openAsRecipient(browser, defaultLink)
+  const defaultMeds = defaultDoc.getByTestId('summary-section-medications')
+  await expect(defaultMeds).toContainText('BP + sugar combo')
+  // The override leads with the source code demoted beneath it (#86 rendering,
+  // now threaded through the read-only recipient path).
+  await expect(defaultMeds).toContainText('RxNorm')
+  await expect(defaultMeds).toContainText('6809')
+  // Lisinopril is past — excluded entirely from the default share.
+  await expect(defaultDoc.getByTestId('clinician-summary')).not.toContainText('Lisinopril')
+  await expect(defaultDoc.getByTestId('meds-past-toggle')).toHaveCount(0)
+  await defaultDoc.context().close()
+
+  // --- Include past on: the recipient now sees a Past group with Lisinopril. ---
+  await ownerPage.getByTestId('share-another').click()
+  await ownerPage.getByTestId('share-include-past-meds').click()
+  await ownerPage.getByTestId('share-create').click()
+  await expect(ownerPage.getByTestId('share-link')).toBeVisible()
+  const pastLink = (await ownerPage.getByTestId('share-link').innerText()).trim()
+
+  const pastDoc = await openAsRecipient(browser, pastLink)
+  await expect(pastDoc.getByTestId('summary-section-medications')).toContainText('BP + sugar combo')
+  const pastToggle = pastDoc.getByTestId('meds-past-toggle')
+  await expect(pastToggle).toContainText('1 past')
+  await pastToggle.click()
+  await expect(
+    pastDoc.getByTestId('summary-section-past').getByTestId('summary-row').filter({ hasText: 'Lisinopril' }),
+  ).toHaveCount(1)
+  // Nothing failed verification — no dropped-curation warning.
+  await expect(pastDoc.getByTestId('share-curation-warning')).toHaveCount(0)
+  await pastDoc.context().close()
+
+  await ownerContext.close()
+})
+
+async function unlock(page: Page): Promise<void> {
+  await page.getByTestId('unlock-passphrase').fill(PASSPHRASE)
+  await page.getByTestId('unlock-submit').click()
+}
+
+async function openSummary(page: Page): Promise<void> {
+  await page.getByTestId('view-summary').click()
+  await expect(page.getByTestId('clinician-summary')).toBeVisible()
+}
+
+/** The Current meds group is the SummarySection titled "Medications". */
+function currentMeds(page: Page) {
+  return page.getByTestId('summary-section-medications').getByTestId('summary-row')
+}
+
+/** Open a share link in a fresh, account-less browser context and wait for the
+ * decrypted record to render. Returns the recipient page (close its context). */
+async function openAsRecipient(
+  browser: import('@playwright/test').Browser,
+  link: string,
+): Promise<Page> {
+  const context = await browser.newContext()
+  const page = await context.newPage()
+  await page.goto(link)
+  await expect(page.getByRole('heading', { name: 'Shared medical record' })).toBeVisible({
+    timeout: 15_000,
+  })
+  return page
+}

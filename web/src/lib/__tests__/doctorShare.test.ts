@@ -8,10 +8,12 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('../svastha', () => ({ WasmDataKey: class {} }))
 
 import {
+  applyMedScope,
   base64url,
   base64urlToBytes,
   buildBundle,
   buildShareLink,
+  curationForBundle,
   deriveShareCategories,
   filterEventsForScope,
   generateShareToken,
@@ -21,10 +23,14 @@ import {
   type DoctorShareRecord,
   type ShareScope,
 } from '../doctorShare'
+import { conceptKey } from '../summary'
 import { toHex, fromHex } from '../hex'
 import type { StoredEvent } from '../events'
+import type { ConceptStatus, SignedCurationRecord } from '../curation'
 import { CATEGORIES, CATEGORY_META, type Category } from '../category'
 import { MOOD, BP_SYSTOLIC, CYCLE_START } from '../codes'
+
+const RXNORM = 'http://www.nlm.nih.gov/research/umls/rxnorm'
 
 const NON_SENSITIVE = CATEGORIES.filter((c) => !CATEGORY_META[c].sensitive)
 const set = (...cats: Category[]) => new Set<Category>(cats)
@@ -140,6 +146,15 @@ describe('buildBundle', () => {
     expect(bundle.attachments).toBeUndefined()
     const withAtt = buildBundle(events, signerHex, '2026-07-14T12:00:00.000Z', { aa: 'AQID' })
     expect(withAtt.attachments).toEqual({ aa: 'AQID' })
+  })
+
+  it('omits curation when empty, and inlines the array when given', () => {
+    expect(bundle.curation).toBeUndefined()
+    const curation = [
+      { key: 'status:x', value: { status: 'inactive' }, updated_at: 1, author: 'aa', signature: 'ss' },
+    ]
+    const withCur = buildBundle(events, signerHex, '2026-07-14T12:00:00.000Z', {}, curation)
+    expect(withCur.curation).toEqual(curation)
   })
 })
 
@@ -257,5 +272,88 @@ describe('shareStatus', () => {
 
   it('is revoked whenever revokedAt is set, even before expiry', () => {
     expect(shareStatus({ ...base, revokedAt: '2026-07-03T00:00:00.000Z' }, now)).toBe('revoked')
+  })
+})
+
+// --- carrying signed curation in the bundle ---
+
+const rec = (key: string, value: unknown, signature = 'sig'): SignedCurationRecord => ({
+  key,
+  value,
+  updated_at: 1,
+  author: '3b'.repeat(32),
+  signature,
+})
+
+const med = (id: string, code: string) =>
+  ev(id, 'medication_statement', '2024-01-01T00:00:00Z', { system: RXNORM, code })
+const problem = (id: string, code: string) =>
+  ev(id, 'condition', '2024-01-01T00:00:00Z', { system: 'snomed', code })
+
+describe('applyMedScope', () => {
+  const lisinopril = med('m1', '29046') // concept marked past (inactive)
+  const metformin = med('m2', '6809') // current (unstatused → active)
+  const cond = problem('c1', '111') // resolved, but always kept
+  const bp = ev('bp', 'observation', '2024-01-01T00:00:00Z', BP_SYSTOLIC)
+  const all = [lisinopril, metformin, cond, bp]
+
+  const statuses = new Map<string, ConceptStatus>([
+    [conceptKey(lisinopril.event), 'inactive'],
+    [conceptKey(cond.event), 'inactive'], // a resolved problem — never dropped here
+  ])
+
+  it('drops a past medication event by default (current-only list)', () => {
+    const ids = applyMedScope(all, statuses, false).map((se) => se.event.id)
+    expect(ids).toEqual(['m2', 'c1', 'bp']) // m1 (past med) gone; resolved problem stays
+  })
+
+  it('keeps every event when past meds are opted in', () => {
+    expect(applyMedScope(all, statuses, true)).toBe(all)
+  })
+
+  it('never drops a non-medication event, whatever its status', () => {
+    // The resolved condition and the vital survive the default scope.
+    const ids = applyMedScope([cond, bp], statuses, false).map((se) => se.event.id)
+    expect(ids).toEqual(['c1', 'bp'])
+  })
+
+  it('treats an unstatused medication as current (kept)', () => {
+    expect(applyMedScope([metformin], new Map(), false)).toEqual([metformin])
+  })
+})
+
+describe('curationForBundle', () => {
+  const lisinopril = med('m1', '29046')
+  const metformin = med('m2', '6809')
+  const cond = problem('c1', '111')
+  const events = [lisinopril, metformin, cond]
+
+  const kLis = conceptKey(lisinopril.event)
+  const kMet = conceptKey(metformin.event)
+  const kCond = conceptKey(cond.event)
+
+  it('carries only status:/name: records for concepts present in the bundle', () => {
+    const records: SignedCurationRecord[] = [
+      rec(`status:${kLis}`, { status: 'inactive' }),
+      rec(`name:${kMet}`, { display: 'BP + sugar combo' }),
+      rec(`status:${kCond}`, { status: 'inactive' }),
+      rec(`status:medication_statement|${RXNORM}|99999`, { status: 'inactive' }), // concept not in bundle
+      rec(`tag:m1`, { tags: ['a'] }), // never carried, even for an included event
+      rec(`hide:m1`, { hidden: true }), // never carried
+      rec(`note:c1`, { text: 'x' }), // never carried
+    ]
+    const carried = curationForBundle(events, records)
+    expect(carried.map((r) => r.key).sort()).toEqual(
+      [`status:${kLis}`, `name:${kMet}`, `status:${kCond}`].sort(),
+    )
+  })
+
+  it('drops an unsigned record — a recipient outside the vault can only trust a signature', () => {
+    const unsigned = rec(`status:${kLis}`, { status: 'inactive' }, '') // empty signature
+    expect(curationForBundle(events, [unsigned])).toEqual([])
+  })
+
+  it('is empty when no record matches an in-bundle concept', () => {
+    expect(curationForBundle([cond], [rec(`status:${kLis}`, { status: 'inactive' })])).toEqual([])
   })
 })
