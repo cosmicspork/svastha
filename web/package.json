@@ -6,7 +6,7 @@
   "scripts": {
     "wasm": "wasm-pack build ../crates/wasm --target web --out-dir ../../web/src/wasm --out-name svastha",
     "dev": "bun run wasm && vite",
-    "build": "bun run wasm && vite build",
+    "build": "bun run wasm && bun run scripts/build-changelog/build.ts && vite build",
     "preview": "vite preview",
     "check": "bun run wasm && svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json && tsc -p tsconfig.scripts.json && vitest run",
     "test": "vitest run",
