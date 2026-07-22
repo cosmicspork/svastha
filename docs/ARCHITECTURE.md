@@ -125,36 +125,55 @@ required; an encrypted multi-writer event log carries the load.
 The event log above is append-only by design (immutable clinical history), but
 the whole point of logging lifestyle data is to look back and spot a pattern —
 which needs a little bit of mutable state layered on top: tags, hides, and
-notes on individual events, plus favorite quick-log templates. This overlay is
-deliberately **not** part of the trust contract (`core` only ever knows about
-signed, immutable events) and lives entirely in the web client
-(`web/src/lib/curation.ts`).
+notes on individual events, plus favorite quick-log templates. Unlike the
+immutable event log, this overlay is mutable and merged last-writer-wins — but,
+like an event, each record is now **signed** by the owner identity, so the
+record type, its canonical serialization, signing, verification, and the merge
+rule live in the trust contract (`crates/core`, `curation.rs`), shared by every
+client through WASM. The web client (`web/src/lib/curation.ts`) still owns the
+app-level conventions: which key namespaces exist, the mutable `cur-*` blob
+mapping, on-device storage, and the sync scope.
 
-A `CurationRecord` is `{ key, value, updated_at, author }`:
+A `SignedCurationRecord` is a `CurationRecord` — `{ key, value, updated_at,
+author }` — plus a `signature`:
 
 - `key` namespaces what's being curated: `tag:{event_id}` (`{ tags: string[]
   }`), `note:{event_id}` (`{ text }`), `hide:{event_id}` (`{ hidden: true }`),
   and `fav:{category}:{hash}` (a favorited draft template, keyed on a hash of
-  its label — see below).
-- `value` is namespace-defined and opaque to the merge rule below.
+  its label — see below); concept-level `status:` and `name:` records arrive
+  with the web adoption. `core` is namespace-agnostic — the key is an opaque
+  string to the contract, so new namespaces need no contract change.
+- `value` is namespace-defined and opaque to both the signature and the merge
+  rule below. For signing it is reduced to canonical JSON (compact, object keys
+  sorted), so the same logical value always signs identically.
 - `updated_at` is a plain client clock (unix milliseconds), not a signed or
-  server-attested timestamp.
-- `author` is the writer's Ed25519 hex identity.
+  server-attested timestamp; it is the merge ordering key.
+- `author` is the writer's Ed25519 hex identity — both the key the signature
+  verifies against and the merge tiebreaker.
 
 **Merge rule: last-writer-wins.** Whichever record has the higher `updated_at`
 wins; a tie breaks on the lexicographically greater `author` hex. This is
 deterministic (every device that sees the same two records computes the same
 winner) without a shared clock, a negotiation round trip, or CRDT machinery —
-appropriate for a field this small (a tag list, a boolean, a short note).
+appropriate for a field this small (a tag list, a boolean, a short note). The
+merge is a pure function in `core`, shared by every client, and it does **not**
+verify signatures — a caller receiving records from outside its own vault
+verifies-or-drops first, then merges only what verified.
 
-**Deliberately unsigned.** Every other record in this system is signed; a
-`CurationRecord` is not. In today's single-writer vault, possessing the vault
-key already implies you're the one legitimate writer — the AEAD seal on the
-blob (see "Sync and backup" below) is the authenticity boundary, the same way
-`vault.key`'s wrapping is its own proof of legitimate possession without an
-extra signature. Once vaults gain multiple writers, this assumption breaks
-(two writers sharing a vault key could not be told apart by `author` alone)
-and curation records will need their own signatures — revisit then.
+**Now signed.** Every other record in this system is signed, and curation
+records now are too, for two reasons the earlier single-writer design could
+defer. First, curation is about to **cross the vault boundary**: doctor-share
+bundles will optionally carry a `curation` array so a share can include the
+owner's relevant tags and notes, and the recipient — who holds the per-share key
+but is not the author — must be able to reject a record the bundle-builder
+tampered with. The AEAD seal that authenticated a `cur-*` blob inside the owner's
+own vault says nothing to a recipient outside it; only a signature does.
+Second, **multi-writer vaults** are on the roadmap, where two writers sharing one
+vault key can no longer be told apart by `author` alone — the exact assumption
+the old "deliberately unsigned" design flagged to revisit. This wave is that
+revisit: signing by the same owner identity that signs events settles both,
+and puts the record type, its canonical bytes, sign, verify, and merge in the
+trust contract so web and any future client share one implementation.
 
 **Sync.** Curation records use the `cur-{sha256_hex(key)}` blob id (see the
 namespace table below) and, unlike `ev-`/`doc-` blobs, are **mutable**: a
@@ -341,7 +360,7 @@ by prefix:
 | `vault.key` | the vault data key, wrapped to the owner's own X25519 key |
 | `doc-{sha256_hex}` | one imported source document's verbatim bytes (name + base64 bytes, JSON), keyed by its own content hash |
 | `att-{sha256_hex}` | one captured document page's bytes (mime + base64 bytes, JSON — a photographed paper record), keyed by the plaintext content hash the event's `attachment` value carries |
-| `cur-{sha256_hex(key)}` | one curation overlay record (tag/note/hide/favorite — see the Event model's "Curation overlay" subsection), keyed by the hash of its own app-level `key`. Unlike `ev-`/`doc-`/`att-`, this blob is **mutable**: a write `PUT`s over the existing id rather than minting a new one. |
+| `cur-{sha256_hex(key)}` | one sealed `SignedCurationRecord` (JSON — tag/note/hide/favorite, see the Event model's "Curation overlay" subsection), keyed by the hash of its own app-level `key`. Unlike `ev-`/`doc-`/`att-`, this blob is **mutable**: a write `PUT`s over the existing id rather than minting a new one. |
 
 **AAD = blob id.** Every blob sealed under the vault key uses the UTF-8 bytes
 of its own blob id as the AEAD associated data. The relay stores opaque

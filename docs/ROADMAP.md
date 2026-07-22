@@ -32,7 +32,9 @@ into the sections below.
 - Key rotation for real revocation
 - Blob-list pagination and manifests; curation etags
 - Relay nonce store (auth replay hardening)
-- Signed curation records — prerequisite for multi-writer
+- Signed curation records — core contract landed (sign/verify/merge); web
+  adoption (signing on write, migration, share-bundle inclusion) next;
+  prerequisite for multi-writer
 - Multi-writer sync (needs new conflict machinery; ends the single-writer
   assumption)
 

@@ -9,6 +9,7 @@
 //! [`CONTRACT_VERSION`](crate::CONTRACT_VERSION), so bumping the contract version
 //! deliberately changes the derived keys.
 
+use crate::curation::{CurationRecord, SignedCurationRecord};
 use crate::envelope::{DataKey, EnvelopeError, WrappedKey};
 use crate::event::{Event, SignedEvent};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
@@ -98,6 +99,27 @@ impl Identity {
         event.id = event.content_id();
         let signature = self.sign(&event.signing_bytes());
         SignedEvent::new(event, self.verifying_key().to_bytes(), signature.to_bytes())
+    }
+
+    /// Sign a curation record as this identity. Stamps `author` from this
+    /// identity's Ed25519 key (so the stored author and the signing key always
+    /// agree) and signs [`CurationRecord::signing_bytes`]. The same key that signs
+    /// events, so a recipient of a doctor-share bundle can verify curation records
+    /// against the owner identity they already know.
+    pub fn sign_curation(
+        &self,
+        key: String,
+        value: serde_json::Value,
+        updated_at: i64,
+    ) -> SignedCurationRecord {
+        let record = CurationRecord {
+            key,
+            value,
+            updated_at,
+            author: self.verifying_key().to_bytes(),
+        };
+        let signature = self.sign(&record.signing_bytes());
+        SignedCurationRecord::new(record, signature.to_bytes())
     }
 }
 

@@ -11,6 +11,7 @@
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 
+use svastha_core::curation::{merge as merge_curation_records, SignedCurationRecord};
 use svastha_core::envelope::{wrap_key, DataKey, Sealed, WrappedKey};
 use svastha_core::event::{Code, Event, EventKind, EventValue, Provenance, SignedEvent};
 use svastha_core::keys::Identity;
@@ -109,6 +110,19 @@ impl WasmIdentity {
         relay_sign_request(&self.identity, &request).to_vec()
     }
 
+    /// Sign a curation record. `content_json` is `{ key, value, updated_at }`
+    /// (`value` is opaque JSON; `updated_at` is Unix milliseconds); `author` is
+    /// stamped from this identity, matching how [`sign_event`](Self::sign_event)
+    /// stamps the content id. Returns the flat `SignedCurationRecord` JSON
+    /// (`{ key, value, updated_at, author, signature }`).
+    pub fn sign_curation(&self, content_json: &str) -> Result<String, JsError> {
+        let content: CurationContent = serde_json::from_str(content_json).map_err(to_js)?;
+        let signed = self
+            .identity
+            .sign_curation(content.key, content.value, content.updated_at);
+        serde_json::to_string(&signed).map_err(to_js)
+    }
+
     /// Unwrap a data key that was wrapped to this identity's X25519 public key
     /// (see [`WasmDataKey::wrap_to`]) — used to adopt the vault key found at
     /// the relay's `vault.key` blob.
@@ -130,6 +144,14 @@ struct EventContent {
     #[serde(default)]
     value: Option<EventValue>,
     provenance: Provenance,
+}
+
+/// The curation fields a caller supplies; `author` and the signature are derived.
+#[derive(Deserialize)]
+struct CurationContent {
+    key: String,
+    value: serde_json::Value,
+    updated_at: i64,
 }
 
 /// A symmetric vault data key for sealing and opening payloads in the browser.
@@ -194,6 +216,25 @@ impl WasmDataKey {
 pub fn verify_event(signed_json: &str) -> Result<bool, JsError> {
     let signed: SignedEvent = serde_json::from_str(signed_json).map_err(to_js)?;
     Ok(signed.verify())
+}
+
+/// Verify a `SignedCurationRecord` JSON: does the signature bind this exact record
+/// (`key`, `value`, `updated_at`) to its `author`? The verify-or-drop check a
+/// doctor-share recipient runs before merging a bundle's curation records in.
+#[wasm_bindgen]
+pub fn verify_curation(signed_json: &str) -> Result<bool, JsError> {
+    let signed: SignedCurationRecord = serde_json::from_str(signed_json).map_err(to_js)?;
+    Ok(signed.verify())
+}
+
+/// Last-writer-wins merge of two `SignedCurationRecord` JSON strings for the same
+/// key: returns the winner's JSON (higher `updated_at`, tie → greater `author`).
+/// A pure tiebreak — the caller verifies both first (see [`verify_curation`]).
+#[wasm_bindgen]
+pub fn merge_curation(a_json: &str, b_json: &str) -> Result<String, JsError> {
+    let a: SignedCurationRecord = serde_json::from_str(a_json).map_err(to_js)?;
+    let b: SignedCurationRecord = serde_json::from_str(b_json).map_err(to_js)?;
+    serde_json::to_string(&merge_curation_records(a, b)).map_err(to_js)
 }
 
 // --- import (crates/import): client-side C-CDA/FHIR mapping ---
