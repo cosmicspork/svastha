@@ -73,7 +73,7 @@
   <div class="scrim" aria-hidden="true" onclick={() => setOpen(false)}></div>
 
   <div class="petals" inert={!open}>
-    {#each ordered as { kind, label, category }, i (kind)}
+    {#each ordered as { kind, label, category, glyph }, i (kind)}
       <span class="petal-label" style={labelStyle(i)}>{label.toLowerCase()}</span>
       <button
         type="button"
@@ -83,7 +83,7 @@
         data-testid="log-{kind}"
         onclick={() => selectKind(kind)}
       >
-        {CATEGORY_META[category].glyph}
+        {glyph ?? CATEGORY_META[category].glyph}
       </button>
     {/each}
   </div>
