@@ -6,10 +6,15 @@ function entryWith(page: Page, text: string) {
   return page.getByTestId('spine-entry').filter({ hasText: text })
 }
 
-/** Wait (on Settings) until the outbox is fully pushed. */
+/** Wait (on Settings' Sync & devices sub-screen) until the outbox is fully
+ * pushed. */
 async function waitForPushed(page: Page): Promise<void> {
   await page.getByTestId('nav-settings').click()
+  await page.getByTestId('settings-row-sync').click()
   await expect(page.getByTestId('sync-pending')).toHaveText('0')
+  // Sub-screens don't get their own "← Back"; one click up to the hub, one
+  // more back reaches Home.
+  await page.getByTestId('nav-settings').click()
   await page.getByTestId('nav-back').click()
 }
 
@@ -20,7 +25,7 @@ async function waitForPushed(page: Page): Promise<void> {
 async function syncUntilVisible(page: Page, text: string): Promise<void> {
   await expect(async () => {
     await page.evaluate(() => {
-      window.location.hash = '#/settings'
+      window.location.hash = '#/settings/sync'
     })
     await page.getByTestId('sync-now').click()
     await page.waitForTimeout(300)

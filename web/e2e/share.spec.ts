@@ -12,11 +12,11 @@ async function openShareAndSetName(page: Page, name: string): Promise<string> {
   return (await page.getByTestId('my-code').innerText()).trim()
 }
 
-/** Wait (on Settings) until the outbox is fully pushed — same pattern as
- * sync.spec.ts's `waitForPushed`. */
+/** Wait (on Settings' Sync & devices sub-screen) until the outbox is fully
+ * pushed — same pattern as sync.spec.ts's `waitForPushed`. */
 async function waitForPushed(page: Page): Promise<void> {
   await page.evaluate(() => {
-    window.location.hash = '#/settings'
+    window.location.hash = '#/settings/sync'
   })
   await expect(page.getByTestId('sync-pending')).toHaveText('0')
 }
@@ -24,7 +24,7 @@ async function waitForPushed(page: Page): Promise<void> {
 /** Force a pull cycle via Settings' "Sync now". */
 async function syncNow(page: Page): Promise<void> {
   await page.evaluate(() => {
-    window.location.hash = '#/settings'
+    window.location.hash = '#/settings/sync'
   })
   await page.getByTestId('sync-now').click()
   await page.waitForTimeout(300)
