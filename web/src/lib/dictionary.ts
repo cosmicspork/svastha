@@ -30,6 +30,9 @@ export interface ManifestFile {
   label: string
   attribution: string
   starter?: boolean
+  /** LOINC's release/version (required by its license on every copy); present
+   * only on the LOINC entry, and only when it's real (non-starter) data. */
+  loincRelease?: string
 }
 
 export interface DictManifest {
