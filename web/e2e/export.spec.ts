@@ -27,6 +27,7 @@ test('encrypted backup round-trips to a fresh device from the seed alone, and re
 
   // Download the encrypted backup from Settings (ciphertext — no confirm sheet).
   await page.getByTestId('nav-settings').click()
+  await page.getByTestId('settings-row-data').click()
   const downloadPromise = page.waitForEvent('download')
   await page.getByTestId('export-encrypted').click()
   const backupPath = await (await downloadPromise).path()
@@ -38,6 +39,7 @@ test('encrypted backup round-trips to a fresh device from the seed alone, and re
   await restoreViaUI(pageB, words)
 
   await pageB.getByTestId('nav-settings').click()
+  await pageB.getByTestId('settings-row-data').click()
   await pageB.getByTestId('import-backup-input').setInputFiles(backupPath)
 
   const resultB = pageB.getByTestId('import-backup-result')
@@ -45,6 +47,9 @@ test('encrypted backup round-trips to a fresh device from the seed alone, and re
   await expect(resultB).toContainText('curation record')
 
   // The imported events (and the tag) show on the fresh device's timeline.
+  // Sub-screens don't get their own "← Back"; one click up to the hub, one
+  // more back reaches Home.
+  await pageB.getByTestId('nav-settings').click()
   await pageB.getByTestId('nav-back').click()
   await expect(entryWith(pageB, '118/76')).toBeVisible()
   const oatmealB = entryWith(pageB, 'oatmeal')
@@ -53,6 +58,7 @@ test('encrypted backup round-trips to a fresh device from the seed alone, and re
 
   // Re-importing the exact same file finds everything already present: zero new.
   await pageB.getByTestId('nav-settings').click()
+  await pageB.getByTestId('settings-row-data').click()
   await pageB.getByTestId('import-backup-input').setInputFiles(backupPath)
   await expect(resultB).toContainText('0 new events')
   await expect(resultB).toContainText('already present')

@@ -14,6 +14,11 @@
   import Home from './routes/Home.svelte'
   import Log from './routes/Log.svelte'
   import Settings from './routes/Settings.svelte'
+  import SettingsAppearance from './routes/settings/Appearance.svelte'
+  import SettingsSecurity from './routes/settings/Security.svelte'
+  import SettingsSync from './routes/settings/Sync.svelte'
+  import SettingsData from './routes/settings/Data.svelte'
+  import SettingsAbout from './routes/settings/About.svelte'
   import Share from './routes/Share.svelte'
   import Person from './routes/Person.svelte'
   import Import from './routes/Import.svelte'
@@ -103,6 +108,16 @@
       <Log kind={route.params.kind} />
     {:else if route.path === '/settings'}
       <Settings />
+    {:else if route.path === '/settings/appearance'}
+      <SettingsAppearance />
+    {:else if route.path === '/settings/security'}
+      <SettingsSecurity />
+    {:else if route.path === '/settings/sync'}
+      <SettingsSync />
+    {:else if route.path === '/settings/data'}
+      <SettingsData />
+    {:else if route.path === '/settings/about'}
+      <SettingsAbout />
     {:else if route.path === '/share'}
       <Share />
     {:else if route.path === '/person/:ed'}

@@ -16,6 +16,11 @@ const KNOWN_PATTERNS = [
   '/onboard',
   '/unlock',
   '/settings',
+  '/settings/appearance',
+  '/settings/security',
+  '/settings/sync',
+  '/settings/data',
+  '/settings/about',
   '/share',
   // A doctor-share cold-load link. The single `:frag` segment is
   // `{token}.{key}.{relay}`; the fragment is parsed in shareRecipient.ts, not

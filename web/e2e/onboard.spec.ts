@@ -7,11 +7,12 @@ test('onboard, reload, and unlock with the same passphrase restores the same ide
   await onboardViaUI(page, PASSPHRASE)
 
   await page.getByTestId('nav-settings').click()
+  await page.getByTestId('settings-row-security').click()
   const fingerprintBefore = await page.getByTestId('ed25519-fingerprint').innerText()
   expect(fingerprintBefore).not.toBe('')
 
-  // The hash (#/settings) survives the reload, so unlocking lands back on
-  // Settings directly rather than Home.
+  // The hash (#/settings/security) survives the reload, so unlocking lands
+  // back on that sub-screen directly rather than Home.
   await page.reload()
 
   await expect(page.getByTestId('unlock-passphrase')).toBeVisible()
