@@ -1,21 +1,9 @@
 import { test, expect, type Page } from '@playwright/test'
-import { onboardViaUI, connectRelayViaUI, restoreViaUI, logBP, logFood, RELAY } from './helpers'
+import { onboardViaUI, connectRelayViaUI, restoreViaUI, logBP, logFood, waitForPushed, RELAY } from './helpers'
 
 /** A spine entry containing `text`. */
 function entryWith(page: Page, text: string) {
   return page.getByTestId('spine-entry').filter({ hasText: text })
-}
-
-/** Wait (on Settings' Sync & devices sub-screen) until the outbox is fully
- * pushed. */
-async function waitForPushed(page: Page): Promise<void> {
-  await page.getByTestId('nav-settings').click()
-  await page.getByTestId('settings-row-sync').click()
-  await expect(page.getByTestId('sync-pending')).toHaveText('0')
-  // Sub-screens don't get their own "← Back"; one click up to the hub, one
-  // more back reaches Home.
-  await page.getByTestId('nav-settings').click()
-  await page.getByTestId('nav-back').click()
 }
 
 /** Click "Sync now" until `text` shows up on the spine. The pull is

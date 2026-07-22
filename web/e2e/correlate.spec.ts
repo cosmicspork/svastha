@@ -1,23 +1,18 @@
 import { test, expect, type Page } from '@playwright/test'
-import { onboardViaUI, connectRelayViaUI, restoreViaUI, openLog, RELAY, PASSPHRASE } from './helpers'
+import {
+  onboardViaUI,
+  connectRelayViaUI,
+  restoreViaUI,
+  openLog,
+  waitForPushed,
+  RELAY,
+  PASSPHRASE,
+} from './helpers'
 
 /** `datetime-local` value (`YYYY-MM-DDTHH:mm`) for the Earlier time control. */
 function localDatetimeInput(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
-}
-
-/** Wait (on Settings' Sync & devices sub-screen) until the outbox is fully
- * pushed — same pattern as sync.spec.ts's own helper (not exported from
- * there, so duplicated here). */
-async function waitForPushed(page: Page): Promise<void> {
-  await page.getByTestId('nav-settings').click()
-  await page.getByTestId('settings-row-sync').click()
-  await expect(page.getByTestId('sync-pending')).toHaveText('0')
-  // Sub-screens don't get their own "← Back"; one click up to the hub, one
-  // more back reaches Home.
-  await page.getByTestId('nav-settings').click()
-  await page.getByTestId('nav-back').click()
 }
 
 /** Click "Sync now" once, from wherever the app currently is, and land back

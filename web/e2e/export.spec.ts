@@ -47,9 +47,7 @@ test('encrypted backup round-trips to a fresh device from the seed alone, and re
   await expect(resultB).toContainText('curation record')
 
   // The imported events (and the tag) show on the fresh device's timeline.
-  // Sub-screens don't get their own "← Back"; one click up to the hub, one
-  // more back reaches Home.
-  await pageB.getByTestId('nav-settings').click()
+  // A sub-screen's header shows only Back; a single click reaches Home.
   await pageB.getByTestId('nav-back').click()
   await expect(entryWith(pageB, '118/76')).toBeVisible()
   const oatmealB = entryWith(pageB, 'oatmeal')

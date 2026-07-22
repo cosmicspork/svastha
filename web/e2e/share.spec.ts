@@ -31,11 +31,16 @@ async function syncNow(page: Page): Promise<void> {
 }
 
 /** Bounce Home -> the person screen so it remounts and re-reads
- * `shared_events`, retrying until `text` shows up — the shared pull runs
- * asynchronously in the background (see shared.ts's `pullShared`), and
- * Person.svelte only reads its events once, on mount. Mirrors sync.spec.ts's
- * `syncUntilVisible`. */
-async function personEntryVisible(page: Page, ownerEd: string, text: string): Promise<void> {
+ * `shared_events`, retrying until every `text` shows up in a SINGLE mount — the
+ * shared pull runs asynchronously in the background (see shared.ts's
+ * `pullShared`, kicked by `acceptInvite`) and writes the owner's ev- blobs one
+ * at a time, while Person.svelte reads its events just once, on mount. Asserting
+ * one entry via this retry and a second with a plain check would sample a
+ * mid-pull snapshot: the first-written blob can be present while a later one
+ * (here the food event, pushed after the BP pair) has not landed yet. Requiring
+ * all of them in one mounted view waits for the pull to fully converge. Mirrors
+ * sync.spec.ts's `syncUntilVisible`. */
+async function personEntriesVisible(page: Page, ownerEd: string, texts: string[]): Promise<void> {
   await expect(async () => {
     await page.evaluate(() => {
       window.location.hash = '#/'
@@ -43,9 +48,11 @@ async function personEntryVisible(page: Page, ownerEd: string, text: string): Pr
     await page.evaluate((ed) => {
       window.location.hash = `#/person/${ed}`
     }, ownerEd)
-    await expect(page.getByTestId('spine-entry').filter({ hasText: text })).toBeVisible({
-      timeout: 2000,
-    })
+    for (const text of texts) {
+      await expect(page.getByTestId('spine-entry').filter({ hasText: text })).toBeVisible({
+        timeout: 2000,
+      })
+    }
   }).toPass({ timeout: 20_000 })
 }
 
@@ -103,9 +110,10 @@ test('spousal sharing: grant, accept, read-only timeline, then revoke goes stale
   await expect(chip).toBeVisible()
   await chip.click()
 
-  // A's two entries render read-only on B's device, with no log bar.
-  await personEntryVisible(pageB, ownerEdA, '118/76')
-  await expect(pageB.getByTestId('spine-entry').filter({ hasText: 'oatmeal' })).toBeVisible()
+  // A's two entries render read-only on B's device, with no log bar. Both
+  // arrive via the same background shared pull, so wait for a single mounted
+  // view to show both rather than sampling a mid-pull snapshot.
+  await personEntriesVisible(pageB, ownerEdA, ['118/76', 'oatmeal'])
   await expect(pageB.getByTestId('log-vitals')).toHaveCount(0)
 
   // A revokes from the "Your people" screen (where active grants live); B's
