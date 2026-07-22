@@ -20,6 +20,8 @@
   import SettingsData from './routes/settings/Data.svelte'
   import SettingsAbout from './routes/settings/About.svelte'
   import Share from './routes/Share.svelte'
+  import SharePeople from './routes/share/People.svelte'
+  import ShareDoctor from './routes/share/Doctor.svelte'
   import Person from './routes/Person.svelte'
   import Import from './routes/Import.svelte'
   import Correlate from './routes/Correlate.svelte'
@@ -120,6 +122,10 @@
       <SettingsAbout />
     {:else if route.path === '/share'}
       <Share />
+    {:else if route.path === '/share/people'}
+      <SharePeople />
+    {:else if route.path === '/share/doctor'}
+      <ShareDoctor />
     {:else if route.path === '/person/:ed'}
       <Person ed={route.params.ed} />
     {:else if route.path === '/import'}

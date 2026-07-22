@@ -98,6 +98,9 @@
   <button class="switch-chip patterns" onclick={() => navigate('#/correlate')} data-testid="nav-correlate">
     Patterns
   </button>
+  <button class="switch-chip" onclick={() => navigate('#/share')} data-testid="nav-share">
+    <span aria-hidden="true">◉</span> Sharing
+  </button>
 </div>
 
 <div class="seg view-toggle" role="group" aria-label="Record view" data-testid="home-view-toggle">
