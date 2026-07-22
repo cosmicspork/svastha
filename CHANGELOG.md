@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/cosmicspork/svastha/compare/v0.9.0...v0.10.0) (2026-07-22)
+
+
+### Features
+
+* **web:** manual bloom petal order and UI polish ([#101](https://github.com/cosmicspork/svastha/issues/101)) ([816d633](https://github.com/cosmicspork/svastha/commit/816d633476ae4185664536e862174a678b70fe1c))
+
 ## [0.9.0](https://github.com/cosmicspork/svastha/compare/v0.8.0...v0.9.0) (2026-07-22)
 
 
