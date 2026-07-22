@@ -7,7 +7,7 @@
   import { RelayClient } from './lib/relay'
   import { connectRelay } from './lib/vault'
   import { syncTeardown } from './lib/sync'
-  import { route, navigate } from './lib/router.svelte'
+  import { route } from './lib/router.svelte'
   import { loadTheme, applyTheme } from './lib/theme'
   import Onboard from './routes/Onboard.svelte'
   import Unlock from './routes/Unlock.svelte'
@@ -20,6 +20,9 @@
   import Correlate from './routes/Correlate.svelte'
   import Bloom from './components/Bloom.svelte'
   import ShareView from './components/ShareView.svelte'
+  import AppHeader from './components/AppHeader.svelte'
+  import { loadNotifications } from './lib/notifications'
+  import { startInviteNotifications, scanForNotifications } from './lib/notification-sources'
 
   let ready = $state(false)
   let vaultExists = $state(false)
@@ -61,6 +64,21 @@
       }
     })
   })
+
+  // Local notification inbox: hydrate it and light up its client-local sources
+  // once a session is unlocked, tearing the invite subscription down on lock.
+  // Same gating as the sync effect above (never during the cold share path).
+  let inviteUnsub: (() => void) | null = null
+  $effect(() => {
+    if (isShare || !ready || locked() || !vaultExists) {
+      inviteUnsub?.()
+      inviteUnsub = null
+      return
+    }
+    loadNotifications()
+    inviteUnsub ??= startInviteNotifications()
+    scanForNotifications()
+  })
 </script>
 
 <main>
@@ -78,15 +96,7 @@
     <Unlock />
   {:else}
     {#if route.path !== '/log/:kind'}
-      {#if route.path === '/settings' || route.path === '/share' || route.path === '/person/:ed' || route.path === '/import' || route.path === '/correlate'}
-        <button class="settings-nav" onclick={() => navigate('#/')} data-testid="nav-back">
-          ← Back
-        </button>
-      {:else}
-        <button class="settings-nav" onclick={() => navigate('#/settings')} data-testid="nav-settings">
-          Settings
-        </button>
-      {/if}
+      <AppHeader showBack={route.path !== '/'} />
     {/if}
 
     {#if route.path === '/log/:kind'}
@@ -131,13 +141,4 @@
     min-height: 100dvh;
   }
 
-  .settings-nav {
-    float: right;
-    border: none;
-    background: none;
-    color: var(--muted);
-    min-height: auto;
-    min-width: auto;
-    padding: var(--space-1) 0;
-  }
 </style>

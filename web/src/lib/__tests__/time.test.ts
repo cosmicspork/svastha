@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { toLocalIso, dayKey, formatTime, formatDay, isoToMillis, addHoursIso } from '../time'
+import { toLocalIso, dayKey, formatTime, formatDay, isoToMillis, addHoursIso, relativeTime } from '../time'
 
 /** The expected `±HH:MM` suffix for a date in the runner's local timezone —
  * derived independently of toLocalIso so the tests hold in any TZ. */
@@ -107,5 +107,24 @@ describe('formatDay', () => {
     // A Saturday, far in the past so it can never collide with today.
     expect(formatDay('2020-02-01')).toMatch(/Saturday/)
     expect(formatDay('2020-02-01')).toMatch(/1/)
+  })
+})
+
+describe('relativeTime', () => {
+  const now = new Date('2026-07-22T12:00:00Z').getTime()
+  const ago = (ms: number) => new Date(now - ms).toISOString()
+
+  it('reads under a minute as "just now"', () => {
+    expect(relativeTime(ago(30_000), now)).toBe('just now')
+  })
+
+  it('uses compact minute/hour/day units up to a week', () => {
+    expect(relativeTime(ago(5 * 60_000), now)).toBe('5m')
+    expect(relativeTime(ago(3 * 3_600_000), now)).toBe('3h')
+    expect(relativeTime(ago(2 * 86_400_000), now)).toBe('2d')
+  })
+
+  it('falls back to a plain date past a week', () => {
+    expect(relativeTime(ago(10 * 86_400_000), now)).toMatch(/[A-Za-z]{3}/)
   })
 })
