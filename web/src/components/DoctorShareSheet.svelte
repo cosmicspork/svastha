@@ -13,18 +13,26 @@
     deriveShareCategories,
     filterEventsForScope,
     referencedAttachmentShas,
-    listDoctorShares,
-    revokeDoctorShare,
-    shareLinkFor,
-    shareStatus,
     EXPIRY_CHOICES,
     DEFAULT_EXPIRY_DAYS,
     type DoctorShareRecord,
     type ShareScope,
   } from '../lib/doctorShare'
 
-  let { relay, relayUrl, onclose }: { relay: RelayClient; relayUrl: string; onclose: () => void } =
-    $props()
+  // Management (the list of existing links, revoke, re-show) lives on the
+  // Doctor screen now — this sheet is creation only. `oncreated` lets that
+  // screen refresh its list the moment a new link is minted.
+  let {
+    relay,
+    relayUrl,
+    onclose,
+    oncreated,
+  }: {
+    relay: RelayClient
+    relayUrl: string
+    onclose: () => void
+    oncreated?: () => void
+  } = $props()
 
   // Verbatim on every screen that mints or manages a link: revocation and
   // expiry are honest about what they can and can't take back.
@@ -37,7 +45,6 @@
   const appOrigin = window.location.origin
 
   let events = $state<StoredEvent[]>([])
-  let loaded = $state(false)
 
   // --- scope ---
   // The chip row is the ordinary (non-sensitive) categories; the opt-in group
@@ -154,7 +161,7 @@
         relayOrigin,
       })
       result = { link, record }
-      await refreshShares()
+      oncreated?.()
     } catch (err) {
       error = err instanceof Error ? err.message : 'Could not create the share.'
     } finally {
@@ -174,36 +181,8 @@
     error = ''
   }
 
-  // --- manage ---
-  let shares = $state<DoctorShareRecord[]>([])
-  let qrFor = $state<string | null>(null)
-
-  async function refreshShares() {
-    shares = await listDoctorShares()
-  }
-
-  async function revoke(token: string) {
-    try {
-      await revokeDoctorShare(relay, token)
-    } catch (err) {
-      error = err instanceof Error ? err.message : 'Could not revoke the share.'
-    }
-    if (qrFor === token) qrFor = null
-    await refreshShares()
-  }
-
-  function statusLabel(record: DoctorShareRecord): string {
-    return shareStatus(record)
-  }
-
-  function linkFor(record: DoctorShareRecord): string | null {
-    return shareLinkFor(record, appOrigin, relayOrigin)
-  }
-
   onMount(async () => {
     events = await allEvents()
-    await refreshShares()
-    loaded = true
   })
 </script>
 
@@ -367,58 +346,6 @@
       <button class="ghost" onclick={onclose}>Cancel</button>
     </div>
     <p class="honest" data-testid="share-honest-create">{HONEST_COPY}</p>
-
-    {#if shares.length > 0}
-      <section class="stack">
-        <h3>Your shares</h3>
-        <ul class="share-list">
-          {#each shares as record (record.token)}
-            {@const status = statusLabel(record)}
-            {@const link = linkFor(record)}
-            <li>
-              <div class="share-head">
-                <span class="scope">{record.scopeDescription}</span>
-                <span class="status status-{status}" data-testid="share-status-{record.token}">
-                  {status}
-                </span>
-              </div>
-              <p class="hint muted">
-                Created {record.createdAt.slice(0, 10)} · expires {record.expiresAt.slice(0, 10)}
-              </p>
-              {#if status === 'active'}
-                <div class="row">
-                  {#if link}
-                    <button class="ghost" onclick={() => copy(link)} data-testid="reshow-copy-{record.token}">
-                      Copy link
-                    </button>
-                    <button
-                      class="ghost"
-                      onclick={() => (qrFor = qrFor === record.token ? null : record.token)}
-                      data-testid="reshow-qr-{record.token}"
-                    >
-                      {qrFor === record.token ? 'Hide QR' : 'Show QR'}
-                    </button>
-                  {/if}
-                  <button
-                    class="danger-outline"
-                    onclick={() => revoke(record.token)}
-                    data-testid="revoke-{record.token}"
-                  >
-                    Revoke
-                  </button>
-                </div>
-                {#if qrFor === record.token && link}
-                  <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-                  <div class="qr small" data-testid="reshow-qr-svg-{record.token}">
-                    {@html renderSVG(link, { border: 2 })}
-                  </div>
-                {/if}
-              {/if}
-            </li>
-          {/each}
-        </ul>
-      </section>
-    {/if}
   {/if}
 </Sheet>
 
@@ -614,11 +541,6 @@
     border-radius: var(--radius-sm);
   }
 
-  .qr.small :global(svg) {
-    max-width: 11rem;
-    margin: var(--space-3) auto;
-  }
-
   .link {
     word-break: break-all;
     font-size: var(--text-xs);
@@ -639,42 +561,5 @@
     gap: var(--space-2);
     flex-wrap: wrap;
     margin-top: var(--space-3);
-  }
-
-  .share-list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-  }
-
-  .share-list li {
-    padding: var(--space-3) 0;
-    border-top: 1px solid var(--border);
-  }
-
-  .share-head {
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-2);
-  }
-
-  .scope {
-    flex: 1;
-    font-size: var(--text-sm);
-  }
-
-  .status {
-    font-size: var(--text-xs);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .status-active {
-    color: var(--action);
-  }
-
-  .status-expired,
-  .status-revoked {
-    color: var(--muted);
   }
 </style>

@@ -1,11 +1,11 @@
 import { test, expect, type Page } from '@playwright/test'
 import { onboardViaUI, connectRelayViaUI, logBP, logFood, PASSPHRASE } from './helpers'
 
-/** Visit the Share screen, set a display name, and return this identity's
- * exchange code. Leaves the page on the Share screen. */
+/** Visit the "Your people" screen, set a display name, and return this
+ * identity's exchange code. Leaves the page on that screen. */
 async function openShareAndSetName(page: Page, name: string): Promise<string> {
   await page.evaluate(() => {
-    window.location.hash = '#/share'
+    window.location.hash = '#/share/people'
   })
   await page.getByTestId('display-name').fill(name)
   await expect(page.getByTestId('my-code')).toContainText(encodeURIComponent(name))
@@ -85,8 +85,8 @@ test('spousal sharing: grant, accept, read-only timeline, then revoke goes stale
   await pageA.getByTestId('confirm-share').click()
   await expect(pageA.getByTestId('share-done')).toBeVisible()
 
-  // B revisits the Share screen (fresh mount re-checks the mailbox) and sees
-  // the invite.
+  // B opens the sharing home (fresh mount re-checks the mailbox) and sees the
+  // invite in "Waiting for you".
   await pageB.evaluate(() => {
     window.location.hash = '#/share'
   })
@@ -108,10 +108,11 @@ test('spousal sharing: grant, accept, read-only timeline, then revoke goes stale
   await expect(pageB.getByTestId('spine-entry').filter({ hasText: 'oatmeal' })).toBeVisible()
   await expect(pageB.getByTestId('log-vitals')).toHaveCount(0)
 
-  // A revokes; B's next shared pull 404s and the person screen goes stale
-  // gracefully — it keeps showing what already synced rather than crashing.
+  // A revokes from the "Your people" screen (where active grants live); B's
+  // next shared pull 404s and the person screen goes stale gracefully — it
+  // keeps showing what already synced rather than crashing.
   await pageA.evaluate(() => {
-    window.location.hash = '#/share'
+    window.location.hash = '#/share/people'
   })
   await pageA.locator('[data-testid^="revoke-"]').click()
 
@@ -144,8 +145,8 @@ test('a scanned share link prefills the confirm box, surviving a locked-vault re
   // document load (a same-document hash-only `goto` wouldn't reset the
   // in-memory session — bouncing through about:blank forces a real one), so
   // the vault is locked exactly as it would be on a real cold app-open. The
-  // unlock flow must land back on Share with the code param intact rather
-  // than losing it.
+  // QR still targets the public `#/share` entry; the unlock flow must land
+  // there and be redirected into "Your people" with the code intact.
   await pageA.goto('about:blank')
   await pageA.goto(`/#/share?code=${encodeURIComponent(codeB)}`)
 
@@ -157,9 +158,42 @@ test('a scanned share link prefills the confirm box, surviving a locked-vault re
   await expect(pageA.getByTestId('confirm-share')).toBeVisible()
   await expect(pageA.getByTestId('parsed-fingerprint')).toBeVisible()
 
-  // The param is consumed and stripped, so a refresh won't re-trigger it.
-  await expect(pageA).toHaveURL(/#\/share$/)
+  // The `#/share?code=…` link is redirected into the people screen and the
+  // param is consumed and stripped, so a refresh won't re-trigger it.
+  await expect(pageA).toHaveURL(/#\/share\/people$/)
 
   await contextA.close()
   await contextB.close()
+})
+
+test('the sharing home reaches both audiences: cards with counts, plus the Home chip', async ({
+  page,
+}) => {
+  await onboardViaUI(page)
+  await connectRelayViaUI(page)
+
+  // The Home switcher chip is the front door — visible on a fresh vault.
+  await expect(page.getByTestId('nav-share')).toBeVisible()
+  await page.getByTestId('nav-share').click()
+  await expect(page).toHaveURL(/#\/share$/)
+
+  // Both navigation cards render, each with its zero-state count sub-line.
+  await expect(page.getByTestId('card-people')).toBeVisible()
+  await expect(page.getByTestId('card-doctor')).toBeVisible()
+  await expect(page.getByTestId('people-counts')).toContainText('0 active grants')
+  await expect(page.getByTestId('people-counts')).toContainText('0 shared with you')
+  await expect(page.getByTestId('doctor-counts')).toContainText('0 links')
+  await expect(page.getByTestId('doctor-counts')).toContainText('0 active')
+
+  // The cards route to their respective screens.
+  await page.getByTestId('card-people').click()
+  await expect(page).toHaveURL(/#\/share\/people$/)
+  await expect(page.getByTestId('my-code')).toBeVisible()
+
+  await page.evaluate(() => {
+    window.location.hash = '#/share'
+  })
+  await page.getByTestId('card-doctor').click()
+  await expect(page).toHaveURL(/#\/share\/doctor$/)
+  await expect(page.getByTestId('doctor-empty')).toBeVisible()
 })

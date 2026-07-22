@@ -59,9 +59,7 @@ export async function connectRelayViaUI(page: Page, relayUrl: string = RELAY): P
   await page.getByTestId('relay-url').fill(relayUrl)
   await page.getByTestId('relay-connect').click()
   await expect(page.getByTestId('sync-pending')).toBeVisible()
-  // Sub-screens don't get their own "← Back"; the top nav's fallback button
-  // (still labelled "Settings") goes up to the hub, one more back reaches Home.
-  await page.getByTestId('nav-settings').click()
+  // The header's Back button on any sub-screen returns straight to Home.
   await page.getByTestId('nav-back').click()
 }
 

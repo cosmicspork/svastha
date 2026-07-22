@@ -1,17 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
   import { navigate } from '../lib/router.svelte'
-  import { get } from '../lib/db'
-
-  // Sharing has no home of its own yet — its hub row is a stopgap until a
-  // follow-up sharing-IA pass gives it one. Reads the relay pref directly
-  // (rather than depending on Sync's screen) since a relay connection is the
-  // only thing sharing itself needs to be reachable.
-  let relayConnected = $state(false)
-  onMount(async () => {
-    const stored = await get<string>('prefs', 'relayUrl')
-    relayConnected = !!stored
-  })
 </script>
 
 <h1>Settings</h1>
@@ -60,19 +48,6 @@
     </span>
     <span class="hub-chevron" aria-hidden="true">›</span>
   </button>
-
-  {#if relayConnected}
-    <!-- TEMPORARY: sharing has no hub of its own yet — this is the only entry
-         point until a follow-up sharing-IA PR relocates it. -->
-    <button class="hub-row" onclick={() => navigate('#/share')} data-testid="nav-share">
-      <span class="hub-glyph" aria-hidden="true">⚭</span>
-      <span class="hub-text">
-        <span class="hub-title">Sharing</span>
-        <span class="hub-sub muted">Give your partner ongoing, read-only access</span>
-      </span>
-      <span class="hub-chevron" aria-hidden="true">›</span>
-    </button>
-  {/if}
 
   <button class="hub-row" onclick={() => navigate('#/settings/about')} data-testid="settings-row-about">
     <span class="hub-glyph" aria-hidden="true">◦</span>

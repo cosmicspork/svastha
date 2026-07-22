@@ -12,9 +12,9 @@ test('create a doctor share and fetch the sealed bundle from the relay', async (
   await logBP(page, '128', '82')
 
   await page.evaluate(() => {
-    window.location.hash = '#/share'
+    window.location.hash = '#/share/doctor'
   })
-  await page.getByTestId('open-doctor-share').click()
+  await page.getByTestId('new-doctor-link').click()
 
   // Default scope (everything), default 7-day expiry.
   await page.getByTestId('share-create').click()
@@ -70,8 +70,8 @@ test('create a doctor share and fetch the sealed bundle from the relay', async (
   expect(bundle.firstAuthorIsHex).toBe(true)
 
   // Revoke, and the relay stops serving the bundle (410 Gone). The manage list
-  // lives on the create screen, so step back from the result screen first.
-  await page.getByTestId('share-another').click()
+  // lives on the Doctor screen now, so close the sheet (Done) to reveal it.
+  await page.getByTestId('share-done').click()
   await page.getByTestId(`revoke-${token}`).click()
   await expect(page.getByTestId(`share-status-${token}`)).toHaveText('revoked')
   const afterRevoke = await page.request.get(`${RELAY}/v0/share/${token}`, { failOnStatusCode: false })
@@ -102,9 +102,9 @@ test('doctor share opt-in: cycle is excluded by default and included only when t
   })
 
   await page.evaluate(() => {
-    window.location.hash = '#/share'
+    window.location.hash = '#/share/doctor'
   })
-  await page.getByTestId('open-doctor-share').click()
+  await page.getByTestId('new-doctor-link').click()
 
   // Default scope (all non-sensitive chips selected, opt-in off): the preview
   // carries no cycle section.
@@ -171,9 +171,9 @@ test('doctor share: create in one browser, read decrypted data in a fresh one, t
   await logFood(ownerPage, 'oatmeal')
 
   await ownerPage.evaluate(() => {
-    window.location.hash = '#/share'
+    window.location.hash = '#/share/doctor'
   })
-  await ownerPage.getByTestId('open-doctor-share').click()
+  await ownerPage.getByTestId('new-doctor-link').click()
   await ownerPage.getByTestId('share-create').click()
 
   await expect(ownerPage.getByTestId('share-link')).toBeVisible()
@@ -197,9 +197,9 @@ test('doctor share: create in one browser, read decrypted data in a fresh one, t
   await expect(doctorPage.getByTestId('generate-mnemonic')).toHaveCount(0)
   await expect(doctorPage.getByTestId('nav-settings')).toHaveCount(0)
 
-  // Owner revokes from the manage list (step back from the result screen
-  // first, same as the create-only test above).
-  await ownerPage.getByTestId('share-another').click()
+  // Owner revokes from the manage list on the Doctor screen (close the result
+  // sheet with Done first, same as the create-only test above).
+  await ownerPage.getByTestId('share-done').click()
   await ownerPage.getByTestId(`revoke-${token}`).click()
   await expect(ownerPage.getByTestId(`share-status-${token}`)).toHaveText('revoked')
 
@@ -211,4 +211,51 @@ test('doctor share: create in one browser, read decrypted data in a fresh one, t
 
   await ownerContext.close()
   await doctorContext.close()
+})
+
+// The split puts management first: existing links live on the Doctor screen,
+// not behind the create sheet. A fresh visit lists them and revokes in place —
+// no need to open "New link" at all.
+test('the Doctor screen lists and revokes an existing link without opening the create sheet', async ({
+  page,
+}) => {
+  await onboardViaUI(page)
+  await connectRelayViaUI(page)
+  await logBP(page, '118', '76')
+
+  // Mint one link, then close the sheet so only the manage list remains.
+  await page.evaluate(() => {
+    window.location.hash = '#/share/doctor'
+  })
+  await page.getByTestId('new-doctor-link').click()
+  await page.getByTestId('share-create').click()
+  await expect(page.getByTestId('share-link')).toBeVisible()
+  const link = (await page.getByTestId('share-link').innerText()).trim()
+  const token = link.split('/#/s/')[1].split('.')[0]
+  await page.getByTestId('share-done').click()
+
+  // Re-enter the screen cold: the create sheet is not open (no create button on
+  // screen), yet the link is listed and shows the honest revocation caveat.
+  await page.evaluate(() => {
+    window.location.hash = '#/'
+  })
+  await page.evaluate(() => {
+    window.location.hash = '#/share/doctor'
+  })
+  await expect(page.getByTestId(`share-status-${token}`)).toHaveText('active')
+  await expect(page.getByTestId('share-create')).toHaveCount(0)
+  await expect(page.getByTestId('doctor-honest')).toBeVisible()
+
+  // Copy link and Show QR work straight from the list.
+  await expect(page.getByTestId(`reshow-copy-${token}`)).toBeVisible()
+  await page.getByTestId(`reshow-qr-${token}`).click()
+  await expect(page.getByTestId(`reshow-qr-svg-${token}`).locator('svg')).toBeVisible()
+
+  // Revoke in place — the row flips to revoked and the relay stops serving it.
+  await page.getByTestId(`revoke-${token}`).click()
+  await expect(page.getByTestId(`share-status-${token}`)).toHaveText('revoked')
+  const afterRevoke = await page.request.get(`${RELAY}/v0/share/${token}`, {
+    failOnStatusCode: false,
+  })
+  expect(afterRevoke.status()).toBe(410)
 })
