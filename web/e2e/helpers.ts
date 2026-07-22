@@ -63,6 +63,16 @@ export async function connectRelayViaUI(page: Page, relayUrl: string = RELAY): P
   await page.getByTestId('nav-back').click()
 }
 
+/** Wait (on Settings' Sync & devices sub-screen) until the outbox is fully
+ * pushed, then return to Home. A sub-screen's header shows only Back, never
+ * Settings (see AppHeader.svelte), so a single Back click reaches Home. */
+export async function waitForPushed(page: Page): Promise<void> {
+  await page.getByTestId('nav-settings').click()
+  await page.getByTestId('settings-row-sync').click()
+  await expect(page.getByTestId('sync-pending')).toHaveText('0')
+  await page.getByTestId('nav-back').click()
+}
+
 /** Drive the Restore tab: seed phrase, passphrase, and (optionally) a relay
  * URL to restore records from. Lands unlocked on Home. */
 export async function restoreViaUI(
