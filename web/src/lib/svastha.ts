@@ -6,6 +6,7 @@
 import init, {
   contract_version,
   verify_event,
+  verify_curation,
   import_ccda,
   import_fhir,
   event_id,
@@ -20,4 +21,13 @@ export function initSvastha(): Promise<void> {
   return (ready ??= init().then(() => undefined))
 }
 
-export { contract_version, verify_event, import_ccda, import_fhir, event_id, WasmIdentity, WasmDataKey }
+export {
+  contract_version,
+  verify_event,
+  verify_curation,
+  import_ccda,
+  import_fhir,
+  event_id,
+  WasmIdentity,
+  WasmDataKey,
+}

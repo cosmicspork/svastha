@@ -9,6 +9,8 @@
     emptyText = '',
     dictionaryEnabled = false,
     readonly = false,
+    heading = 'h2',
+    onrowtap,
   }: {
     title: string
     rows: SummaryRow[]
@@ -24,7 +26,18 @@
     /** True for a recipient's read-only render (doctor-share preview / Person
      * view), which has no Settings screen to point the "download it" hint at. */
     readonly?: boolean
+    /** The section heading level. A sub-group (Current/Past, Active/Resolved)
+     * renders `h3` under the parent's `h2`; standalone sections keep `h2`. */
+    heading?: 'h2' | 'h3'
+    /** Owner-only: makes each row a tappable target that opens the status/name
+     * action sheet. Absent (or in `readonly` mode) leaves rows inert, exactly
+     * as they render today. */
+    onrowtap?: (row: SummaryRow) => void
   } = $props()
+
+  // A tap target only when the owner wired one up and this isn't a recipient's
+  // read-only view (curation is owner-only in v1 — see ClinicianSummary).
+  const interactive = $derived(!readonly && onrowtap !== undefined)
 
   /** date-part only, parsed as local midnight to avoid a timezone shift on a
    * date-only clinical fact; year included because onset/result years matter. */
@@ -48,16 +61,33 @@
 
 {#if rows.length > 0 || alwaysShow}
   <section class="section" data-testid="summary-section-{title.toLowerCase().replace(/\s+/g, '-')}">
-    <h2 class="section-head">
+    <svelte:element this={heading} class="section-head" class:sub={heading === 'h3'}>
       <span class="dot {hueClass}" aria-hidden="true"></span>
       {title}
-    </h2>
+    </svelte:element>
     {#if rows.length === 0}
       <p class="empty muted" data-testid="summary-empty">{emptyText}</p>
     {:else}
       <ul class="rows">
         {#each rows as row (row.key)}
-          <li class="row" data-testid="summary-row">
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <li
+            class="row"
+            class:tappable={interactive}
+            data-testid="summary-row"
+            data-status={row.status}
+            role={interactive ? 'button' : undefined}
+            tabindex={interactive ? 0 : undefined}
+            onclick={interactive ? () => onrowtap?.(row) : undefined}
+            onkeydown={interactive
+              ? (e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onrowtap?.(row)
+                  }
+                }
+              : undefined}
+          >
             <span class="label-stack">
               {#if row.coding && !row.nameResolved}
                 <span class="label" data-testid="summary-label"
@@ -103,6 +133,17 @@
     margin-bottom: var(--space-2);
   }
 
+  /* A Current/Past or Active/Resolved sub-group heading: smaller and quieter
+     than the parent section's h2, and no leading dot (the parent carries it). */
+  .section-head.sub {
+    font-size: var(--text-md);
+    margin-bottom: var(--space-1);
+  }
+
+  .section-head.sub .dot {
+    display: none;
+  }
+
   .dot {
     flex: none;
     width: 10px;
@@ -135,6 +176,21 @@
     gap: var(--space-2);
     padding: var(--space-1) 0;
     border-bottom: 1px solid var(--border);
+  }
+
+  /* An owner-tappable row: a wider hit area, a pointer, and a quiet hover/focus
+     tint so it reads as an action target without shouting. */
+  .row.tappable {
+    cursor: pointer;
+    padding: var(--space-2) var(--space-2);
+    margin: 0 calc(-1 * var(--space-2));
+    border-radius: var(--radius-sm);
+  }
+
+  .row.tappable:hover,
+  .row.tappable:focus-visible {
+    background: var(--surface-2, var(--elevated, rgba(127, 127, 127, 0.08)));
+    outline: none;
   }
 
   .label-stack {

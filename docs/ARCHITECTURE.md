@@ -140,9 +140,16 @@ author }` — plus a `signature`:
 - `key` namespaces what's being curated: `tag:{event_id}` (`{ tags: string[]
   }`), `note:{event_id}` (`{ text }`), `hide:{event_id}` (`{ hidden: true }`),
   and `fav:{category}:{hash}` (a favorited draft template, keyed on a hash of
-  its label — see below); concept-level `status:` and `name:` records arrive
-  with the web adoption. `core` is namespace-agnostic — the key is an opaque
-  string to the contract, so new namespaces need no contract change.
+  its label — see below). The web client also curates folded *clinical
+  concepts* (every event sharing a `{kind}|{system}|{code}`, the summary's
+  grouping key): `status:{kind}|{system}|{code}` (`{ status: 'active' |
+  'inactive' }` — a medication's current/past or a problem's active/resolved,
+  defaulting to active) and `name:{kind}|{system}|{code}` (`{ display }` — the
+  owner's display-name override, the top of the render-time name chain above
+  the event's own display, the vault name index, and the dictionary; a cleared
+  override is an empty display, not a delete, since the sync model has none).
+  `core` is namespace-agnostic — the key is an opaque string to the contract,
+  so new namespaces need no contract change.
 - `value` is namespace-defined and opaque to both the signature and the merge
   rule below. For signing it is reduced to canonical JSON (compact, object keys
   sorted), so the same logical value always signs identically.
@@ -174,6 +181,25 @@ the old "deliberately unsigned" design flagged to revisit. This wave is that
 revisit: signing by the same owner identity that signs events settles both,
 and puts the record type, its canonical bytes, sign, verify, and merge in the
 trust contract so web and any future client share one implementation.
+
+**Adoption and migration.** The web client signs every curation write and, on
+pull, **verifies-or-drops**: a record bearing a signature that fails
+verification is dropped (the point of signing — a share recipient or a second
+writer can no longer trust the AEAD seal alone), while a record with no
+signature is **grandfathered** through the LWW merge (a device that predates
+signing may still be pushing unsigned records) and re-signed on its next local
+write. A one-time migration, run on first unlock after the update, re-signs
+every pre-signing local record **in place**: because `sign_curation` stamps
+`author` from the identity, only a record the owner already authored is
+touched, and its `updated_at` and `author` are preserved exactly — content
+identical, a signature added. That preservation is what makes the migration
+LWW-safe: when the re-signed blob is re-pushed over its existing `cur-` id, a
+concurrent device sees an exact merge tie (same `updated_at`, same `author`),
+so the migration can never be read as a newer write nor override a genuinely
+newer edit made elsewhere. The merge itself stays a pure function shared with
+`core` (the web client keeps a TS twin rather than calling the wasm binding
+per-merge, so it can also merge a still-unsigned record during the transition,
+which the signature-requiring binding cannot).
 
 **Sync.** Curation records use the `cur-{sha256_hex(key)}` blob id (see the
 namespace table below) and, unlike `ev-`/`doc-` blobs, are **mutable**: a

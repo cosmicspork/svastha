@@ -1,15 +1,25 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { allEvents, type StoredEvent } from '../lib/events'
-  import { allCurationByPrefix } from '../lib/curation'
-  import { buildSummary } from '../lib/summary'
+  import {
+    allCurationByPrefix,
+    allStatuses,
+    allNames,
+    setStatus,
+    setName,
+    type ConceptStatus,
+  } from '../lib/curation'
+  import { buildSummary, type SummaryRow } from '../lib/summary'
   import { loadDictionaryIndex, dictionaryStatus } from '../lib/dictionary'
   import SummarySection from './SummarySection.svelte'
+  import Sheet from './Sheet.svelte'
 
   // Same contract as Spine.svelte: `readonly` (the person screen, over a
   // share's cached events) supplies its own already-loaded events and skips the
-  // own-vault fetch and all curation reads — curation (including hides) is
-  // owner-only in v1 (see docs/ARCHITECTURE.md, "Sync and backup").
+  // own-vault fetch and all curation reads — curation (status, names, hides) is
+  // owner-only in v1 (see docs/ARCHITECTURE.md, "Curation overlay"). A recipient
+  // therefore sees every med/problem as one flat, non-tappable section, exactly
+  // as before this change.
   let {
     events: providedEvents,
     readonly = false,
@@ -17,6 +27,8 @@
 
   let ownEvents = $state<StoredEvent[]>([])
   let hiddenIds = $state<Set<string>>(new Set())
+  let statusMap = $state<Map<string, ConceptStatus>>(new Map())
+  let nameMap = $state<Map<string, string>>(new Map())
   let loaded = $state(false)
 
   const events = $derived(readonly ? (providedEvents ?? []) : ownEvents)
@@ -31,8 +43,58 @@
   })
 
   const summary = $derived(
-    buildSummary(events, readonly ? { dictionary } : { hiddenIds, dictionary }),
+    buildSummary(
+      events,
+      readonly ? { dictionary } : { hiddenIds, dictionary, status: statusMap, names: nameMap },
+    ),
   )
+
+  // Meds split into current / past; problems into active / resolved. Same
+  // underlying `status` ('active' | 'inactive'), different clinician wording.
+  // Read-only (recipient) rows are all 'active', so "past"/"resolved" stay
+  // empty and their groups don't render.
+  const currentMeds = $derived(summary.medications.filter((r) => r.status === 'active'))
+  const pastMeds = $derived(summary.medications.filter((r) => r.status === 'inactive'))
+  const activeProblems = $derived(summary.problems.filter((r) => r.status === 'active'))
+  const resolvedProblems = $derived(summary.problems.filter((r) => r.status === 'inactive'))
+
+  let pastMedsOpen = $state(false)
+  let resolvedOpen = $state(false)
+
+  // The row-action sheet: which row was tapped and which section it belongs to
+  // (meds vs. problems drives the status wording). Null when closed.
+  type Section = 'med' | 'problem'
+  let action = $state<{ row: SummaryRow; section: Section } | null>(null)
+  let nameField = $state('')
+
+  function openAction(row: SummaryRow, section: Section) {
+    nameField = nameMap.get(row.key) ?? ''
+    action = { row, section }
+  }
+
+  function closeAction() {
+    action = null
+  }
+
+  /** Re-read the status/name overlay after a write so the derived summary
+   * re-splits and re-labels — the same way the dictionary effect re-hydrates. */
+  async function reloadCuration() {
+    ;[statusMap, nameMap] = await Promise.all([allStatuses(), allNames()])
+  }
+
+  async function toggleStatus(row: SummaryRow) {
+    await setStatus(row.key, row.status === 'active' ? 'inactive' : 'active')
+    await reloadCuration()
+    closeAction()
+  }
+
+  async function saveName(row: SummaryRow) {
+    // An empty field clears the override (stored as an empty display, not a
+    // delete — see curation.ts's `setName`), falling back to the resolved name.
+    await setName(row.key, nameField)
+    await reloadCuration()
+    closeAction()
+  }
 
   /** date-part only, parsed as local midnight to avoid a timezone shift on a
    * date-only fact — same convention SummarySection uses. */
@@ -55,6 +117,7 @@
         .filter((r) => (r.value as { hidden?: boolean } | undefined)?.hidden === true)
         .map((r) => r.key.slice('hide:'.length)),
     )
+    await reloadCuration()
     loaded = true
   })
 </script>
@@ -67,20 +130,92 @@
       </button>
     </div>
 
-    <SummarySection
-      title="Problems"
-      rows={summary.problems}
-      hueClass="cat-clinical"
-      dictionaryEnabled={$dictionaryStatus.enabled}
-      {readonly}
-    />
-    <SummarySection
-      title="Medications"
-      rows={summary.medications}
-      hueClass="cat-med"
-      dictionaryEnabled={$dictionaryStatus.enabled}
-      {readonly}
-    />
+    {#if readonly}
+      <SummarySection
+        title="Problems"
+        rows={summary.problems}
+        hueClass="cat-clinical"
+        dictionaryEnabled={$dictionaryStatus.enabled}
+        {readonly}
+      />
+      <SummarySection
+        title="Medications"
+        rows={summary.medications}
+        hueClass="cat-med"
+        dictionaryEnabled={$dictionaryStatus.enabled}
+        {readonly}
+      />
+    {:else}
+      <!-- Problems: Active (always shown) then a collapsed Resolved group. -->
+      <div class="split-group">
+        <SummarySection
+          title="Problems"
+          rows={activeProblems}
+          hueClass="cat-clinical"
+          alwaysShow
+          emptyText="None recorded"
+          dictionaryEnabled={$dictionaryStatus.enabled}
+          onrowtap={(row) => openAction(row, 'problem')}
+        />
+        {#if resolvedProblems.length > 0}
+          <button
+            type="button"
+            class="ghost collapse-toggle"
+            aria-expanded={resolvedOpen}
+            onclick={() => (resolvedOpen = !resolvedOpen)}
+            data-testid="problems-resolved-toggle"
+          >
+            {resolvedOpen ? 'Hide' : 'Show'}
+            {resolvedProblems.length} resolved
+          </button>
+          {#if resolvedOpen}
+            <SummarySection
+              title="Resolved"
+              rows={resolvedProblems}
+              hueClass="cat-clinical"
+              heading="h3"
+              dictionaryEnabled={$dictionaryStatus.enabled}
+              onrowtap={(row) => openAction(row, 'problem')}
+            />
+          {/if}
+        {/if}
+      </div>
+
+      <!-- Medications: Current (always shown) then a collapsed Past group. -->
+      <div class="split-group">
+        <SummarySection
+          title="Medications"
+          rows={currentMeds}
+          hueClass="cat-med"
+          alwaysShow
+          emptyText="None recorded"
+          dictionaryEnabled={$dictionaryStatus.enabled}
+          onrowtap={(row) => openAction(row, 'med')}
+        />
+        {#if pastMeds.length > 0}
+          <button
+            type="button"
+            class="ghost collapse-toggle"
+            aria-expanded={pastMedsOpen}
+            onclick={() => (pastMedsOpen = !pastMedsOpen)}
+            data-testid="meds-past-toggle"
+          >
+            {pastMedsOpen ? 'Hide' : 'Show'}
+            {pastMeds.length} past
+          </button>
+          {#if pastMedsOpen}
+            <SummarySection
+              title="Past"
+              rows={pastMeds}
+              hueClass="cat-med"
+              heading="h3"
+              dictionaryEnabled={$dictionaryStatus.enabled}
+              onrowtap={(row) => openAction(row, 'med')}
+            />
+          {/if}
+        {/if}
+      </div>
+    {/if}
     <SummarySection
       title="Allergies"
       rows={summary.allergies}
@@ -158,6 +293,37 @@
       source left uncoded are not included.
     </p>
   </div>
+
+  {#if action && !readonly}
+    {@const row = action.row}
+    {@const isMed = action.section === 'med'}
+    <Sheet onclose={closeAction}>
+      <div class="action-sheet" data-testid="row-action-sheet">
+        <h2 class="action-title">{row.label}</h2>
+
+        <button type="button" class="tonal action" onclick={() => toggleStatus(row)} data-testid="action-toggle-status">
+          {#if row.status === 'active'}
+            {isMed ? 'Mark as past' : 'Mark as resolved'}
+          {:else}
+            {isMed ? 'Mark as current' : 'Mark as active'}
+          {/if}
+        </button>
+
+        <label class="name-field">
+          <span class="name-label">Edit name</span>
+          <input type="text" bind:value={nameField} placeholder={row.label} data-testid="action-name-input" />
+          <span class="name-hint muted">Clear the field to remove a custom name.</span>
+        </label>
+
+        <div class="action-buttons">
+          <button type="button" class="ghost" onclick={closeAction} data-testid="action-cancel">Cancel</button>
+          <button type="button" class="primary" onclick={() => saveName(row)} data-testid="action-save-name">
+            Save name
+          </button>
+        </div>
+      </div>
+    </Sheet>
+  {/if}
 {/if}
 
 <style>
@@ -171,6 +337,61 @@
     min-height: 36px;
     min-width: 0;
     font-size: var(--text-sm);
+  }
+
+  /* The Current+Past / Active+Resolved pairing: the inner SummarySection
+     already carries the section's bottom margin, so the group is a bare wrapper
+     that keeps the collapsed group's toggle and rows tucked under their parent. */
+  .split-group {
+    margin-bottom: var(--space-5);
+  }
+
+  .split-group :global(.section) {
+    margin-bottom: var(--space-2);
+  }
+
+  .collapse-toggle {
+    min-height: 36px;
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--text-sm);
+    margin-bottom: var(--space-2);
+  }
+
+  .action-sheet {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .action-title {
+    font-family: var(--font-display);
+    font-size: var(--text-lg);
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .action.tonal {
+    width: 100%;
+  }
+
+  .name-field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .name-label {
+    font-size: var(--text-sm);
+  }
+
+  .name-hint {
+    font-size: var(--text-xs);
+  }
+
+  .action-buttons {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
   }
 
   .coverage {
