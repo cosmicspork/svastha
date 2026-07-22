@@ -24,7 +24,21 @@ export interface SummaryRow {
    * on import); uncoded entries fall back to their text value in the code slot
    * so distinct free-text meds don't collapse into one row. */
   key: string
+  /** The primary display: a resolved name, free text, or — when a coded
+   * concept resolved to nothing — the literal "Unnamed entry" (never the raw
+   * code; see `coding` for that). */
   label: string
+  /** The row's terminology coding — shortened system (via `shortenSystem`) and
+   * code — present whenever the concept is coded, whether or not it resolved
+   * to a name. Null for free-text and kind-word fallback rows, which have no
+   * code to show. Carried as data so the view decides how prominently to show
+   * it (demoted under a resolved name, or promoted next to "Unnamed entry"). */
+  coding: { system: string; code: string } | null
+  /** False exactly when `label` is the "Unnamed entry" placeholder — i.e. the
+   * concept is coded but nothing (own display, vault index, dictionary) named
+   * it. True for every other row, including free text and kind-word labels,
+   * which are real labels even though they're not a resolved coded name. */
+  nameResolved: boolean
   /** Formatted value / dose count / '' — the measurement or context the label
    * doesn't already carry. */
   detail: string
@@ -65,18 +79,29 @@ function textOf(e: Ev): string | null {
   return e.value && 'text' in e.value ? e.value.text : null
 }
 
+interface ResolvedLabel {
+  label: string
+  coding: { system: string; code: string } | null
+  nameResolved: boolean
+}
+
 /** Fallback chain: coded display -> allergy substance display (both via the
  * coding's `display`) -> a display resolved from the same code elsewhere in
- * the vault (see code-names.ts) -> shortened system + code -> the humanized
- * kind word. Free text (a quick-logged med) slots in ahead of the bare kind so
- * it stays readable. Never blank. */
-function labelFor(e: Ev, nameIndex: Map<string, string>, dictionary: Map<string, string>): string {
+ * the vault (see code-names.ts) -> the offline dictionary -> "Unnamed entry",
+ * with the coding carried alongside so the view can still show it. Free text
+ * (a quick-logged med) slots in ahead of the bare kind so it stays readable.
+ * Label is never blank. */
+function resolveLabel(e: Ev, nameIndex: Map<string, string>, dictionary: Map<string, string>): ResolvedLabel {
   const coding = codingFor(e)
-  if (coding?.display) return coding.display
-  if (coding) return resolveDisplay(nameIndex, coding, dictionary) ?? `${shortenSystem(coding.system)} ${coding.code}`
+  if (coding) {
+    const shortCoding = { system: shortenSystem(coding.system), code: coding.code }
+    const display = coding.display ?? resolveDisplay(nameIndex, coding, dictionary)
+    if (display) return { label: display, coding: shortCoding, nameResolved: true }
+    return { label: 'Unnamed entry', coding: shortCoding, nameResolved: false }
+  }
   const text = textOf(e)
-  if (text) return text
-  return e.kind.replace(/_/g, ' ')
+  if (text) return { label: text, coding: null, nameResolved: true }
+  return { label: e.kind.replace(/_/g, ' '), coding: null, nameResolved: true }
 }
 
 /** The grouping key. Uncoded entries key on their text so two distinct
@@ -141,9 +166,12 @@ function foldSection(
   const rows: SummaryRow[] = []
   for (const [key, group] of groups) {
     const ls = labelSource(group)
+    const resolved = resolveLabel(ls, nameIndex, dictionary)
     rows.push({
       key,
-      label: labelFor(ls, nameIndex, dictionary),
+      label: resolved.label,
+      coding: resolved.coding,
+      nameResolved: resolved.nameResolved,
       detail: detailFor(ls, group),
       date: representativeDate(group, dateStrategy),
       count: group.length,
@@ -192,6 +220,11 @@ function buildVitals(observations: Ev[]): SummaryRow[] {
       rows.push({
         key: `observation|${BP_SYSTOLIC.system}|${BP_SYSTOLIC.code}`,
         label: 'Blood pressure',
+        // The paired systolic/diastolic label is bespoke ("Blood pressure"),
+        // not the systolic code's own display — no single coding identifies
+        // it, so there's nothing accurate to show demoted beneath it.
+        coding: null,
+        nameResolved: true,
         detail,
         date: rep?.effective_at ?? null,
         count: sys.length + dia.length,
@@ -204,6 +237,8 @@ function buildVitals(observations: Ev[]): SummaryRow[] {
       rows.push({
         key: `observation|${def.loinc.system}|${def.loinc.code}`,
         label: def.label,
+        coding: { system: shortenSystem(def.loinc.system), code: def.loinc.code },
+        nameResolved: true,
         detail: quantityString(latest),
         date: latest.effective_at,
         count: evs.length,
