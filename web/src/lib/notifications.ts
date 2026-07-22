@@ -167,15 +167,23 @@ export async function clearNotifications(): Promise<void> {
   await clear(STORE)
 }
 
-/** The shape a follow-up PWA-update PR calls when a new service worker is
- * waiting — no service-worker wiring here, just the stable entry point. The id
- * is keyed by the version so one waiting build yields one reminder. */
+/** Called by main.ts when the service worker's onNeedRefresh fires — no
+ * service-worker wiring here, just the stable entry point. `version` is the
+ * *currently running* build's `__APP_VERSION__`, not the new one: the old
+ * bundle can't know what version it's being replaced by (that's baked into
+ * the new bundle it hasn't fetched yet), so the id is keyed by what's running
+ * now. That's still exactly the dedupe this needs — one waiting build yields
+ * one reminder, and relaunching onto the new version naturally opens the door
+ * to a distinct id for whatever comes after it. NotificationSheet special-cases
+ * `kind: 'app-update'` to open UpdateSheet (which fetches changelog.json fresh
+ * to learn the new version) rather than following `data.href`. */
 export function notifyAppUpdate(version: string): Promise<void> {
   return addNotification({
     id: `app-update:${version}`,
     kind: 'app-update',
-    title: 'A new version of Svastha is ready',
-    body: 'Reopen the app to update.',
+    title: 'Svastha update ready',
+    body: 'Tap to see what’s new, then relaunch.',
     createdAt: new Date().toISOString(),
+    data: { version },
   })
 }

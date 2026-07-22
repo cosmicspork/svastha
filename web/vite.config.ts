@@ -16,14 +16,24 @@ export default defineConfig({
   plugins: [
     svelte(),
     VitePWA({
-      registerType: 'autoUpdate',
+      // 'prompt' (not 'autoUpdate'): a new build must not swap the running
+      // bundle out from under the user silently. main.ts's onNeedRefresh
+      // surfaces a notification instead, and the user relaunches on their own
+      // terms via UpdateSheet's "Relaunch now".
+      registerType: 'prompt',
       workbox: {
         // The offline code dictionary under /dict/ is opt-in and multi-MB; it
         // must NOT ride the install-time precache. JSON is already outside
         // globPatterns, and this ignore makes that exclusion explicit and
         // future-proof (dictionary.ts fetches these on demand instead).
+        //
+        // changelog.json is excluded for a different reason: it's regenerated
+        // fresh on every deploy (see scripts/build-changelog) and must always
+        // come from the network — the whole point of UpdateSheet's fetch is
+        // to learn what the *newly deployed* bundle contains, and a precached
+        // copy would just echo back this same build's own notes.
         globPatterns: ['**/*.{js,css,html,wasm,woff2,png,svg,ico}'],
-        globIgnores: ['**/dict/**'],
+        globIgnores: ['**/dict/**', '**/changelog.json'],
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
       },
       manifest: {

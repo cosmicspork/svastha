@@ -2,12 +2,17 @@
   import { navigate } from '../lib/router.svelte'
   import { unreadCount } from '../lib/notifications'
   import NotificationSheet from './NotificationSheet.svelte'
+  import UpdateSheet from './UpdateSheet.svelte'
 
   // The app shell decides visibility (see App.svelte). The only per-route choice
   // the header itself makes is Back vs. Settings on the right, driven by this.
   let { showBack = false }: { showBack?: boolean } = $props()
 
   let sheetOpen = $state(false)
+  // Set (to the running version) when the app-update notification is tapped;
+  // null otherwise. Lifted here rather than owned by NotificationSheet so it
+  // can stay open after that sheet closes.
+  let updateRunningVersion = $state<string | null>(null)
 
   // Cap the badge so a runaway count never blows out the header width.
   const badge = $derived($unreadCount > 99 ? '99+' : String($unreadCount))
@@ -64,7 +69,14 @@
 </header>
 
 {#if sheetOpen}
-  <NotificationSheet onclose={() => (sheetOpen = false)} />
+  <NotificationSheet
+    onclose={() => (sheetOpen = false)}
+    onOpenUpdate={(version) => (updateRunningVersion = version)}
+  />
+{/if}
+
+{#if updateRunningVersion}
+  <UpdateSheet runningVersion={updateRunningVersion} onclose={() => (updateRunningVersion = null)} />
 {/if}
 
 <style>

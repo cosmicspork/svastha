@@ -4,10 +4,19 @@
   import { notifications, markRead, type Notification } from '../lib/notifications'
   import { relativeTime } from '../lib/time'
 
-  let { onclose }: { onclose: () => void } = $props()
+  let { onclose, onOpenUpdate }: { onclose: () => void; onOpenUpdate: (version: string) => void } =
+    $props()
 
   async function tap(n: Notification): Promise<void> {
     await markRead(n.id)
+    // app-update opens the release-notes sheet instead of following a href —
+    // there's nowhere in the route tree for "what's new", and the sheet needs
+    // the running version (carried on data.version) to know what counts as new.
+    if (n.kind === 'app-update' && typeof n.data?.version === 'string') {
+      onclose()
+      onOpenUpdate(n.data.version)
+      return
+    }
     const href = n.data?.href
     onclose()
     if (href) navigate(href)
