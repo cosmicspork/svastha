@@ -238,6 +238,41 @@
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
   }
 
+  /** "RxNorm ✓ ICD-10 … CVX ✗" — the per-file checkmark line shared by the
+   * downloading, failed, and installed views. */
+  function fileChecklist(statuses: { label: string; state: string }[]): string {
+    return statuses
+      .map((f) => `${f.label} ${f.state === 'verified' ? '✓' : f.state === 'failed' ? '✗' : '…'}`)
+      .join(' ')
+  }
+
+  function joinList(items: string[]): string {
+    if (items.length === 0) return ''
+    if (items.length === 1) return items[0]
+    if (items.length === 2) return `${items[0]} and ${items[1]}`
+    return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`
+  }
+
+  /** "ICD-10 (8.2 MB) failed to verify. RxNorm and CVX are saved — retry
+   * continues from ICD-10." Reads the store directly rather than taking a
+   * parameter so it always reflects the latest attempt. */
+  function dictFailedBody(): string {
+    const failed = $dictionaryStatus.failedFile
+    if (!failed) return 'Something went wrong. Try again.'
+    const saved = $dictionaryStatus.fileStatuses.filter((f) => f.state === 'verified').map((f) => f.label)
+    const savedText = saved.length
+      ? `${joinList(saved)} ${saved.length === 1 ? 'is' : 'are'} saved — retry continues from ${failed.label}.`
+      : `Retry will start from ${failed.label}.`
+    return `${failed.label} (${formatMb(failed.bytes)}) failed to verify. ${savedText}`
+  }
+
+  // True once a download attempt has failed and hasn't yet been retried
+  // successfully. Checked ahead of `enabled` in the template below, because a
+  // failed *update* leaves the previously-installed dictionary marked enabled
+  // — without that ordering the failure would be silently swallowed by the
+  // installed view instead of offering Retry.
+  const dictFailed = $derived($dictionaryStatus.failedFile !== null && !$dictionaryStatus.downloading)
+
   async function previewDictionary() {
     dictError = ''
     dictUpdate = ''
@@ -257,8 +292,14 @@
     try {
       await downloadDictionary(dictManifest ?? (await fetchManifest()))
       dictManifest = null
+      dictUpdate = ''
     } catch (err) {
-      dictError = err instanceof Error ? err.message : 'Download failed.'
+      // A per-file failure is already reflected in $dictionaryStatus
+      // (error + failedFile) and rendered by the failed-state view below;
+      // this only catches fetchManifest() failing before a download starts.
+      if (!$dictionaryStatus.failedFile) {
+        dictError = err instanceof Error ? err.message : 'Could not reach the dictionary.'
+      }
     } finally {
       dictBusy = false
     }
@@ -669,13 +710,34 @@
     against an outside service — and work offline once stored.
   </p>
 
-  {#if $dictionaryStatus.enabled}
+  {#if $dictionaryStatus.downloading}
+    <p data-testid="dict-progress">
+      Downloading{$dictionaryStatus.progress
+        ? ` ${$dictionaryStatus.progress.done} of ${$dictionaryStatus.progress.total}`
+        : ''}…
+    </p>
+    {#if $dictionaryStatus.fileStatuses.length}
+      <p class="muted" data-testid="dict-file-progress">
+        {fileChecklist($dictionaryStatus.fileStatuses)}
+      </p>
+    {/if}
+  {:else if dictFailed}
+    <p class="error" data-testid="dict-failed-title">Download didn't finish</p>
+    <p class="error" data-testid="dict-failed-body">{dictFailedBody()}</p>
+    <button class="primary" onclick={enableDictionary} disabled={dictBusy} data-testid="dict-retry">
+      {dictBusy ? 'Retrying…' : 'Retry'}
+    </button>
+  {:else if $dictionaryStatus.enabled}
     <dl>
       <dt>Version</dt>
       <dd class="data" data-testid="dict-version">{$dictionaryStatus.version}</dd>
       <dt>Names</dt>
       <dd data-testid="dict-entry-count">{$dictionaryStatus.entryCount.toLocaleString()}</dd>
     </dl>
+    <p class="muted" data-testid="dict-installed-summary">
+      {$dictionaryStatus.version} edition · {$dictionaryStatus.entryCount.toLocaleString()} names ·
+      {fileChecklist($dictionaryStatus.fileStatuses)}
+    </p>
     {#if dictUpdate}
       <p class="muted" data-testid="dict-update-status">{dictUpdate}</p>
     {/if}
@@ -692,12 +754,6 @@
         Remove
       </button>
     </div>
-  {:else if $dictionaryStatus.downloading}
-    <p data-testid="dict-progress">
-      Downloading{$dictionaryStatus.progress
-        ? ` ${$dictionaryStatus.progress.done} of ${$dictionaryStatus.progress.total}`
-        : ''}…
-    </p>
   {:else if dictManifest}
     <p data-testid="dict-size">
       {formatMb(manifestBytes(dictManifest))} across {dictManifest.files.length} code sets.

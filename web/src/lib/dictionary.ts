@@ -55,6 +55,17 @@ function fileUrl(path: string): string {
 
 // --- status surface (read by Settings.svelte via `$dictionaryStatus`) ---
 
+export type DictFileState = 'pending' | 'verified' | 'failed'
+
+/** One manifest file's state during/after a download attempt — drives the
+ * per-file checkmarks in Settings (installed, in-flight, and failed views). */
+export interface DictFileStatus {
+  system: string
+  label: string
+  bytes: number
+  state: DictFileState
+}
+
 export interface DictionaryStatus {
   enabled: boolean
   /** Downloaded manifest version, or null when nothing is stored. */
@@ -67,6 +78,15 @@ export interface DictionaryStatus {
   /** Files completed / total during an in-flight download. */
   progress: { done: number; total: number } | null
   error: string | null
+  /** The file whose fetch or checksum failed on the last attempt, paired with
+   * `error`. Null unless the last attempt ended in failure; cleared at the
+   * start of the next attempt and by a successful `refreshDictionaryStatus`. */
+  failedFile: { label: string; bytes: number } | null
+  /** Per-file state for the current or most recent attempt. Populated as
+   * all-verified by `refreshDictionaryStatus` when a manifest is on disk, and
+   * updated file-by-file during `downloadDictionary`. Empty when nothing has
+   * ever been downloaded. */
+  fileStatuses: DictFileStatus[]
 }
 
 const EMPTY_STATUS: DictionaryStatus = {
@@ -77,6 +97,8 @@ const EMPTY_STATUS: DictionaryStatus = {
   downloading: false,
   progress: null,
   error: null,
+  failedFile: null,
+  fileStatuses: [],
 }
 
 export const dictionaryStatus = writable<DictionaryStatus>({ ...EMPTY_STATUS })
@@ -138,6 +160,13 @@ export async function refreshDictionaryStatus(): Promise<void> {
     downloading: false,
     progress: null,
     error: null,
+    failedFile: null,
+    fileStatuses: manifest.files.map((f) => ({
+      system: f.system,
+      label: f.label,
+      bytes: f.bytes,
+      state: 'verified',
+    })),
   })
 }
 
@@ -155,37 +184,107 @@ export function manifestBytes(manifest: DictManifest): number {
   return manifest.files.reduce((n, f) => n + f.bytes, 0)
 }
 
-/** Fetch every dictionary file wholesale, store each system's map, and mark the
- * feature enabled. Idempotent — re-running replaces the stored rows, which is
- * also how an update is applied. */
+/** Thrown when a fetched file's bytes don't hash to the manifest's sha256 —
+ * corruption or a truncated transfer, not something worth silently swallowing.
+ * Carries the offending manifest entry so callers (and the Settings UI) can
+ * name the file rather than showing a generic failure. */
+export class DictionaryVerificationError extends Error {
+  constructor(public readonly file: ManifestFile) {
+    super(`${file.label} failed to verify — the downloaded bytes don't match the expected checksum.`)
+    this.name = 'DictionaryVerificationError'
+  }
+}
+
+/** Thrown when a file's HTTP fetch itself fails (network drop, non-2xx). */
+export class DictionaryFetchError extends Error {
+  constructor(
+    public readonly file: ManifestFile,
+    reason: string,
+  ) {
+    super(`${file.label}: ${reason}`)
+    this.name = 'DictionaryFetchError'
+  }
+}
+
+/** Duplicated from attachments.ts's own `sha256Hex` (the same reason sync.ts
+ * duplicates it) — lowercase-hex SHA-256 over raw bytes, here used to verify a
+ * fetched dictionary file against the manifest's `sha256` before it's parsed
+ * or stored. */
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', bytes as BufferSource)
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/** True when a stored row for this system's already-verified bytes match this
+ * exact manifest entry (same sha256, same manifest version) — lets
+ * `downloadDictionary` resume after a mid-loop failure instead of re-fetching
+ * files that already succeeded. */
+async function matchesStored(file: ManifestFile, version: string): Promise<boolean> {
+  const row = await get<DictRow>(STORE, file.system)
+  return row?.sha256 === file.sha256 && row?.version === version
+}
+
+/** Fetch every dictionary file, verify its bytes against the manifest's
+ * sha256, store each system's map, and mark the feature enabled. Idempotent —
+ * re-running replaces the stored rows, which is also how an update is
+ * applied. Resumable: a file already stored with this manifest's sha256 is
+ * skipped rather than re-fetched, so retrying after a mid-loop failure (a
+ * multi-MB file failing on cellular, say) picks up from the failed file
+ * instead of restarting from the first. */
 export async function downloadDictionary(manifest?: DictManifest): Promise<void> {
   const m = manifest ?? (await fetchManifest())
+  const fileStatuses: DictFileStatus[] = await Promise.all(
+    m.files.map(async (file) => ({
+      system: file.system,
+      label: file.label,
+      bytes: file.bytes,
+      state: (await matchesStored(file, m.version)) ? ('verified' as const) : ('pending' as const),
+    })),
+  )
+  const countVerified = () => fileStatuses.filter((f) => f.state === 'verified').length
   dictionaryStatus.update((s) => ({
     ...s,
     downloading: true,
     error: null,
-    progress: { done: 0, total: m.files.length },
+    failedFile: null,
+    progress: { done: countVerified(), total: m.files.length },
+    fileStatuses: [...fileStatuses],
   }))
   try {
-    let done = 0
-    for (const file of m.files) {
+    for (let i = 0; i < m.files.length; i++) {
+      const file = m.files[i]
+      if (fileStatuses[i].state === 'verified') continue
       const res = await fetch(fileUrl(file.path), { cache: 'no-store' })
-      if (!res.ok) throw new Error(`${file.label}: HTTP ${res.status}`)
-      const entriesMap = (await res.json()) as CodeMap
+      if (!res.ok) throw new DictionaryFetchError(file, `HTTP ${res.status}`)
+      const bytes = new Uint8Array(await res.arrayBuffer())
+      if ((await sha256Hex(bytes)) !== file.sha256) throw new DictionaryVerificationError(file)
+      const entriesMap = JSON.parse(new TextDecoder().decode(bytes)) as CodeMap
       const row: DictRow = { ...file, version: m.version, entriesMap }
       await put(STORE, row)
-      done++
-      dictionaryStatus.update((s) => ({ ...s, progress: { done, total: m.files.length } }))
+      fileStatuses[i] = { ...fileStatuses[i], state: 'verified' }
+      dictionaryStatus.update((s) => ({
+        ...s,
+        progress: { done: countVerified(), total: m.files.length },
+        fileStatuses: [...fileStatuses],
+      }))
     }
     await put('prefs', m, MANIFEST_PREF)
     await put('prefs', true, ENABLED_PREF)
     invalidateDictionaryCache()
     await refreshDictionaryStatus()
   } catch (err) {
+    const failing =
+      err instanceof DictionaryVerificationError || err instanceof DictionaryFetchError ? err.file : null
+    if (failing) {
+      const i = fileStatuses.findIndex((f) => f.system === failing.system)
+      if (i >= 0) fileStatuses[i] = { ...fileStatuses[i], state: 'failed' }
+    }
     dictionaryStatus.update((s) => ({
       ...s,
       downloading: false,
       progress: null,
+      failedFile: failing ? { label: failing.label, bytes: failing.bytes } : null,
+      fileStatuses: [...fileStatuses],
       error: err instanceof Error ? err.message : 'Download failed.',
     }))
     throw err

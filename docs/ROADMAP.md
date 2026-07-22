@@ -52,8 +52,7 @@ Nothing in flight.
 - Per-item curation on grouped spine entries
 - Long-press bloom shortcut
 - Friendly provenance source names
-- Full LOINC Top-2000 dictionary (the download is account-gated); sha256
-  verification of the dictionary manifest
+- Full LOINC Top-2000 dictionary (the download is account-gated)
 
 **Native (arrives with the wrapper)**
 
