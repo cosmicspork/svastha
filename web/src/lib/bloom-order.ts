@@ -16,6 +16,26 @@ export function orderByFrequency<T>(items: T[], countOf: (item: T) => number): T
     .map((entry) => entry.item)
 }
 
+/** Prefs key holding a user's manual petal order as an array of kind strings.
+ * Present = manual order wins over `orderByFrequency`; absent = automatic. */
+export const BLOOM_ORDER_PREF = 'bloom-order'
+
+/** Reorder `items` to follow `storedKinds` (a saved manual order). Kinds the
+ * stored list doesn't know — added in a release after the order was saved —
+ * append after it in their default relative order rather than vanishing;
+ * stored kinds that no longer exist are ignored. */
+export function applyStoredOrder<T>(
+  items: T[],
+  storedKinds: string[],
+  kindOf: (item: T) => string,
+): T[] {
+  const rank = new Map(storedKinds.map((kind, i) => [kind, i]))
+  return items
+    .map((item, index) => ({ item, rank: rank.get(kindOf(item)) ?? storedKinds.length + index }))
+    .sort((a, b) => a.rank - b.rank)
+    .map((entry) => entry.item)
+}
+
 /** Action petals shown directly on the fan before folding the rest behind a
  * "More" petal. Six actions + one More petal restores 15° arc spacing (the
  * same ~60px chord seven evenly-spaced petals had at launch); more than that

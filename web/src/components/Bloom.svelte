@@ -4,7 +4,12 @@
   import { navigate } from '../lib/router.svelte'
   import { CATEGORY_META } from '../lib/category'
   import { LOG_KINDS, type LogKind } from '../lib/log-kinds'
-  import { orderByFrequency, selectPetals } from '../lib/bloom-order'
+  import {
+    applyStoredOrder,
+    BLOOM_ORDER_PREF,
+    orderByFrequency,
+    selectPetals,
+  } from '../lib/bloom-order'
   import { categoryLogCounts } from '../lib/events'
   import Sheet from './Sheet.svelte'
 
@@ -19,8 +24,15 @@
   onMount(async () => {
     const storedHand = await get<'left' | 'right'>('prefs', 'fab-hand')
     if (storedHand) hand = storedHand
-    const counts = await categoryLogCounts()
-    ordered = orderByFrequency(LOG_KINDS, (k) => counts[k.category] ?? 0)
+    // A saved manual order (Settings → Appearance) wins outright; otherwise
+    // fall back to frequency.
+    const manual = await get<string[]>('prefs', BLOOM_ORDER_PREF)
+    if (manual) {
+      ordered = applyStoredOrder(LOG_KINDS, manual, (k) => k.kind)
+    } else {
+      const counts = await categoryLogCounts()
+      ordered = orderByFrequency(LOG_KINDS, (k) => counts[k.category] ?? 0)
+    }
   })
 
   const dir = $derived(hand === 'left' ? -1 : 1)
