@@ -80,11 +80,18 @@ export async function restoreViaUI(
   await dismissInstallSheet(page)
 }
 
-/** Open the bloom and pick a petal — the FAB must be expanded before a
- * `log-{kind}` petal is clickable. */
+/** Open the bloom and pick a log action — the FAB must be expanded before a
+ * `log-{kind}` petal is clickable. Only the six most-used actions land
+ * directly on the fan; anything else folds behind the "More" petal, which
+ * opens a sheet with the same `log-{kind}` testids. Fall back to that sheet
+ * when the kind isn't one of the fan's petals in a fresh test profile. */
 export async function openLog(page: Page, kind: string): Promise<void> {
   await page.getByTestId('fab').click()
-  await page.getByTestId(`log-${kind}`).click()
+  const target = page.getByTestId(`log-${kind}`)
+  if ((await target.count()) === 0) {
+    await page.getByTestId('bloom-more').click()
+  }
+  await target.click()
 }
 
 /** Log a blood pressure reading through the quick-log UI (two events). */

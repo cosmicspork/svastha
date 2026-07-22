@@ -4,14 +4,16 @@
   import { navigate } from '../lib/router.svelte'
   import { CATEGORY_META } from '../lib/category'
   import { LOG_KINDS, type LogKind } from '../lib/log-kinds'
-  import { orderByFrequency } from '../lib/bloom-order'
+  import { orderByFrequency, selectPetals } from '../lib/bloom-order'
   import { categoryLogCounts } from '../lib/events'
+  import Sheet from './Sheet.svelte'
 
   let hand = $state<'left' | 'right'>('right')
   // Default order until frequency counts load, per orderByFrequency's own
   // tiebreak — no flash of a differently-ordered fan on first paint.
   let ordered = $state<LogKind[]>(LOG_KINDS)
   let open = $state(false)
+  let showMore = $state(false)
   let fab: HTMLButtonElement | undefined = $state()
 
   onMount(async () => {
@@ -22,11 +24,17 @@
   })
 
   const dir = $derived(hand === 'left' ? -1 : 1)
+  // Top six by frequency as petals, folding the rest behind a trailing More
+  // petal once the fan would otherwise overflow — see bloom-order.ts.
+  const plan = $derived(selectPetals(ordered))
+  // Arc positions actually on screen: the action petals plus, when present,
+  // the More petal in the last (innermost) slot.
+  const arcCount = $derived(plan.petals.length + (plan.hasMore ? 1 : 0))
 
-  // One 90° arc: i=0 is straight up, i=n-1 is straight toward the FAB's
+  // One 90° arc: i=0 is straight up, i=arcCount-1 is straight toward the FAB's
   // inward side (left of a right-hand FAB, mirrored for left-hand).
   function angle(i: number): number {
-    return (i / (ordered.length - 1)) * (Math.PI / 2)
+    return arcCount <= 1 ? 0 : (i / (arcCount - 1)) * (Math.PI / 2)
   }
 
   function petalStyle(i: number): string {
@@ -57,6 +65,22 @@
     navigate(`#/log/${kind}`)
   }
 
+  // More folds the fan away in favor of the sheet rather than claiming an 8th
+  // arc position — the sheet has no geometry limit, so it always fits.
+  function openMore() {
+    setOpen(false)
+    showMore = true
+  }
+
+  function closeMore() {
+    showMore = false
+  }
+
+  function selectFromSheet(kind: string) {
+    showMore = false
+    navigate(`#/log/${kind}`)
+  }
+
   function onKeydown(e: KeyboardEvent) {
     if (e.key !== 'Escape' || !open) return
     setOpen(false)
@@ -73,19 +97,34 @@
   <div class="scrim" aria-hidden="true" onclick={() => setOpen(false)}></div>
 
   <div class="petals" inert={!open}>
-    {#each ordered as { kind, label, category, glyph }, i (kind)}
-      <span class="petal-label" style={labelStyle(i)}>{label.toLowerCase()}</span>
-      <button
-        type="button"
-        class="petal {CATEGORY_META[category].hueClass}"
-        style={petalStyle(i)}
-        aria-label="Log {label}"
-        data-testid="log-{kind}"
-        onclick={() => selectKind(kind)}
-      >
-        {glyph ?? CATEGORY_META[category].glyph}
-      </button>
-    {/each}
+    {#if !showMore}
+      {#each plan.petals as { kind, label, category, glyph }, i (kind)}
+        <span class="petal-label" style={labelStyle(i)}>{label.toLowerCase()}</span>
+        <button
+          type="button"
+          class="petal {CATEGORY_META[category].hueClass}"
+          style={petalStyle(i)}
+          aria-label="Log {label}"
+          data-testid="log-{kind}"
+          onclick={() => selectKind(kind)}
+        >
+          {glyph ?? CATEGORY_META[category].glyph}
+        </button>
+      {/each}
+      {#if plan.hasMore}
+        <span class="petal-label" style={labelStyle(plan.petals.length)}>more</span>
+        <button
+          type="button"
+          class="petal more"
+          style={petalStyle(plan.petals.length)}
+          aria-label="More actions"
+          data-testid="bloom-more"
+          onclick={openMore}
+        >
+          ⋯
+        </button>
+      {/if}
+    {/if}
   </div>
 
   <button
@@ -100,6 +139,26 @@
     <span>+</span>
   </button>
 </div>
+
+{#if showMore}
+  <Sheet onclose={closeMore}>
+    <h2>More actions</h2>
+    <p class="muted">Everything you can log, in one place.</p>
+    <div class="more-grid" role="group" aria-label="All log actions">
+      {#each ordered as { kind, label, category, glyph } (kind)}
+        <button
+          type="button"
+          class="more-item {CATEGORY_META[category].hueClass}"
+          data-testid="log-{kind}"
+          onclick={() => selectFromSheet(kind)}
+        >
+          <span class="more-glyph" aria-hidden="true">{glyph ?? CATEGORY_META[category].glyph}</span>
+          <span class="more-label">{label}</span>
+        </button>
+      {/each}
+    </div>
+  </Sheet>
+{/if}
 
 <style>
   .layer {
@@ -207,6 +266,19 @@
     background: var(--action-muted);
   }
 
+  /* Visually distinct from an action petal — muted and dashed, so it reads as
+     "more options" rather than another loggable kind. */
+  .petal.more {
+    color: var(--muted);
+    border-style: dashed;
+  }
+
+  .petal.more:hover,
+  .petal.more:active {
+    border-color: var(--muted);
+    background: var(--surface);
+  }
+
   .petal-label {
     position: absolute;
     bottom: calc(26px + env(safe-area-inset-bottom));
@@ -244,5 +316,44 @@
   .layer.open .petal-label {
     opacity: 1;
     transform: translate(var(--tx), var(--ty)) translateX(var(--cx, 0));
+  }
+
+  h2 {
+    margin: 0 0 var(--space-2);
+  }
+
+  .more-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+    gap: var(--space-3);
+    margin-top: var(--space-4);
+  }
+
+  .more-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-3) var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .more-item:hover,
+  .more-item:active {
+    border-color: var(--action);
+    background: var(--action-muted);
+  }
+
+  .more-glyph {
+    font-size: 1.4rem;
+    color: currentColor;
+  }
+
+  .more-label {
+    font-size: var(--text-xs);
   }
 </style>
