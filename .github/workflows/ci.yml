@@ -38,3 +38,48 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run check
       - run: bun run build
+
+  e2e:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      # Same wasm toolchain as the web job: the Vite dev server that
+      # Playwright launches runs `bun run wasm` (wasm-pack) on startup.
+      - name: Install Rust (wasm32)
+        run: rustup target add wasm32-unknown-unknown
+      - uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: v0.13.1
+      - uses: Swatinem/rust-cache@v2
+        # Full workspace, not just crates/wasm: this job also builds the
+        # svastha-relay binary from the workspace root.
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Build relay binary
+        working-directory: .
+        run: cargo build -p svastha-relay
+      - name: Resolve installed Playwright version
+        id: playwright-version
+        run: echo "version=$(bunx playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ steps.playwright-version.outputs.version }}
+      - run: bunx playwright install --with-deps chromium
+      - name: Run e2e suite
+        # --workers=1: a known FAB-click flake shows up under Playwright's
+        # default parallelism, so this suite is intentionally serial.
+        run: bun run e2e -- --workers=1
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            web/playwright-report
+            web/test-results
+          retention-days: 7

@@ -6,9 +6,9 @@ function entryWith(page: Page, text: string) {
   return page.getByTestId('spine-entry').filter({ hasText: text })
 }
 
-// Local-only, like the rest of e2e (not in CI). No relay is involved at all:
-// the encrypted backup is a plain file channel, so the import path is proven
-// against a fresh device that never connects to a relay.
+// No relay is involved at all: the encrypted backup is a plain file channel,
+// so the import path is proven against a fresh device that never connects to
+// a relay.
 test('encrypted backup round-trips to a fresh device from the seed alone, and re-import dedupes', async ({
   page,
   browser,
