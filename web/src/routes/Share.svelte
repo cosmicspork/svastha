@@ -9,6 +9,8 @@
     parseExchangeCode,
     fingerprint,
     codeQrSvg,
+    exchangeLinkFor,
+    extractExchangeCode,
     ExchangeCodeError,
   } from '../lib/exchange'
   import {
@@ -43,7 +45,11 @@
         )
       : '',
   )
-  const myQrSvg = $derived(myCode ? codeQrSvg(myCode) : '')
+  // The QR encodes a link to this screen, not the bare code: an unknown
+  // `svastha1:` scheme reads as "no usable data" to a generic camera app (no
+  // in-app scanner exists), so wrapping it in our own origin's URL is what
+  // makes it openable at all. "Copy code" below still copies the raw code.
+  const myQrSvg = $derived(myCode ? codeQrSvg(exchangeLinkFor(window.location.origin, myCode)) : '')
   let copied = $state(false)
 
   async function saveDisplayName() {
@@ -57,11 +63,20 @@
   }
 
   // --- share my vault ---
-  let pasteInput = $state('')
+  // A scanned QR (see `exchangeLinkFor`) lands here as `#/share?code=...`,
+  // whether or not the vault was locked when the link opened — App.svelte
+  // renders Unlock in place of this component without touching the hash, so
+  // the param survives an intervening unlock. Read it once, at mount, then
+  // strip it so a refresh doesn't re-show the confirm box.
+  const incomingCode = new URLSearchParams(window.location.hash.split('?')[1] ?? '').get('code')
+  if (incomingCode) {
+    history.replaceState(null, '', `${window.location.pathname}${window.location.search}#/share`)
+  }
+  let pasteInput = $state(incomingCode ?? '')
   const parsedCode = $derived.by(() => {
     if (!pasteInput.trim()) return { code: null, error: '' }
     try {
-      return { code: parseExchangeCode(pasteInput), error: '' }
+      return { code: parseExchangeCode(extractExchangeCode(pasteInput)), error: '' }
     } catch (err) {
       return {
         code: null,

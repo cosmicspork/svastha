@@ -4,6 +4,8 @@ import {
   parseExchangeCode,
   fingerprint,
   deviceLinkUrl,
+  exchangeLinkFor,
+  extractExchangeCode,
   ExchangeCodeError,
 } from '../exchange'
 
@@ -93,5 +95,54 @@ describe('deviceLinkUrl', () => {
     // Round-trips back to the exact original relay URL.
     const [, query] = link.split('?')
     expect(new URLSearchParams(query).get('relay')).toBe(relayUrl)
+  })
+})
+
+describe('exchangeLinkFor', () => {
+  it('builds a share deep link with the code as a query param', () => {
+    const code = buildExchangeCode(ED, X25519, 'Alex')
+    expect(exchangeLinkFor('https://app.example.com', code)).toBe(
+      `https://app.example.com/#/share?code=${encodeURIComponent(code)}`,
+    )
+  })
+
+  it('percent-encodes the code so its colons never get read as extra params', () => {
+    const code = buildExchangeCode(ED, X25519, 'Alex: at home')
+    const link = exchangeLinkFor('https://app.example.com', code)
+    const [, query] = link.split('?')
+    expect(new URLSearchParams(query).get('code')).toBe(code)
+  })
+})
+
+describe('extractExchangeCode', () => {
+  it('returns a bare code unchanged', () => {
+    const code = buildExchangeCode(ED, X25519, 'Alex')
+    expect(extractExchangeCode(code)).toBe(code)
+  })
+
+  it('trims surrounding whitespace on a bare code', () => {
+    const code = buildExchangeCode(ED, X25519, 'Alex')
+    expect(extractExchangeCode(`  ${code}  \n`)).toBe(code)
+  })
+
+  it('extracts the code from a full share link', () => {
+    const code = buildExchangeCode(ED, X25519, 'Alex')
+    const link = exchangeLinkFor('https://app.example.com', code)
+    expect(extractExchangeCode(link)).toBe(code)
+  })
+
+  it('extracts the code from a bare hash fragment (no origin)', () => {
+    const code = buildExchangeCode(ED, X25519, 'Alex')
+    expect(extractExchangeCode(`#/share?code=${encodeURIComponent(code)}`)).toBe(code)
+  })
+
+  it('falls back to the input when the hash has no query string', () => {
+    expect(extractExchangeCode('#/share')).toBe('#/share')
+  })
+
+  it('falls back to the input when the query has no code param', () => {
+    expect(extractExchangeCode('https://app.example.com/#/share?foo=bar')).toBe(
+      'https://app.example.com/#/share?foo=bar',
+    )
   })
 })
