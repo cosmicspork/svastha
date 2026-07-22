@@ -19,7 +19,10 @@
 </script>
 
 <header class="app-header">
-  <span class="wordmark">Svastha</span>
+  <!-- On home (no back button) the wordmark IS the page heading — Home renders
+       no h1 of its own, so the name isn't doubled up. Sub-screens keep their
+       own h1 and the wordmark drops back to a span. -->
+  <svelte:element this={showBack ? 'span' : 'h1'} class="wordmark">Svastha</svelte:element>
 
   <div class="actions">
     <button
@@ -58,10 +61,12 @@
         aria-label="Settings"
         data-testid="nav-settings"
       >
+        <!-- Gear, not rays: a rayed circle reads as a sun (brightness), and this
+             button is Settings. -->
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
           stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <circle cx="12" cy="12" r="3" />
-          <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
         </svg>
       </button>
     {/if}
@@ -89,8 +94,11 @@
   }
 
   .wordmark {
+    /* Identical rendering whether it's the home h1 or a sub-screen span. */
+    margin: 0;
     font-family: var(--font-display);
     font-size: var(--text-xl);
+    font-weight: normal;
     line-height: 1;
   }
 

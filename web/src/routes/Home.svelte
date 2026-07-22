@@ -58,8 +58,6 @@
   }
 </script>
 
-<h1>Svastha</h1>
-
 {#each $pendingInvites as invite (invite.mailboxId)}
   <div class="invite" data-testid="home-invite-banner">
     <p>
