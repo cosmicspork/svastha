@@ -35,7 +35,7 @@ codes a vault holds.
 | ICD-10-CM | `icd10cm-order-2026.txt` in `sources/` | unauthenticated | U.S. public domain |
 | CVX | `cvx.txt` in `sources/` | unauthenticated | U.S. CDC, public |
 
-### LOINC — Top 2000+ Lab Observations
+### LOINC — full release table
 
 **Primary path: the Download API.** Set `LOINC_USERNAME` and `LOINC_PASSWORD`
 (a free loinc.org account's credentials) in `web/.env` — Bun auto-loads it, and
@@ -57,11 +57,13 @@ What that does:
 - Downloads the release zip only when its `version` is newer than the one
   already baked into the committed `manifest.json`, verifies it against
   `downloadMD5Hash`, and extracts `LoincTable/Loinc.csv` (via `fflate`).
-- Filters that full table to `COMMON_TEST_RANK` 1–2000 (the Top-2000+ subset,
-  as ranked in the full release rather than shipped as its own file) and maps
-  `LOINC_NUM` → `LONG_COMMON_NAME`, stored verbatim (see the compliance comment
-  in `parsers.ts`'s `parseLoincCsv`/`parseLoincFullTableTop2000` — the license's
-  Section 2 forbids changing field contents).
+- Maps the **entire table** — `LOINC_NUM` → `LONG_COMMON_NAME`, every status
+  including deprecated codes (an append-only vault renders old documents, and a
+  named deprecated code beats an "Unnamed entry" row) — stored verbatim (see
+  the compliance comment in `parsers.ts` — the license's Section 2 forbids
+  changing field contents). ~109k entries, ~7.4 MB serialized, ~1.3 MB on the
+  wire gzipped. Pass `--loinc-top2000` to build the 126 KB
+  `COMMON_TEST_RANK` 1–2000 subset instead, should size ever matter.
 - Missing credentials, or any API/network/hash-verification failure, print a
   warning and fall through to the manual CSV path, then the starter dictionary
   — **this never fails the whole build.**

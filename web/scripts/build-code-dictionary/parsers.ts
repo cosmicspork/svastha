@@ -87,7 +87,7 @@ export function parseLoincCsv(text: string): CodeMap {
  * — the Top 2000+ Lab Observations subset lives in the full table as a rank
  * column rather than a separate export when pulled via the API. See
  * loinc-api.ts for how the release zip is fetched and unzipped. */
-export function parseLoincFullTableTop2000(text: string): CodeMap {
+function parseLoincTable(text: string, top2000: boolean): CodeMap {
   const lines = normalizeLines(text).filter((l) => l.length > 0)
   if (lines.length === 0) return {}
   const header = splitCsvLine(lines[0]).map((h) => h.trim().toLowerCase())
@@ -95,7 +95,7 @@ export function parseLoincFullTableTop2000(text: string): CodeMap {
   const codeIdx = header.indexOf('loinc_num')
   const nameIdx = header.indexOf('long_common_name')
   const rankIdx = header.indexOf('common_test_rank')
-  if (codeIdx === -1 || nameIdx === -1 || rankIdx === -1) {
+  if (codeIdx === -1 || nameIdx === -1 || (top2000 && rankIdx === -1)) {
     throw new Error(
       `LOINC full table: could not find LOINC_NUM/LONG_COMMON_NAME/COMMON_TEST_RANK in header: ${header.join(', ')}`,
     )
@@ -104,14 +104,27 @@ export function parseLoincFullTableTop2000(text: string): CodeMap {
   const out: CodeMap = {}
   for (let i = 1; i < lines.length; i++) {
     const cols = splitCsvLine(lines[i])
-    const rank = Number((cols[rankIdx] ?? '').trim())
-    if (!Number.isFinite(rank) || rank < 1 || rank > 2000) continue
+    if (top2000) {
+      const rank = Number((cols[rankIdx] ?? '').trim())
+      if (!Number.isFinite(rank) || rank < 1 || rank > 2000) continue
+    }
     const code = (cols[codeIdx] ?? '').trim()
     // Verbatim per the LOINC license (Section 2) — see parseLoincCsv above.
     const name = (cols[nameIdx] ?? '').trim()
     if (code && name) out[code] = name
   }
   return out
+}
+
+/** Every code in the release, deprecated ones included — an append-only vault
+ * renders decades-old documents, and a named deprecated code beats an
+ * "Unnamed entry" row. */
+export function parseLoincFullTable(text: string): CodeMap {
+  return parseLoincTable(text, false)
+}
+
+export function parseLoincFullTableTop2000(text: string): CodeMap {
+  return parseLoincTable(text, true)
 }
 
 // TTY preference for picking one canonical name per RXCUI. Semantic clinical

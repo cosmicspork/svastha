@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   splitCsvLine,
   parseLoincCsv,
+  parseLoincFullTable,
   parseLoincFullTableTop2000,
   parseRxnormConso,
   parseIcd10Order,
@@ -82,6 +83,26 @@ describe('parseLoincFullTableTop2000', () => {
 
   it('throws when the header lacks LOINC_NUM/LONG_COMMON_NAME/COMMON_TEST_RANK', () => {
     expect(() => parseLoincFullTableTop2000('LOINC_NUM,LONG_COMMON_NAME\n1,2')).toThrow()
+  })
+})
+
+describe('parseLoincFullTable', () => {
+  it('keeps every code regardless of rank, including unranked rows', () => {
+    const csv = [
+      'LOINC_NUM,LONG_COMMON_NAME,COMMON_TEST_RANK',
+      '2345-7,"Glucose [Mass/volume] in Serum or Plasma",1',
+      '99999-9,"Some rarely ordered test",5000',
+      '88888-8,"Not ranked",',
+    ].join('\n')
+    expect(parseLoincFullTable(csv)).toEqual({
+      '2345-7': 'Glucose [Mass/volume] in Serum or Plasma',
+      '99999-9': 'Some rarely ordered test',
+      '88888-8': 'Not ranked',
+    })
+  })
+
+  it('tolerates a table without COMMON_TEST_RANK, unlike the top-2000 filter', () => {
+    expect(parseLoincFullTable('LOINC_NUM,LONG_COMMON_NAME\n1-1,Name')).toEqual({ '1-1': 'Name' })
   })
 })
 

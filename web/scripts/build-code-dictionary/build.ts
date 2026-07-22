@@ -43,6 +43,7 @@ import {
   parseCvx,
   parseIcd10Order,
   parseLoincCsv,
+  parseLoincFullTable,
   parseLoincFullTableTop2000,
   parseRxnormConso,
   type CodeMap,
@@ -266,9 +267,15 @@ async function fetchLoincViaApi(priorRelease: string | undefined): Promise<{ csv
  * on a broken download" behavior the other code sets get. */
 async function fetchLoincDictionary(
   priorRelease: string | undefined,
-): Promise<{ map: CodeMap; starter: boolean; release?: string }> {
+): Promise<{ map: CodeMap; starter: boolean; release?: string; top2000?: boolean }> {
   const api = await fetchLoincViaApi(priorRelease)
-  if (api) return { map: parseLoincFullTableTop2000(api.csv), starter: false, release: api.release }
+  if (api) {
+    // Full table by default (6.4 MB serialized — smaller than icd10cm.json);
+    // --loinc-top2000 keeps the 126 KB subset available if size ever matters.
+    const top2000 = process.argv.includes('--loinc-top2000')
+    const parse = top2000 ? parseLoincFullTableTop2000 : parseLoincFullTable
+    return { map: parse(api.csv), starter: false, release: api.release, top2000 }
+  }
 
   const manualPath = findLoincSource()
   if (manualPath) {
@@ -279,7 +286,7 @@ async function fetchLoincDictionary(
           'version on every copy. The manifest will ship without one until you supply it.',
       )
     }
-    return { map: parseLoincCsv(readFileSync(manualPath, 'utf8')), starter: false, release }
+    return { map: parseLoincCsv(readFileSync(manualPath, 'utf8')), starter: false, release, top2000: true }
   }
 
   const map = starterLoinc()
@@ -304,15 +311,29 @@ async function main(): Promise<void> {
     let map: CodeMap
     let starter = false
     let loincRelease: string | undefined
+    let loincTop2000 = false
+
+    // A system whose source isn't on this machine keeps its committed file and
+    // manifest entry — regenerating one dictionary must never drop the others.
+    const prior = priorManifest?.files.find((f) => f.system === spec.system)
+    const keepPrior = (why: string): boolean => {
+      if (!prior || !existsSync(join(OUT_DIR, spec.out))) return false
+      files.push(prior)
+      console.log(`↻ ${spec.out}: keeping existing (${why})`)
+      return true
+    }
 
     if (spec.system === 'http://loinc.org') {
       const result = await fetchLoincDictionary(priorLoinc?.loincRelease)
+      if (result.starter && prior && !prior.starter && keepPrior('LOINC unavailable, prior real data kept')) continue
       map = result.map
       starter = result.starter
       loincRelease = result.release
+      loincTop2000 = result.top2000 ?? false
     } else {
       const srcPath = findSource(spec.source)
       if (!srcPath) {
+        if (keepPrior(`no source matching "${spec.source}" in sources/`)) continue
         console.warn(`! skipping ${spec.label}: no source matching "${spec.source}" in sources/`)
         continue
       }
@@ -324,7 +345,7 @@ async function main(): Promise<void> {
     const entries = Object.keys(map).length
     const attribution =
       spec.system === 'http://loinc.org' && !starter && loincRelease
-        ? `${spec.attribution} Top 2000+ release ${loincRelease}.`
+        ? `${spec.attribution} ${loincTop2000 ? 'Top 2000+ subset of release' : 'Release'} ${loincRelease}.`
         : spec.attribution
     files.push({
       system: spec.system,

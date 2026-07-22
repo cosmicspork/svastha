@@ -1,16 +1,16 @@
 {
-  "version": "2026-07-15",
-  "generated_at": "2026-07-15T11:17:36.725Z",
+  "version": "2026-07-22",
+  "generated_at": "2026-07-22T09:03:12.415Z",
   "files": [
     {
       "system": "http://loinc.org",
       "path": "loinc.json",
-      "bytes": 339,
-      "sha256": "3a9166bcdcfbfd6e3d7acd28f1702a7cf1e51ae492edc093b3fc72d262884980",
-      "entries": 10,
+      "bytes": 7584949,
+      "sha256": "19171fd5d1a6046bc67844a9b27a8194cd6b948e3e43ff67eac0c8abbb408260",
+      "entries": 109325,
       "label": "LOINC",
-      "attribution": "This material contains content from LOINC (http://loinc.org). LOINC is copyright © Regenstrief Institute, Inc. and the Logical Observation Identifiers Names and Codes (LOINC) Committee and is available at no cost under the license at http://loinc.org/license. LOINC® is a registered United States trademark of Regenstrief Institute, Inc.",
-      "starter": true
+      "attribution": "This material contains content from LOINC (http://loinc.org). LOINC is copyright © Regenstrief Institute, Inc. and the Logical Observation Identifiers Names and Codes (LOINC) Committee and is available at no cost under the license at http://loinc.org/license. LOINC® is a registered United States trademark of Regenstrief Institute, Inc. Release 2.82.",
+      "loincRelease": "2.82"
     },
     {
       "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
