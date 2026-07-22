@@ -7,6 +7,7 @@
   import { RelayClient } from './lib/relay'
   import { connectRelay } from './lib/vault'
   import { syncTeardown } from './lib/sync'
+  import { ensureCurationSigned } from './lib/curation'
   import { route } from './lib/router.svelte'
   import { loadTheme, applyTheme } from './lib/theme'
   import Onboard from './routes/Onboard.svelte'
@@ -65,6 +66,12 @@
       return
     }
     const identity = session.identity
+    // One-time on first unlock after this version: re-sign any pre-signing
+    // curation records in place (see curation.ts's `migrateCurationToSigned`).
+    // Idempotent and relay-independent, so it runs here regardless of whether a
+    // relay is configured; a configured relay picks up the re-pushed blobs on
+    // the next drain.
+    void ensureCurationSigned()
     get<string>('prefs', 'relayUrl').then((url) => {
       if (url && identity) {
         connectRelay(new RelayClient(url, identity))

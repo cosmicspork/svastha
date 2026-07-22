@@ -212,6 +212,80 @@ describe('buildSummary: recent results', () => {
   })
 })
 
+describe('buildSummary: concept status (med/problem lifecycle)', () => {
+  const AMOX: Code = { system: RXNORM, code: '723', display: 'Amoxicillin' }
+  const medKey = `medication_statement|${RXNORM}|723`
+
+  it('defaults every row to active when no status curation is supplied (read-only render)', () => {
+    const events = [ev({ kind: 'medication_statement', code: AMOX, effective_at: '2024-01-01T00:00:00+00:00' })]
+    expect(buildSummary(events).medications[0].status).toBe('active')
+  })
+
+  it('annotates a row from the status map, keyed on keyFor (${kind}|${system}|${code})', () => {
+    const events = [ev({ kind: 'medication_statement', code: AMOX, effective_at: '2024-01-01T00:00:00+00:00' })]
+    const { medications } = buildSummary(events, { status: new Map([[medKey, 'inactive']]) })
+    expect(medications[0].key).toBe(medKey)
+    expect(medications[0].status).toBe('inactive')
+  })
+
+  it('splits meds into current/past and problems into active/resolved by the status field', () => {
+    const HTN2: Code = { system: SNOMED, code: '38341003', display: 'Hypertension' }
+    const RESOLVED: Code = { system: SNOMED, code: '195967001', display: 'Asthma' }
+    const events = [
+      ev({ kind: 'medication_statement', code: AMOX, effective_at: '2024-01-01T00:00:00+00:00' }),
+      ev({ kind: 'condition', code: HTN2, effective_at: '2020-01-01T00:00:00+00:00' }),
+      ev({ kind: 'condition', code: RESOLVED, effective_at: '2019-01-01T00:00:00+00:00' }),
+    ]
+    const status = new Map<string, 'active' | 'inactive'>([
+      [medKey, 'inactive'],
+      [`condition|${SNOMED}|195967001`, 'inactive'],
+    ])
+    const { medications, problems } = buildSummary(events, { status })
+    // The component splits on this field: current = active, past = inactive.
+    expect(medications.filter((r) => r.status === 'active')).toHaveLength(0)
+    expect(medications.filter((r) => r.status === 'inactive').map((r) => r.label)).toEqual(['Amoxicillin'])
+    expect(problems.filter((r) => r.status === 'active').map((r) => r.label)).toEqual(['Hypertension'])
+    expect(problems.filter((r) => r.status === 'inactive').map((r) => r.label)).toEqual(['Asthma'])
+  })
+})
+
+describe('buildSummary: name override', () => {
+  const AMOX: Code = { system: RXNORM, code: '723', display: 'Amoxicillin' }
+  const medKey = `medication_statement|${RXNORM}|723`
+
+  it('override beats the event\'s own display, and the code line stays demoted beneath it', () => {
+    const events = [ev({ kind: 'medication_statement', code: AMOX, effective_at: '2024-01-01T00:00:00+00:00' })]
+    const { medications } = buildSummary(events, { names: new Map([[medKey, 'Amox (my name)']]) })
+    expect(medications[0].label).toBe('Amox (my name)')
+    expect(medications[0].nameResolved).toBe(true)
+    // Coding preserved so #86's demoted code line still renders under the override.
+    expect(medications[0].coding).toEqual({ system: 'RxNorm', code: '723' })
+  })
+
+  it('names an otherwise-unnamed coded concept; the code line stays visible', () => {
+    const icd10 = 'http://hl7.org/fhir/sid/icd-10-cm'
+    const key = `condition|${icd10}|E11.9`
+    const events = [ev({ kind: 'condition', code: { system: icd10, code: 'E11.9' }, effective_at: '2021-01-01T00:00:00+00:00' })]
+    const { problems } = buildSummary(events, { names: new Map([[key, 'My diabetes']]) })
+    expect(problems[0].label).toBe('My diabetes')
+    expect(problems[0].nameResolved).toBe(true)
+    expect(problems[0].coding).toEqual({ system: 'ICD-10-CM', code: 'E11.9' })
+  })
+
+  it('outranks the vault name index and the dictionary (top of the name chain)', () => {
+    const icd10 = 'http://hl7.org/fhir/sid/icd-10-cm'
+    const key = `condition|${icd10}|E11.9`
+    const events = [
+      // vault index would resolve this to "Type 2 diabetes mellitus"...
+      ev({ kind: 'condition', code: { system: icd10, code: 'E11.9', display: 'Type 2 diabetes mellitus' }, effective_at: '2019-01-01T00:00:00+00:00' }),
+      ev({ kind: 'condition', code: { system: icd10, code: 'E11.9' }, effective_at: '2021-01-01T00:00:00+00:00' }),
+    ]
+    const dictionary = new Map([[`${icd10}|E11.9`, 'Dictionary name']])
+    const { problems } = buildSummary(events, { names: new Map([[key, 'Override wins']]), dictionary })
+    expect(problems[0].label).toBe('Override wins')
+  })
+})
+
 describe('buildSummary: cycle section', () => {
   it('omits the cycle field entirely when no cycle events are present', () => {
     const events = [ev({ kind: 'condition', code: HTN, effective_at: '2021-01-01T00:00:00+00:00' })]

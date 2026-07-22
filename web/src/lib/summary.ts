@@ -13,6 +13,7 @@ import { buildCodeNameIndex, resolveDisplay } from './code-names'
 import { quantityOf, renderQuantity } from './timeline'
 import { cycleStats, type CycleStats } from './cycle'
 import type { StoredEvent } from './events'
+import type { ConceptStatus } from './curation'
 import { isoToMillis } from './time'
 
 /** The cycle section's shape: exactly {@link cycleStats}' non-null result. */
@@ -48,6 +49,12 @@ export interface SummaryRow {
   /** How many source events folded into this row. */
   count: number
   eventIds: string[]
+  /** The owner's curated lifecycle for this concept (see curation.ts's
+   * `status:` namespace), `'active'` by default. Only the meds and problems
+   * sections split on it (current/past, active/resolved); it is `'active'` and
+   * inert elsewhere. A read-only (recipient) render leaves it `'active'` — the
+   * owner's curation is owner-only in v1. */
+  status: ConceptStatus
 }
 
 export interface ClinicianSummary {
@@ -148,6 +155,14 @@ function byDateDescNullLast(a: SummaryRow, b: SummaryRow): number {
   return isoToMillis(b.date) - isoToMillis(a.date)
 }
 
+/** Curation layered over the folded concepts: the owner's per-concept status
+ * and display-name overrides (see curation.ts's `status:`/`name:` namespaces),
+ * keyed on the same `${kind}|${system}|${code}` as {@link keyFor}. */
+interface Curation {
+  status: Map<string, ConceptStatus>
+  names: Map<string, string>
+}
+
 /** Fold a set of same-kind events into one row per clinical concept. */
 function foldSection(
   events: Ev[],
@@ -155,6 +170,7 @@ function foldSection(
   detailFor: (labelEvent: Ev, group: Ev[]) => string,
   nameIndex: Map<string, string>,
   dictionary: Map<string, string>,
+  curation: Curation,
 ): SummaryRow[] {
   const groups = new Map<string, Ev[]>()
   for (const e of events) {
@@ -167,15 +183,22 @@ function foldSection(
   for (const [key, group] of groups) {
     const ls = labelSource(group)
     const resolved = resolveLabel(ls, nameIndex, dictionary)
+    // The owner's name override is the top of the render-time name chain (above
+    // the event's own display, the vault index, and the dictionary — see
+    // code-names.ts). It always resolves the name, and the coding stays carried
+    // so the demoted code line remains visible under the override.
+    const override = curation.names.get(key)
+    const named = override ? { label: override, coding: resolved.coding, nameResolved: true } : resolved
     rows.push({
       key,
-      label: resolved.label,
-      coding: resolved.coding,
-      nameResolved: resolved.nameResolved,
+      label: named.label,
+      coding: named.coding,
+      nameResolved: named.nameResolved,
       detail: detailFor(ls, group),
       date: representativeDate(group, dateStrategy),
       count: group.length,
       eventIds: group.map((e) => e.id),
+      status: curation.status.get(key) ?? 'active',
     })
   }
   return rows
@@ -229,6 +252,7 @@ function buildVitals(observations: Ev[]): SummaryRow[] {
         date: rep?.effective_at ?? null,
         count: sys.length + dia.length,
         eventIds: [...sys, ...dia].map((e) => e.id),
+        status: 'active',
       })
     } else {
       const evs = byCode.get(def.loinc.code) ?? []
@@ -243,6 +267,7 @@ function buildVitals(observations: Ev[]): SummaryRow[] {
         date: latest.effective_at,
         count: evs.length,
         eventIds: evs.map((e) => e.id),
+        status: 'active',
       })
     }
   }
@@ -251,11 +276,23 @@ function buildVitals(observations: Ev[]): SummaryRow[] {
 
 export function buildSummary(
   events: StoredEvent[],
-  opts: { hiddenIds?: Set<string>; resultLimit?: number; dictionary?: Map<string, string> } = {},
+  opts: {
+    hiddenIds?: Set<string>
+    resultLimit?: number
+    dictionary?: Map<string, string>
+    /** The owner's per-concept status/name curation (see curation.ts), loaded
+     * by ClinicianSummary the same way the dictionary is and passed in. Empty
+     * by default — and left empty for a read-only (recipient) render, whose
+     * rows all stay `'active'` with no name overrides. Keeps `buildSummary`
+     * pure (no db/session/wasm). */
+    status?: Map<string, ConceptStatus>
+    names?: Map<string, string>
+  } = {},
 ): ClinicianSummary {
   // `dictionary`: the offline code dictionary (see dictionary.ts), hydrated once
   // and passed in. Empty by default, which makes its resolution layer a no-op.
   const { hiddenIds, resultLimit = 20, dictionary = new Map() } = opts
+  const curation: Curation = { status: opts.status ?? new Map(), names: opts.names ?? new Map() }
   // Subtract hides before grouping; dropped silently — a clinical summary
   // shouldn't advertise redactions with a "hidden entry" placeholder. The name
   // index is built from this same visible set, so a hidden event's display
@@ -279,11 +316,13 @@ export function buildSummary(
   const cycle = cycleStats(visible) ?? undefined
 
   return {
-    problems: foldSection(conditions, 'earliest', () => '', nameIndex, dictionary).sort(byDateDescNullLast),
-    medications: foldSection(meds, 'latest', (ls) => quantityString(ls), nameIndex, dictionary).sort(
+    problems: foldSection(conditions, 'earliest', () => '', nameIndex, dictionary, curation).sort(
       byDateDescNullLast,
     ),
-    allergies: foldSection(allergyEvents, 'latest', () => '', nameIndex, dictionary).sort((a, b) =>
+    medications: foldSection(meds, 'latest', (ls) => quantityString(ls), nameIndex, dictionary, curation).sort(
+      byDateDescNullLast,
+    ),
+    allergies: foldSection(allergyEvents, 'latest', () => '', nameIndex, dictionary, curation).sort((a, b) =>
       a.label.localeCompare(b.label),
     ),
     immunizations: foldSection(
@@ -292,6 +331,7 @@ export function buildSummary(
       (_ls, group) => (group.length > 1 ? `${group.length} doses` : ''),
       nameIndex,
       dictionary,
+      curation,
     ).sort(byDateDescNullLast),
     latestVitals: buildVitals(observations),
     recentResults: foldSection(
@@ -300,6 +340,7 @@ export function buildSummary(
       (ls) => quantityString(ls) || textOf(ls) || '',
       nameIndex,
       dictionary,
+      curation,
     )
       .sort(byDateDescNullLast)
       .slice(0, resultLimit),
