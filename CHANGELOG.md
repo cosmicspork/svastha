@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.9.0](https://github.com/cosmicspork/svastha/compare/v0.8.0...v0.9.0) (2026-07-22)
+
+
+### Features
+
+* **core:** signed curation records ([#97](https://github.com/cosmicspork/svastha/issues/97)) ([f1e0273](https://github.com/cosmicspork/svastha/commit/f1e0273a1e3943aebc62bc954cb384dfa4998856))
+* **web:** app header with notification center ([#92](https://github.com/cosmicspork/svastha/issues/92)) ([2762316](https://github.com/cosmicspork/svastha/commit/2762316196c5d1d0d032f4bca1004ff1eea142aa))
+* **web:** bloom shows top actions with More overflow sheet ([#91](https://github.com/cosmicspork/svastha/issues/91)) ([2307025](https://github.com/cosmicspork/svastha/commit/2307025632d5d55c7b2e89e45a45f49ab902f348))
+* **web:** carry signed curation in doctor-share bundles ([#100](https://github.com/cosmicspork/svastha/issues/100)) ([3febc03](https://github.com/cosmicspork/svastha/commit/3febc03dbfde4e31e7f03ba03b49935b74376ea2))
+* **web:** loinc top-2000 ingestion for the code dictionary ([#90](https://github.com/cosmicspork/svastha/issues/90)) ([2d41d00](https://github.com/cosmicspork/svastha/commit/2d41d00f9db9aba6e964990715f58b23c546b2f4))
+* **web:** name-first summary rows with demoted codes ([#86](https://github.com/cosmicspork/svastha/issues/86)) ([94a3d52](https://github.com/cosmicspork/svastha/commit/94a3d52438d6be93380ed0ce4b5b28d5044fb2cf))
+* **web:** settings hub with five sub-screens ([#93](https://github.com/cosmicspork/svastha/issues/93)) ([d6f60f4](https://github.com/cosmicspork/svastha/commit/d6f60f45901764dc52fcd40afe968409d3483b49))
+* **web:** sharing split by audience with in-app QR scanning ([#95](https://github.com/cosmicspork/svastha/issues/95)) ([a648bf7](https://github.com/cosmicspork/svastha/commit/a648bf751969ae915406076c4e7e2686899242da))
+* **web:** signed curation with med and problem status ([#99](https://github.com/cosmicspork/svastha/issues/99)) ([acb1cb6](https://github.com/cosmicspork/svastha/commit/acb1cb6ef21fdf5bcd8d81bbf13b19c59a4e3612))
+* **web:** update prompt with release notes and relaunch ([#94](https://github.com/cosmicspork/svastha/issues/94)) ([d2e2562](https://github.com/cosmicspork/svastha/commit/d2e256241370883a3c483427d24e45e71c94fd94))
+
+
+### Bug Fixes
+
+* **web:** distinct scan-frame glyph for paper record petal ([#85](https://github.com/cosmicspork/svastha/issues/85)) ([0631cd8](https://github.com/cosmicspork/svastha/commit/0631cd8d42e342cfac5c6a1c392e4e9908a76215))
+* **web:** settings-nav e2e helpers and shared-timeline pull race ([#98](https://github.com/cosmicspork/svastha/issues/98)) ([c3b5097](https://github.com/cosmicspork/svastha/commit/c3b5097b67e04b991e82cce90d4b3f8cee6baad7))
+* **web:** verify and resume code dictionary downloads ([#88](https://github.com/cosmicspork/svastha/issues/88)) ([80aef5d](https://github.com/cosmicspork/svastha/commit/80aef5dca3c51c8a422c446a1baa9ef3f248e734))
+* **web:** wrap sharing QR in an app deep link ([#89](https://github.com/cosmicspork/svastha/issues/89)) ([14e5d02](https://github.com/cosmicspork/svastha/commit/14e5d0204e5212ede59d452e770540000d6edd9b))
+
 ## [0.8.0](https://github.com/cosmicspork/svastha/compare/v0.7.0...v0.8.0) (2026-07-21)
 
 
