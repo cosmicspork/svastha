@@ -1,8 +1,9 @@
 import { defineConfig, devices } from '@playwright/test'
 
-// Local-only PWA <-> relay smoke. NOT run in CI. Launch with `just e2e`, which
-// builds the relay binary first; Playwright then starts the relay and the Vite
-// dev server (which builds the wasm), and drives a real browser against them.
+// PWA <-> relay smoke, run locally via `just e2e` and in CI (the `e2e` job in
+// .github/workflows/ci.yml). Locally, `just e2e` builds the relay binary
+// first; Playwright then starts the relay and the Vite dev server (which
+// builds the wasm), and drives a real browser against them.
 //
 // Requires `cargo` and `wasm-pack` on PATH (same as the web build).
 

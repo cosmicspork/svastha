@@ -42,9 +42,10 @@ fmt-check:
 clippy:
     cargo clippy --workspace --all-targets -- -D warnings
 
-# end-to-end PWA <-> relay browser smoke (local only; intentionally NOT in `all`
-# or CI). Builds the relay, then Playwright starts the relay + Vite dev server and
-# drives a real browser. Needs `cargo` and `wasm-pack` on PATH.
+# end-to-end PWA <-> relay browser smoke; also runs in CI as its own `e2e` job
+# (see .github/workflows/ci.yml). Kept out of `just all` since it needs cargo
+# and wasm-pack and is slow. Builds the relay, then Playwright starts the relay
+# + Vite dev server and drives a real browser.
 e2e:
     cargo build -p svastha-relay
     cd web && bun install && bunx playwright install chromium && bun run e2e

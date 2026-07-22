@@ -71,7 +71,7 @@ just web-dev    # run the web app
 just check      # fmt-check + clippy + svelte-check
 just test       # cargo test
 just all        # everything CI runs
-just e2e        # local-only PWA <-> relay browser smoke (needs cargo + wasm-pack)
+just e2e        # PWA <-> relay browser smoke (needs cargo + wasm-pack; also runs in CI)
 ```
 
 ## Releasing
