@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { orderByFrequency } from '../bloom-order'
+import { orderByFrequency, selectPetals } from '../bloom-order'
 
 describe('orderByFrequency', () => {
   it('keeps the default order when every count is zero', () => {
@@ -26,5 +26,30 @@ describe('orderByFrequency', () => {
       { id: 3, count: 5 },
     ]
     expect(orderByFrequency(items, (item) => item.count).map((i) => i.id)).toEqual([1, 2, 3])
+  })
+})
+
+describe('selectPetals', () => {
+  it('shows every item as a petal with no More when there are 7 or fewer', () => {
+    const items = ['a', 'b', 'c', 'd', 'e', 'f', 'g']
+    expect(selectPetals(items)).toEqual({ petals: items, hasMore: false })
+  })
+
+  it('shows all items with no More at exactly the boundary', () => {
+    const items = [1, 2, 3, 4, 5, 6]
+    expect(selectPetals(items)).toEqual({ petals: items, hasMore: false })
+  })
+
+  it('caps at 6 petals plus More once there are more than 7 items', () => {
+    const items = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
+    expect(selectPetals(items)).toEqual({ petals: ['a', 'b', 'c', 'd', 'e', 'f'], hasMore: true })
+  })
+
+  it('respects the given ordering when capping (top-N, not resorted)', () => {
+    const items = ['g', 'a', 'f', 'b', 'e', 'c', 'd', 'h', 'z']
+    expect(selectPetals(items)).toEqual({
+      petals: ['g', 'a', 'f', 'b', 'e', 'c'],
+      hasMore: true,
+    })
   })
 })
