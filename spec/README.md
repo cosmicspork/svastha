@@ -14,9 +14,9 @@ non-Rust reimplementation or an auditor can validate against the same bytes.
 `svastha_core::CONTRACT_VERSION` tracks breaking changes; clients and relays
 negotiate on it so independently deployed and self-hosted pieces can coexist.
 
-Status: key derivation, the encryption envelope, the event schema, and the relay
-wire protocol (auth handshake, blob endpoints, grants, mailbox, and shares) are
-specified below.
+Status: key derivation, the encryption envelope, the event schema, the curation
+record, and the relay wire protocol (auth handshake, blob endpoints, grants,
+mailbox, and shares) are specified below.
 
 ## Key derivation
 
@@ -188,6 +188,71 @@ entries differ only in provenance to pin the cross-source id collision. Regenera
 with `cargo run -p svastha-core --example event_vectors` (only on a deliberate,
 version-bumped contract change).
 
+## Curation record
+
+The event log above is immutable; a thin **curation overlay** carries the mutable
+state layered on top (tags, hides, notes, favorite quick-log templates, and
+concept-level status/name records). Each entry is a small, namespace-defined
+value under an app-level key, merged last-writer-wins. `core` is namespace-
+agnostic: `key` and `value` are opaque to the contract. The overlay's app-level
+conventions (which key namespaces exist, the mutable `cur-*` blob mapping, and its
+owner-only-in-v1 sync scope) live in `docs/ARCHITECTURE.md`, "Curation overlay".
+
+A curation record is **signed** — Ed25519, by the same owner identity that signs
+events. A record has:
+
+- `key` — the app-level curation key (a UTF-8 string), e.g. `tag:{event_id}`.
+- `value` — the namespace-defined payload, an arbitrary JSON value.
+- `updated_at` — a plain client clock in **Unix milliseconds** (an `i64`), not a
+  signed or server-attested timestamp. It is only the merge ordering key.
+- `author` — the writer's 32-byte Ed25519 public key (hex).
+
+### Canonical encoding and signing
+
+The value is first reduced to **canonical JSON**: compact (no incidental
+whitespace) with object keys sorted lexicographically, so the same logical value
+always encodes to the same bytes regardless of the input key order. The author
+then signs, with Ed25519, over this preimage:
+
+```
+sign( "svastha/v{VERSION}/curation"    // domain label; VERSION = CONTRACT_VERSION
+  ‖ len(key)             ‖ key          // len is u32 big-endian, value UTF-8
+  ‖ len(canon(value))    ‖ canon(value) // canonical JSON, length-prefixed
+  ‖ updated_at )                        // i64 big-endian (8 bytes)
+```
+
+The field encoding (u32-big-endian-length-prefixed strings/bytes, big-endian
+fixed-width integers) is exactly the event and relay-auth scheme. `author` is
+**not** in the preimage — it is the verification key, the same way a `SignedEvent`
+treats its own `author`, so substituting a different `author` still fails
+verification (the signature was made by a different key). The `…/curation` domain
+label separates these signatures from the `…/event` and `…/relay-auth` ones. A
+`SignedCurationRecord` carries all four fields plus the `signature` (hex), in one
+**flat** JSON object: `{ key, value, updated_at, author, signature }`.
+
+**Merge (last-writer-wins).** For two records under the same key, the higher
+`updated_at` wins; a tie breaks toward the lexicographically greater `author`.
+Comparing the raw `author` bytes is identical to comparing their lowercase-hex
+form (fixed-width hex is order-preserving). The merge is a pure, deterministic,
+commutative tiebreak and does **not** verify signatures: a caller receiving a
+record from outside its own vault (a doctor-share bundle) **verifies-or-drops
+first**, then merges only what verified.
+
+**Versioning.** Signing a curation record is *additive*: it does not touch key
+derivation, the encryption envelope, the signing-preimage structure of events, or
+the relay protocol, and no pre-existing wire value changes shape. Like the
+`attachment` value shape before it, it therefore does **not** bump
+`CONTRACT_VERSION` — a bump rotates every derived identity and HKDF label and would
+orphan every existing vault, the opposite of what an additive record should do.
+New vectors are pinned under the current version.
+
+Test vectors: [`vectors/curation.json`](vectors/curation.json). One valid record
+pins its canonical preimage and deterministic (RFC 8032) signature; three tamper
+cases (a mutated `value`, a mutated `key`, and a signature re-attributed to a
+wrong `author`) each pin `valid: false`, the outcome a correct verifier must
+produce. Regenerate with `cargo run -p svastha-core --example curation_vectors`
+(only on a deliberate, version-bumped contract change).
+
 ## Relay wire protocol
 
 The relay is a zero-knowledge store-and-forward server: it holds no keys, stores
@@ -325,6 +390,14 @@ bearer **token**. The relay stays zero-knowledge: the bundle is opaque
 ciphertext like every other byte it holds, and the per-share key that decrypts
 it travels only in the link's URL *fragment* (`#…`), which browsers never send
 to the server — so it never reaches the relay.
+
+The bundle's internal structure is app-level (opaque to the relay, documented in
+`docs/ARCHITECTURE.md`). A follow-up will let a bundle **MAY** carry an optional
+`curation` array of `SignedCurationRecord`s (see "Curation record" above)
+alongside its events, so a share can include the owner's relevant tags and notes;
+the recipient **verifies each signature and drops any that fail** before showing
+them. This is the reason the curation record is signed and its verification lives
+in the trust contract; the bundle field itself lands with that follow-up PR.
 
 | Method & path | Auth | Body | Success | Notes |
 |---|---|---|---|---|

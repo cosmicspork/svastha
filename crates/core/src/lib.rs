@@ -20,6 +20,7 @@ pub(crate) fn version_label(operation: &str) -> String {
     format!("svastha/v{CONTRACT_VERSION}/{operation}")
 }
 
+pub mod curation;
 pub mod envelope;
 pub mod event;
 pub mod keys;

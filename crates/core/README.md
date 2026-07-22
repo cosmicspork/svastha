@@ -1,7 +1,8 @@
 # svastha-core
 
 The Svastha trust contract: the encryption envelope, the typed/signed event
-schema, identity key derivation, and the relay auth handshake. This is the single
+schema, the signed curation record, identity key derivation, and the relay auth
+handshake. This is the single
 source of truth for the security-critical wire format — it compiles to native
 (relay, node) and to WASM (the web app), so every component runs the exact same
 bytes. The relay never decrypts.

@@ -2,9 +2,9 @@
 
 WASM bindings that expose the [Svastha](https://github.com/cosmicspork/svastha)
 trust contract ([`svastha-core`](https://crates.io/crates/svastha-core)) to the
-browser: identity generation/derivation, envelope seal/open, event signing, and
-relay-request signing. The browser runs the exact same contract code as the
-servers.
+browser: identity generation/derivation, envelope seal/open, event signing,
+curation-record signing/verification/merge, and relay-request signing. The
+browser runs the exact same contract code as the servers.
 
 The built npm package is published as
 [`@svastha/core`](https://www.npmjs.com/package/@svastha/core).

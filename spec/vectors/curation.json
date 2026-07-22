@@ -1,0 +1,72 @@
+{
+  "contract_version": 0,
+  "records": [
+    {
+      "note": "valid signed curation record (tag list)",
+      "valid": true,
+      "signer_seed_hex": "0102030405060708090a0b0c0d0e0f10",
+      "canon_hex": "737661737468612f76302f6375726174696f6e000000447461673a373332313334653839646366333237326662616264353063643538343634306639636632653335396633303161393537313062666536393265653161376363300000001b7b2274616773223a5b226665766572222c2274726176656c225d7d0000018bcfe56800",
+      "record": {
+        "author": "0b1b59fe721ec4f782ea1343e7a6db66a84289de7d626838f24571b389384f5e",
+        "key": "tag:732134e89dcf3272fbabd50cd584640f9cf2e359f301a95710bfe692ee1a7cc0",
+        "signature": "99b971135d2337a8a08805eef763674279aece9d27b892d0ce95721d4226fc95ecdf34436790abe138606cf6a5fc5615d948056d0b047fb862fa8784f800a509",
+        "updated_at": 1700000000000,
+        "value": {
+          "tags": [
+            "fever",
+            "travel"
+          ]
+        }
+      }
+    },
+    {
+      "note": "tampered value: signature no longer covers the record",
+      "valid": false,
+      "record": {
+        "author": "0b1b59fe721ec4f782ea1343e7a6db66a84289de7d626838f24571b389384f5e",
+        "key": "tag:732134e89dcf3272fbabd50cd584640f9cf2e359f301a95710bfe692ee1a7cc0",
+        "signature": "99b971135d2337a8a08805eef763674279aece9d27b892d0ce95721d4226fc95ecdf34436790abe138606cf6a5fc5615d948056d0b047fb862fa8784f800a509",
+        "updated_at": 1700000000000,
+        "value": {
+          "tags": [
+            "fever",
+            "travel",
+            "forged"
+          ]
+        }
+      }
+    },
+    {
+      "note": "tampered key: signature no longer covers the record",
+      "valid": false,
+      "record": {
+        "author": "0b1b59fe721ec4f782ea1343e7a6db66a84289de7d626838f24571b389384f5e",
+        "key": "tag:0000000000000000000000000000000000000000000000000000000000000000",
+        "signature": "99b971135d2337a8a08805eef763674279aece9d27b892d0ce95721d4226fc95ecdf34436790abe138606cf6a5fc5615d948056d0b047fb862fa8784f800a509",
+        "updated_at": 1700000000000,
+        "value": {
+          "tags": [
+            "fever",
+            "travel"
+          ]
+        }
+      }
+    },
+    {
+      "note": "wrong author: signature does not verify under the substituted key",
+      "valid": false,
+      "record": {
+        "author": "8498df7c8ba334e8886592e33f574408312111d54149955b15cf9fb9eed44aaa",
+        "key": "tag:732134e89dcf3272fbabd50cd584640f9cf2e359f301a95710bfe692ee1a7cc0",
+        "signature": "99b971135d2337a8a08805eef763674279aece9d27b892d0ce95721d4226fc95ecdf34436790abe138606cf6a5fc5615d948056d0b047fb862fa8784f800a509",
+        "updated_at": 1700000000000,
+        "value": {
+          "tags": [
+            "fever",
+            "travel"
+          ]
+        }
+      }
+    }
+  ]
+}
