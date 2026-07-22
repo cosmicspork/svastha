@@ -34,6 +34,28 @@ describe('parseLoincCsv', () => {
   it('throws when the header lacks a recognizable code/name column', () => {
     expect(() => parseLoincCsv('foo,bar\n1,2')).toThrow()
   })
+
+  // The real "Top 2000+ LOINC Lab Observations" download (account-gated at
+  // loinc.org/downloads, so not fetchable here) publishes a stripped-down
+  // 3-column CSV — LOINC_NUM, LONG_COMMON_NAME, ORDER_OBS — per LOINC's own
+  // Mapper's Guide to the Top 2000+ Lab Observations. This fixture mirrors
+  // that exact column layout (fabricated codes/names, ≤5 rows) so the parser
+  // is pinned against the real file's shape, not just a minimal 2-column one.
+  it('parses the real Top-2000 export column layout (LOINC_NUM, LONG_COMMON_NAME, ORDER_OBS)', () => {
+    const csv = [
+      'LOINC_NUM,LONG_COMMON_NAME,ORDER_OBS',
+      '2345-7,"Glucose [Mass/volume] in Serum or Plasma",Both',
+      '2160-0,"Creatinine [Mass/volume] in Serum or Plasma",Both',
+      '718-7,"Hemoglobin [Mass/volume] in Blood",Both',
+      '2951-2,"Sodium [Moles/volume] in Serum or Plasma",Observation',
+    ].join('\n')
+    expect(parseLoincCsv(csv)).toEqual({
+      '2345-7': 'Glucose [Mass/volume] in Serum or Plasma',
+      '2160-0': 'Creatinine [Mass/volume] in Serum or Plasma',
+      '718-7': 'Hemoglobin [Mass/volume] in Blood',
+      '2951-2': 'Sodium [Moles/volume] in Serum or Plasma',
+    })
+  })
 })
 
 describe('parseRxnormConso', () => {

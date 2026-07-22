@@ -37,10 +37,20 @@ network request can't reveal which codes a vault holds.
 
 - Download page: <https://loinc.org/downloads/> → "Top 2000+ LOINC Lab
   Observations" (SI). Requires a **free** LOINC account, so this step can't be
-  automated — download the CSV by hand and drop it in `sources/` as e.g.
-  `Top2000CommonLOINCLabResults.csv`.
-- The parser (`parseLoincCsv`) finds the `LOINC_NUM` and `LONG_COMMON_NAME`
-  columns by header, so minor release-to-release schema drift is tolerated.
+  automated — download the CSV by hand.
+- Point the build at it either by dropping it in `sources/` (matched by the
+  `top2000` substring, e.g. as `Top2000CommonLOINCLabResults.csv`) or by
+  passing the path explicitly, which skips the substring search:
+
+  ```
+  LOINC_TOP2000_CSV=/path/to/Top2000CommonLOINCLabResults.csv bun run scripts/build-code-dictionary/build.ts
+  # or
+  bun run scripts/build-code-dictionary/build.ts --loinc-csv=/path/to/Top2000CommonLOINCLabResults.csv
+  ```
+- The published CSV export is 3 columns — `LOINC_NUM`, `LONG_COMMON_NAME`,
+  `ORDER_OBS` — but the parser (`parseLoincCsv`) finds the code/name columns by
+  header rather than fixed position, so minor release-to-release schema drift
+  (extra columns, reordering) is tolerated.
 - **Until that file is added, `loinc.json` is a starter** derived from the
   app's own curated LOINC codes (vitals + exercise, from `web/src/lib/codes.ts`)
   so the file exists and the loader is testable. The manifest marks it

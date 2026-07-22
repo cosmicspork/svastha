@@ -8,7 +8,11 @@ into the sections below.
 
 ## Now
 
-Nothing in flight.
+- **Full LOINC Top-2000 dictionary** — build pipeline now ingests a
+  maintainer-supplied Top-2000 CSV (`LOINC_TOP2000_CSV=…` or
+  `--loinc-csv=…`); the download itself is account-gated, so `loinc.json`
+  still ships as the starter dictionary until the maintainer runs the build
+  with the real file.
 
 ## Next
 
@@ -52,7 +56,6 @@ Nothing in flight.
 - Per-item curation on grouped spine entries
 - Long-press bloom shortcut
 - Friendly provenance source names
-- Full LOINC Top-2000 dictionary (the download is account-gated)
 
 **Native (arrives with the wrapper)**
 

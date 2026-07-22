@@ -13,6 +13,17 @@
 // account-gated Top-2000 CSV is absent, a small starter dictionary is derived
 // from the app's own curated LOINC codes (codes.ts) so the file and pipeline
 // exist and are testable. SOURCES.md tracks the Top-2000 regeneration.
+//
+// LOINC's Top-2000 CSV requires a free loinc.org account and license
+// acceptance to download, so nothing here fetches it. Once you have the file
+// by hand, point the build at it either way:
+//
+//   LOINC_TOP2000_CSV=/path/to/Top2000CommonLOINCLabResults.csv bun run scripts/build-code-dictionary/build.ts
+//   bun run scripts/build-code-dictionary/build.ts --loinc-csv=/path/to/Top2000CommonLOINCLabResults.csv
+//
+// or just drop it in sources/ (matched by the "top2000" substring, like the
+// other sources below) — either way, run this, review the diff under
+// web/public/dict/, and commit it. See SOURCES.md for the download page.
 
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
@@ -119,6 +130,23 @@ function findSource(match: string): string | null {
   return hit ? join(SOURCES_DIR, hit) : null
 }
 
+/** LOINC's Top-2000 CSV is the one source we expect the maintainer to point at
+ * directly (env var or CLI flag), since it's a one-off manual download rather
+ * than something dropped permanently in sources/. Falls back to the usual
+ * sources/ substring match, then to null (starter dictionary). An explicit
+ * path that doesn't exist is a typo, not "not supplied" — warn distinctly
+ * rather than silently falling through. */
+function findLoincSource(): string | null {
+  const flagPrefix = '--loinc-csv='
+  const flag = process.argv.find((a) => a.startsWith(flagPrefix))
+  const explicit = flag ? flag.slice(flagPrefix.length) : process.env.LOINC_TOP2000_CSV
+  if (explicit) {
+    if (existsSync(explicit)) return explicit
+    console.warn(`! LOINC source "${explicit}" (from --loinc-csv/LOINC_TOP2000_CSV) does not exist — ignoring.`)
+  }
+  return findSource('top2000')
+}
+
 /** Stable-sorted, compact JSON so regenerated files diff cleanly. */
 function serialize(map: CodeMap): string {
   const sorted: CodeMap = {}
@@ -131,7 +159,7 @@ function main(): void {
   const files: ManifestFile[] = []
 
   for (const spec of SPECS) {
-    const srcPath = findSource(spec.source)
+    const srcPath = spec.system === 'http://loinc.org' ? findLoincSource() : findSource(spec.source)
     let map: CodeMap
     let starter = false
 
