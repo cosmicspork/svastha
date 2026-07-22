@@ -67,18 +67,50 @@
       </button>
     </div>
 
-    <SummarySection title="Problems" rows={summary.problems} hueClass="cat-clinical" />
-    <SummarySection title="Medications" rows={summary.medications} hueClass="cat-med" />
+    <SummarySection
+      title="Problems"
+      rows={summary.problems}
+      hueClass="cat-clinical"
+      dictionaryEnabled={$dictionaryStatus.enabled}
+      {readonly}
+    />
+    <SummarySection
+      title="Medications"
+      rows={summary.medications}
+      hueClass="cat-med"
+      dictionaryEnabled={$dictionaryStatus.enabled}
+      {readonly}
+    />
     <SummarySection
       title="Allergies"
       rows={summary.allergies}
       hueClass="cat-symptom"
       alwaysShow
       emptyText="None recorded"
+      dictionaryEnabled={$dictionaryStatus.enabled}
+      {readonly}
     />
-    <SummarySection title="Immunizations" rows={summary.immunizations} hueClass="cat-clinical" />
-    <SummarySection title="Latest vitals" rows={summary.latestVitals} hueClass="cat-vital" />
-    <SummarySection title="Recent results" rows={summary.recentResults} hueClass="cat-clinical" />
+    <SummarySection
+      title="Immunizations"
+      rows={summary.immunizations}
+      hueClass="cat-clinical"
+      dictionaryEnabled={$dictionaryStatus.enabled}
+      {readonly}
+    />
+    <SummarySection
+      title="Latest vitals"
+      rows={summary.latestVitals}
+      hueClass="cat-vital"
+      dictionaryEnabled={$dictionaryStatus.enabled}
+      {readonly}
+    />
+    <SummarySection
+      title="Recent results"
+      rows={summary.recentResults}
+      hueClass="cat-clinical"
+      dictionaryEnabled={$dictionaryStatus.enabled}
+      {readonly}
+    />
 
     {#if summary.cycle}
       <section class="section cycle-section" data-testid="summary-section-cycle">
@@ -231,6 +263,8 @@
     }
     .summary :global(.section-head),
     .summary :global(.label),
+    .summary :global(.code),
+    .summary :global(.hint),
     .summary :global(.detail),
     .summary :global(.date),
     .summary :global(.count),

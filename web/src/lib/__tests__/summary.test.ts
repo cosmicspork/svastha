@@ -48,6 +48,9 @@ describe('buildSummary: problems', () => {
     expect(problems[0].count).toBe(2)
     expect(problems[0].date).toBe('2020-03-01T00:00:00+00:00') // earliest onset
     expect(problems[0].eventIds).toEqual(['a', 'b'])
+    // resolved via the event's own display: name-first, coding demoted as data
+    expect(problems[0].nameResolved).toBe(true)
+    expect(problems[0].coding).toEqual({ system: 'SNOMED', code: '38341003' })
   })
 
   it('includes an undated condition and sorts it last', () => {
@@ -60,12 +63,15 @@ describe('buildSummary: problems', () => {
     expect(problems[1].date).toBeNull()
   })
 
-  it('falls back to shortened system + code when the source carries no display', () => {
+  it('falls back to "Unnamed entry" — never the raw code — when the source carries no display and nothing else names it', () => {
     const events = [
       ev({ kind: 'condition', code: { system: 'http://hl7.org/fhir/sid/icd-10-cm', code: 'E11.9' }, effective_at: '2021-01-01T00:00:00+00:00' }),
     ]
     const { problems } = buildSummary(events)
-    expect(problems[0].label).toBe('ICD-10-CM E11.9')
+    expect(problems[0].label).toBe('Unnamed entry')
+    expect(problems[0].nameResolved).toBe(false)
+    // the code is still carried as data for the view to show alongside the placeholder
+    expect(problems[0].coding).toEqual({ system: 'ICD-10-CM', code: 'E11.9' })
   })
 
   it('resolves a display-less condition from the same code named on a different event', () => {
@@ -77,6 +83,20 @@ describe('buildSummary: problems', () => {
     const { problems } = buildSummary(events)
     expect(problems).toHaveLength(1)
     expect(problems[0].label).toBe('Type 2 diabetes mellitus')
+    expect(problems[0].nameResolved).toBe(true)
+    expect(problems[0].coding).toEqual({ system: 'ICD-10-CM', code: 'E11.9' })
+  })
+
+  it('resolves a display-less condition from the offline dictionary when the vault names it nowhere', () => {
+    const icd10 = 'http://hl7.org/fhir/sid/icd-10-cm'
+    const events = [
+      ev({ kind: 'condition', code: { system: icd10, code: 'E11.9' }, effective_at: '2021-01-01T00:00:00+00:00' }),
+    ]
+    const dictionary = new Map([[`${icd10}|E11.9`, 'Type 2 diabetes mellitus']])
+    const { problems } = buildSummary(events, { dictionary })
+    expect(problems[0].label).toBe('Type 2 diabetes mellitus')
+    expect(problems[0].nameResolved).toBe(true)
+    expect(problems[0].coding).toEqual({ system: 'ICD-10-CM', code: 'E11.9' })
   })
 
   it('picks the most frequent display, tie-broken shortest-then-lexicographic, under conflicting names', () => {
@@ -90,6 +110,26 @@ describe('buildSummary: problems', () => {
     const { problems } = buildSummary(events)
     expect(problems).toHaveLength(1)
     expect(problems[0].label).toBe('BMI')
+  })
+})
+
+describe('buildSummary: rows with no coding', () => {
+  it('carries a null coding and nameResolved true for a free-text medication', () => {
+    const events = [
+      ev({ kind: 'medication_statement', code: null, value: { text: 'Ibuprofen — 400 mg' }, effective_at: '2024-01-01T00:00:00+00:00' }),
+    ]
+    const { medications } = buildSummary(events)
+    expect(medications[0].label).toBe('Ibuprofen — 400 mg')
+    expect(medications[0].coding).toBeNull()
+    expect(medications[0].nameResolved).toBe(true)
+  })
+
+  it('falls back to the humanized kind word, still nameResolved true, when there is neither coding nor text', () => {
+    const events = [ev({ kind: 'medication_statement', code: null, value: null, effective_at: '2024-01-01T00:00:00+00:00' })]
+    const { medications } = buildSummary(events)
+    expect(medications[0].label).toBe('medication statement')
+    expect(medications[0].coding).toBeNull()
+    expect(medications[0].nameResolved).toBe(true)
   })
 })
 
@@ -145,6 +185,12 @@ describe('buildSummary: latest vitals', () => {
     expect(hr.count).toBe(2)
     // BP row comes before HR (VITALS declaration order)
     expect(latestVitals.map((r) => r.label)).toEqual(['Blood pressure', 'Heart rate'])
+    // vitals always resolve from the hardcoded VITALS labels; the paired BP
+    // row has no single coding of its own, but a plain vital carries its LOINC.
+    expect(bp.coding).toBeNull()
+    expect(bp.nameResolved).toBe(true)
+    expect(hr.coding).toEqual({ system: 'LOINC', code: '8867-4' })
+    expect(hr.nameResolved).toBe(true)
   })
 })
 
