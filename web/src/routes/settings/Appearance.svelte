@@ -1,14 +1,16 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
-  import { del, get, put } from '../../lib/db'
+  import { onMount, tick } from 'svelte'
+  import { get, put } from '../../lib/db'
   import { loadTheme, setTheme, type ThemePref } from '../../lib/theme'
   import { CATEGORY_META } from '../../lib/category'
   import { LOG_KINDS } from '../../lib/log-kinds'
   import {
     applyStoredOrder,
+    BLOOM_ORDER_ON_PREF,
     BLOOM_ORDER_PREF,
     MAX_ACTION_PETALS,
     orderByFrequency,
+    selectPetals,
   } from '../../lib/bloom-order'
   import { categoryLogCounts } from '../../lib/events'
 
@@ -43,34 +45,43 @@
   }
 
   // --- bloom petal order ---
-  // null = automatic (frequency-ordered, the default); an array = the user's
-  // manual order, stored under BLOOM_ORDER_PREF and read by Bloom.svelte.
-  let bloomOrder = $state<string[] | null>(null)
+  // Two prefs (see bloom-order.ts): the saved manual order, and whether it's
+  // in effect. Toggling back to Automatic keeps the saved order around, so a
+  // hand-built arrangement survives a round-trip through Automatic.
+  let customOrderOn = $state(false)
+  let savedOrder = $state<string[] | null>(null)
+  // Announced via the aria-live region below the list — the keyed {#each}
+  // reorders silently otherwise.
+  let orderAnnouncement = $state('')
   onMount(async () => {
-    bloomOrder = (await get<string[]>('prefs', BLOOM_ORDER_PREF)) ?? null
+    customOrderOn = (await get<boolean>('prefs', BLOOM_ORDER_ON_PREF)) === true
+    savedOrder = (await get<string[]>('prefs', BLOOM_ORDER_PREF)) ?? null
   })
 
   const orderedKinds = $derived(
-    bloomOrder ? applyStoredOrder(LOG_KINDS, bloomOrder, (k) => k.kind) : [],
+    customOrderOn && savedOrder ? applyStoredOrder(LOG_KINDS, savedOrder, (k) => k.kind) : [],
   )
 
   async function useAutomaticOrder() {
-    bloomOrder = null
-    await del('prefs', BLOOM_ORDER_PREF)
+    customOrderOn = false
+    await put('prefs', false, BLOOM_ORDER_ON_PREF)
   }
 
-  // Seed the manual list from today's automatic order, so switching to Custom
-  // starts from the fan the user already sees rather than the factory default.
   async function useCustomOrder() {
-    if (bloomOrder) return
-    const counts = await categoryLogCounts()
-    const seeded = orderByFrequency(LOG_KINDS, (k) => counts[k.category] ?? 0).map((k) => k.kind)
-    bloomOrder = seeded
-    await put('prefs', seeded, BLOOM_ORDER_PREF)
+    if (customOrderOn) return
+    if (!savedOrder) {
+      // First time: seed from today's automatic order, so Custom starts from
+      // the fan the user already sees rather than the factory default.
+      const counts = await categoryLogCounts()
+      const seeded = orderByFrequency(LOG_KINDS, (k) => counts[k.category] ?? 0).map((k) => k.kind)
+      savedOrder = seeded
+      await put('prefs', seeded, BLOOM_ORDER_PREF)
+    }
+    customOrderOn = true
+    await put('prefs', true, BLOOM_ORDER_ON_PREF)
   }
 
   async function moveKind(kind: string, delta: -1 | 1) {
-    if (!bloomOrder) return
     const current = orderedKinds.map((k) => k.kind)
     const i = current.indexOf(kind)
     const j = i + delta
@@ -78,8 +89,19 @@
     ;[current[i], current[j]] = [current[j], current[i]]
     // `current` is a fresh plain array, not the $state proxy — IndexedDB's
     // structured-clone put can't serialize a reactivity proxy.
-    bloomOrder = current
+    savedOrder = current
+    const label = LOG_KINDS.find((k) => k.kind === kind)?.label ?? kind
+    orderAnnouncement = `${label}, position ${j + 1} of ${current.length}`
     await put('prefs', current, BLOOM_ORDER_PREF)
+    // A move into first/last place disables the arrow that was just pressed,
+    // which would drop keyboard focus to <body>; hand it to the row's other
+    // arrow instead.
+    await tick()
+    if (delta === -1 && j === 0) {
+      document.querySelector<HTMLButtonElement>(`[data-testid="bloom-down-${kind}"]`)?.focus()
+    } else if (delta === 1 && j === current.length - 1) {
+      document.querySelector<HTMLButtonElement>(`[data-testid="bloom-up-${kind}"]`)?.focus()
+    }
   }
 </script>
 
@@ -154,16 +176,16 @@
   </div>
   <div class="setrow">
     <span class="l">Petal order<small>Automatic puts what you log most first</small></span>
-    <div class="seg" style:width="11rem">
+    <div class="seg" style:width="12rem">
       <button
-        aria-pressed={bloomOrder === null}
+        aria-pressed={!customOrderOn}
         onclick={useAutomaticOrder}
         data-testid="bloom-order-auto"
       >
         Automatic
       </button>
       <button
-        aria-pressed={bloomOrder !== null}
+        aria-pressed={customOrderOn}
         onclick={useCustomOrder}
         data-testid="bloom-order-custom"
       >
@@ -171,7 +193,7 @@
       </button>
     </div>
   </div>
-  {#if bloomOrder}
+  {#if customOrderOn}
     <ul class="order-list" data-testid="bloom-order-list">
       {#each orderedKinds as k, i (k.kind)}
         <li class="order-row">
@@ -200,9 +222,12 @@
         </li>
       {/each}
     </ul>
-    <p class="muted order-hint">
-      The first {MAX_ACTION_PETALS} open as petals; the rest fold behind “More”.
-    </p>
+    <p class="visually-hidden" aria-live="polite">{orderAnnouncement}</p>
+    {#if selectPetals(LOG_KINDS).hasMore}
+      <p class="muted order-hint">
+        The first {MAX_ACTION_PETALS} open as petals; the rest fold behind “More”.
+      </p>
+    {/if}
   {/if}
 </section>
 
@@ -270,7 +295,6 @@
   .order-glyph {
     width: 1.6em;
     text-align: center;
-    color: currentColor;
   }
 
   .order-label {
@@ -299,5 +323,16 @@
   .order-hint {
     margin-top: var(--space-2);
     font-size: var(--text-xs);
+  }
+
+  /* Same idiom as Data.svelte's hidden file input — present for assistive
+     tech, invisible otherwise. */
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
   }
 </style>

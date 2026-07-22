@@ -16,9 +16,12 @@ export function orderByFrequency<T>(items: T[], countOf: (item: T) => number): T
     .map((entry) => entry.item)
 }
 
-/** Prefs key holding a user's manual petal order as an array of kind strings.
- * Present = manual order wins over `orderByFrequency`; absent = automatic. */
+/** Prefs keys for the manual petal order: `BLOOM_ORDER_PREF` holds the saved
+ * array of kind strings, `BLOOM_ORDER_ON_PREF` whether it's in effect. Kept
+ * separate so switching back to Automatic hides the hand-built order instead
+ * of erasing it. */
 export const BLOOM_ORDER_PREF = 'bloom-order'
+export const BLOOM_ORDER_ON_PREF = 'bloom-order-on'
 
 /** Reorder `items` to follow `storedKinds` (a saved manual order). Kinds the
  * stored list doesn't know — added in a release after the order was saved —
