@@ -65,6 +65,14 @@ export const MIGRATIONS: ((db: IDBDatabase, tx: IDBTransaction) => void)[] = [
   (db) => {
     db.createObjectStore('attachments', { keyPath: 'sha256' })
   },
+  // v7: local notifications (see lib/notifications.ts) — device-local, never
+  // synced. One row per notification keyed by a caller-supplied stable id (so a
+  // re-derived source can't duplicate); `createdAt` is indexed so the store can
+  // read newest-first and prune past the cap without a full-scan sort.
+  (db) => {
+    const notifications = db.createObjectStore('notifications', { keyPath: 'id' })
+    notifications.createIndex('createdAt', 'createdAt')
+  },
 ]
 
 function requestToPromise<T>(req: IDBRequest<T>): Promise<T> {

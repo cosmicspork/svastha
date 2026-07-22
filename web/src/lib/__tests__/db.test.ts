@@ -11,7 +11,7 @@ describe('MIGRATIONS', () => {
     const db = await openDb()
     expect(db.version).toBe(MIGRATIONS.length)
     expect([...db.objectStoreNames].sort()).toEqual(
-      ['attachments', 'curation', 'dictionary', 'doctor_shares', 'events', 'keyvault', 'prefs', 'provenance', 'shared_events', 'shares', 'sync'].sort(),
+      ['attachments', 'curation', 'dictionary', 'doctor_shares', 'events', 'keyvault', 'notifications', 'prefs', 'provenance', 'shared_events', 'shares', 'sync'].sort(),
     )
 
     const tx = db.transaction('events', 'readonly')
@@ -23,6 +23,20 @@ describe('MIGRATIONS', () => {
 
     const curationTx = db.transaction('curation', 'readonly')
     expect([...curationTx.objectStore('curation').indexNames]).toEqual(['updated_at'])
+
+    const notifTx = db.transaction('notifications', 'readonly')
+    expect([...notifTx.objectStore('notifications').indexNames]).toEqual(['createdAt'])
+  })
+})
+
+describe('notifications (v7)', () => {
+  it('round-trips a notification keyed by id and queries by createdAt', async () => {
+    const record = { id: 'app-update:1', kind: 'app-update', title: 'Update', createdAt: '2026-07-22T00:00:00Z' }
+    await put('notifications', record)
+    expect(await get('notifications', 'app-update:1')).toEqual(record)
+
+    const byCreatedAt = await getAllFromIndex('notifications', 'createdAt', IDBKeyRange.lowerBound('2026-07-01T00:00:00Z'))
+    expect(byCreatedAt).toEqual([record])
   })
 })
 

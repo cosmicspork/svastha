@@ -74,6 +74,22 @@ export function addHoursIso(iso: string, hours: number): string {
   return toLocalIso(new Date(new Date(iso).getTime() + hours * 3_600_000))
 }
 
+/** A compact "how long ago" for an ISO instant: "just now", "5m", "3h", "2d",
+ * then a plain date past a week. Pure over `now` (millis) so it unit-tests
+ * without a wall clock; used by the notification list where a coarse relative
+ * time reads better than a full timestamp. */
+export function relativeTime(iso: string, now: number = Date.now()): string {
+  const deltaMs = now - isoToMillis(iso)
+  const mins = Math.floor(deltaMs / 60_000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}h`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days}d`
+  return new Date(isoToMillis(iso)).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
 /** "Today" / "Yesterday" / weekday + date, relative to the device's current
  * local date. */
 export function formatDay(key: string): string {
