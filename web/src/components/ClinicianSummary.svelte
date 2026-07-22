@@ -14,16 +14,27 @@
   import SummarySection from './SummarySection.svelte'
   import Sheet from './Sheet.svelte'
 
-  // Same contract as Spine.svelte: `readonly` (the person screen, over a
-  // share's cached events) supplies its own already-loaded events and skips the
-  // own-vault fetch and all curation reads — curation (status, names, hides) is
-  // owner-only in v1 (see docs/ARCHITECTURE.md, "Curation overlay"). A recipient
-  // therefore sees every med/problem as one flat, non-tappable section, exactly
-  // as before this change.
+  // Same contract as Spine.svelte: `readonly` (the person screen, or a doctor
+  // share opened cold) supplies its own already-loaded events and skips the
+  // own-vault fetch and all local curation reads. A read-only view never reads
+  // the local `cur-*` store (curation is owner-only in v1 — see
+  // docs/ARCHITECTURE.md, "Curation overlay"), but a doctor-share recipient MAY
+  // be handed the owner's `status:`/`name:` overlay for the shared concepts,
+  // already verified, via `status`/`names` — so it renders the same Current/Past
+  // and Active/Resolved grouping and name overrides the owner sees, just inert
+  // (no action sheet). Person-view (no maps) shows a single current/active
+  // group, as before.
   let {
     events: providedEvents,
     readonly = false,
-  }: { events?: StoredEvent[]; readonly?: boolean } = $props()
+    status: providedStatus,
+    names: providedNames,
+  }: {
+    events?: StoredEvent[]
+    readonly?: boolean
+    status?: Map<string, ConceptStatus>
+    names?: Map<string, string>
+  } = $props()
 
   let ownEvents = $state<StoredEvent[]>([])
   let hiddenIds = $state<Set<string>>(new Set())
@@ -32,6 +43,11 @@
   let loaded = $state(false)
 
   const events = $derived(readonly ? (providedEvents ?? []) : ownEvents)
+  // In read-only mode the status/name overlay is whatever the caller passed
+  // (a share's verified curation, or nothing); otherwise it's this device's own
+  // loaded curation.
+  const effectiveStatus = $derived(readonly ? (providedStatus ?? new Map()) : statusMap)
+  const effectiveNames = $derived(readonly ? (providedNames ?? new Map()) : nameMap)
 
   // The offline code dictionary (see lib/dictionary.ts): empty unless enabled.
   // Hydrated once and re-hydrated when the Settings toggle bumps the version.
@@ -43,16 +59,21 @@
   })
 
   const summary = $derived(
-    buildSummary(
-      events,
-      readonly ? { dictionary } : { hiddenIds, dictionary, status: statusMap, names: nameMap },
-    ),
+    buildSummary(events, {
+      // Hides are a device-local redaction, never applied to someone else's
+      // shared record; only the own-vault render folds them.
+      hiddenIds: readonly ? undefined : hiddenIds,
+      dictionary,
+      status: effectiveStatus,
+      names: effectiveNames,
+    }),
   )
 
   // Meds split into current / past; problems into active / resolved. Same
   // underlying `status` ('active' | 'inactive'), different clinician wording.
-  // Read-only (recipient) rows are all 'active', so "past"/"resolved" stay
-  // empty and their groups don't render.
+  // Without a status overlay (Person view, or a share that carried none) every
+  // row is 'active', so "past"/"resolved" stay empty and their groups don't
+  // render.
   const currentMeds = $derived(summary.medications.filter((r) => r.status === 'active'))
   const pastMeds = $derived(summary.medications.filter((r) => r.status === 'inactive'))
   const activeProblems = $derived(summary.problems.filter((r) => r.status === 'active'))
@@ -130,92 +151,82 @@
       </button>
     </div>
 
-    {#if readonly}
+    <!-- Problems: Active (always shown) then a collapsed Resolved group. The
+         same layout for owner and recipient; a recipient's rows are inert
+         (no onrowtap) and the collapsed group appears only when the share
+         carried a resolved-problem status record. -->
+    <div class="split-group">
       <SummarySection
         title="Problems"
-        rows={summary.problems}
+        rows={activeProblems}
         hueClass="cat-clinical"
+        alwaysShow
+        emptyText="None recorded"
         dictionaryEnabled={$dictionaryStatus.enabled}
         {readonly}
+        onrowtap={readonly ? undefined : (row) => openAction(row, 'problem')}
       />
+      {#if resolvedProblems.length > 0}
+        <button
+          type="button"
+          class="ghost collapse-toggle"
+          aria-expanded={resolvedOpen}
+          onclick={() => (resolvedOpen = !resolvedOpen)}
+          data-testid="problems-resolved-toggle"
+        >
+          {resolvedOpen ? 'Hide' : 'Show'}
+          {resolvedProblems.length} resolved
+        </button>
+        {#if resolvedOpen}
+          <SummarySection
+            title="Resolved"
+            rows={resolvedProblems}
+            hueClass="cat-clinical"
+            heading="h3"
+            dictionaryEnabled={$dictionaryStatus.enabled}
+            {readonly}
+            onrowtap={readonly ? undefined : (row) => openAction(row, 'problem')}
+          />
+        {/if}
+      {/if}
+    </div>
+
+    <!-- Medications: Current (always shown) then a collapsed Past group. -->
+    <div class="split-group">
       <SummarySection
         title="Medications"
-        rows={summary.medications}
+        rows={currentMeds}
         hueClass="cat-med"
+        alwaysShow
+        emptyText="None recorded"
         dictionaryEnabled={$dictionaryStatus.enabled}
         {readonly}
+        onrowtap={readonly ? undefined : (row) => openAction(row, 'med')}
       />
-    {:else}
-      <!-- Problems: Active (always shown) then a collapsed Resolved group. -->
-      <div class="split-group">
-        <SummarySection
-          title="Problems"
-          rows={activeProblems}
-          hueClass="cat-clinical"
-          alwaysShow
-          emptyText="None recorded"
-          dictionaryEnabled={$dictionaryStatus.enabled}
-          onrowtap={(row) => openAction(row, 'problem')}
-        />
-        {#if resolvedProblems.length > 0}
-          <button
-            type="button"
-            class="ghost collapse-toggle"
-            aria-expanded={resolvedOpen}
-            onclick={() => (resolvedOpen = !resolvedOpen)}
-            data-testid="problems-resolved-toggle"
-          >
-            {resolvedOpen ? 'Hide' : 'Show'}
-            {resolvedProblems.length} resolved
-          </button>
-          {#if resolvedOpen}
-            <SummarySection
-              title="Resolved"
-              rows={resolvedProblems}
-              hueClass="cat-clinical"
-              heading="h3"
-              dictionaryEnabled={$dictionaryStatus.enabled}
-              onrowtap={(row) => openAction(row, 'problem')}
-            />
-          {/if}
+      {#if pastMeds.length > 0}
+        <button
+          type="button"
+          class="ghost collapse-toggle"
+          aria-expanded={pastMedsOpen}
+          onclick={() => (pastMedsOpen = !pastMedsOpen)}
+          data-testid="meds-past-toggle"
+        >
+          {pastMedsOpen ? 'Hide' : 'Show'}
+          {pastMeds.length} past
+        </button>
+        {#if pastMedsOpen}
+          <SummarySection
+            title="Past"
+            rows={pastMeds}
+            hueClass="cat-med"
+            heading="h3"
+            dictionaryEnabled={$dictionaryStatus.enabled}
+            {readonly}
+            onrowtap={readonly ? undefined : (row) => openAction(row, 'med')}
+          />
         {/if}
-      </div>
-
-      <!-- Medications: Current (always shown) then a collapsed Past group. -->
-      <div class="split-group">
-        <SummarySection
-          title="Medications"
-          rows={currentMeds}
-          hueClass="cat-med"
-          alwaysShow
-          emptyText="None recorded"
-          dictionaryEnabled={$dictionaryStatus.enabled}
-          onrowtap={(row) => openAction(row, 'med')}
-        />
-        {#if pastMeds.length > 0}
-          <button
-            type="button"
-            class="ghost collapse-toggle"
-            aria-expanded={pastMedsOpen}
-            onclick={() => (pastMedsOpen = !pastMedsOpen)}
-            data-testid="meds-past-toggle"
-          >
-            {pastMedsOpen ? 'Hide' : 'Show'}
-            {pastMeds.length} past
-          </button>
-          {#if pastMedsOpen}
-            <SummarySection
-              title="Past"
-              rows={pastMeds}
-              hueClass="cat-med"
-              heading="h3"
-              dictionaryEnabled={$dictionaryStatus.enabled}
-              onrowtap={(row) => openAction(row, 'med')}
-            />
-          {/if}
-        {/if}
-      </div>
-    {/if}
+      {/if}
+    </div>
     <SummarySection
       title="Allergies"
       rows={summary.allergies}

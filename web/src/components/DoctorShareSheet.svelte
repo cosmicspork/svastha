@@ -9,7 +9,15 @@
   import { allEvents, type StoredEvent } from '../lib/events'
   import { CATEGORIES, CATEGORY_META, type Category } from '../lib/category'
   import {
+    allCurationByPrefix,
+    statusMapFrom,
+    nameMapFrom,
+    type SignedCurationRecord,
+  } from '../lib/curation'
+  import {
+    applyMedScope,
     createDoctorShare,
+    curationForBundle,
     deriveShareCategories,
     filterEventsForScope,
     referencedAttachmentShas,
@@ -18,6 +26,7 @@
     type DoctorShareRecord,
     type ShareScope,
   } from '../lib/doctorShare'
+  import { conceptKey } from '../lib/summary'
 
   // Management (the list of existing links, revoke, re-show) lives on the
   // Doctor screen now — this sheet is creation only. `oncreated` lets that
@@ -45,6 +54,11 @@
   const appOrigin = window.location.origin
 
   let events = $state<StoredEvent[]>([])
+  // The owner's concept status/name curation, loaded once. `status:` records
+  // decide which meds are past (excluded by default), and both namespaces are
+  // narrowed to the in-scope concepts and carried in the bundle so the recipient
+  // sees the same Current/Past + Active/Resolved grouping and name overrides.
+  let curationRecords = $state<SignedCurationRecord[]>([])
 
   // --- scope ---
   // The chip row is the ordinary (non-sensitive) categories; the opt-in group
@@ -62,6 +76,10 @@
   // Opt-in categories, off by default — a share never carries cycle or mood
   // data unless the owner turns it on here.
   let sensitiveOn = $state<Set<Category>>(new Set())
+  // Past (inactive) medications are excluded by default — the default share is
+  // a current-only med list. Turning this on includes their events and rides
+  // their status records along so the recipient groups them as Past.
+  let includePastMeds = $state(false)
   let expiryDays = $state<number>(DEFAULT_EXPIRY_DAYS)
   let showPreview = $state(false)
 
@@ -99,10 +117,28 @@
   // filterEventsForScope's null = all-non-sensitive fallback) so the count and
   // preview never imply data a disabled create couldn't send.
   const filtered = $derived(nothingSelected ? [] : filterEventsForScope(events, scope))
+  const statuses = $derived(statusMapFrom(curationRecords))
+  // The scoped subset the bundle actually carries: the category/date filter,
+  // then the meds-scope filter (past meds dropped unless opted in).
+  const scopedEvents = $derived(applyMedScope(filtered, statuses, includePastMeds))
+  // The status/name records that ride along: narrowed to the concepts present
+  // in `scopedEvents`, so nothing about an excluded concept leaks.
+  const carriedCuration = $derived(curationForBundle(scopedEvents, curationRecords))
+  // The preview shows exactly the overlay the recipient will get.
+  const previewStatus = $derived(statusMapFrom(carriedCuration))
+  const previewNames = $derived(nameMapFrom(carriedCuration))
+  // Whether the meds-scope toggle is relevant: only when medications are in the
+  // selection (and there is at least one past med to include or exclude).
+  const hasPastMeds = $derived(
+    statuses.size > 0 &&
+      filtered.some(
+        (se) => se.event.kind === 'medication_statement' && statuses.get(conceptKey(se.event)) === 'inactive',
+      ),
+  )
   // Paper records travel inside the share bundle (their bytes are inlined), so
   // surface the page count honestly — it's what can push a share toward the
   // relay's size cap.
-  const pageCount = $derived(referencedAttachmentShas(filtered).length)
+  const pageCount = $derived(referencedAttachmentShas(scopedEvents).length)
 
   const scopeDescription = $derived.by(() => {
     const allNonSensitive = nonSensitiveCategories.every((c) => selected.has(c))
@@ -154,7 +190,8 @@
       const { record, link } = await createDoctorShare({
         relay,
         identity: session.identity,
-        events: filtered,
+        events: scopedEvents,
+        curation: carriedCuration,
         scopeDescription,
         expiryDays,
         appOrigin,
@@ -182,7 +219,13 @@
   }
 
   onMount(async () => {
-    events = await allEvents()
+    ;[events, curationRecords] = await Promise.all([
+      allEvents(),
+      // status: and name: are the only namespaces a share carries; load both.
+      Promise.all([allCurationByPrefix('status:'), allCurationByPrefix('name:')]).then(
+        ([s, n]) => [...s, ...n] as SignedCurationRecord[],
+      ),
+    ])
   })
 </script>
 
@@ -287,6 +330,35 @@
           </button>
         {/each}
       </div>
+
+      {#if hasPastMeds}
+        <div class="optin" role="group" aria-label="Medications">
+          <button
+            type="button"
+            role="switch"
+            class="optin-row cat-med"
+            aria-checked={includePastMeds}
+            onclick={() => {
+              includePastMeds = !includePastMeds
+              showPreview = false
+            }}
+            data-testid="share-include-past-meds"
+          >
+            <span class="optin-text">
+              <span class="optin-name">
+                <span class="glyph">{CATEGORY_META.med.glyph}</span>
+                Include past medications
+              </span>
+              <span class="optin-sub muted"
+                >{includePastMeds
+                  ? 'Past meds are grouped separately for the reader.'
+                  : 'Only current medications are shared.'}</span
+              >
+            </span>
+            <span class="switch" aria-hidden="true"><span class="knob"></span></span>
+          </button>
+        </div>
+      {/if}
     </section>
 
     <section class="stack">
@@ -307,7 +379,7 @@
 
     <section class="stack">
       <p class="count" data-testid="share-count">
-        {filtered.length} entr{filtered.length === 1 ? 'y' : 'ies'} selected
+        {scopedEvents.length} entr{scopedEvents.length === 1 ? 'y' : 'ies'} selected
         {#if pageCount > 0}
           <span class="muted" data-testid="share-pages"
             >· includes 📷 {pageCount} photo {pageCount === 1 ? 'page' : 'pages'}</span
@@ -323,8 +395,8 @@
       </button>
       {#if showPreview}
         <div class="preview" data-testid="share-preview">
-          {#key filtered}
-            <ClinicianSummary events={filtered} readonly />
+          {#key scopedEvents}
+            <ClinicianSummary events={scopedEvents} readonly status={previewStatus} names={previewNames} />
           {/key}
         </div>
       {/if}
@@ -337,7 +409,7 @@
     <div class="row">
       <button
         class="primary"
-        disabled={busy || filtered.length === 0}
+        disabled={busy || scopedEvents.length === 0}
         onclick={create}
         data-testid="share-create"
       >

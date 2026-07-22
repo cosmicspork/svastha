@@ -7,6 +7,7 @@
   import { onMount } from 'svelte'
   import { initSvastha } from '../lib/svastha'
   import { loadShare, type ShareLoadResult } from '../lib/shareRecipient'
+  import { statusMapFrom, nameMapFrom } from '../lib/curation'
   import { fingerprint } from '../lib/exchange'
   import { base64ToBytes } from '../lib/base64'
   import { buildTimeline, type TimelineEntry } from '../lib/timeline'
@@ -28,6 +29,12 @@
       .flatMap((day) => day.entries)
       .filter((e) => e.attachments && e.attachments.length > 0)
   })
+
+  // The verified `status:`/`name:` overlay the share carried, folded into the
+  // concept maps the summary renders from — so a recipient sees the owner's
+  // real Current/Past split and name overrides, not a flat all-active list.
+  const statusMap = $derived(result?.status === 'ok' ? statusMapFrom(result.bundle.curation) : new Map())
+  const nameMap = $derived(result?.status === 'ok' ? nameMapFrom(result.bundle.curation) : new Map())
 
   function loadSharedBytes(sha256: string): Promise<Uint8Array | null> {
     const b64 = result?.status === 'ok' ? result.bundle.attachments[sha256] : undefined
@@ -86,9 +93,18 @@
             : 'were'} left out.
         </p>
       {/if}
+      {#if bundle.droppedCuration > 0}
+        <p class="warn" data-testid="share-curation-warning">
+          {bundle.droppedCuration}
+          status or name {bundle.droppedCuration === 1 ? 'label' : 'labels'} could not be verified and {bundle.droppedCuration ===
+          1
+            ? 'was'
+            : 'were'} left out.
+        </p>
+      {/if}
     </header>
 
-    <ClinicianSummary events={bundle.events} readonly />
+    <ClinicianSummary events={bundle.events} readonly status={statusMap} names={nameMap} />
 
     {#if paperEntries.length > 0}
       <section class="documents" data-testid="share-documents">

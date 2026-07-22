@@ -32,10 +32,6 @@ into the sections below.
 - Key rotation for real revocation
 - Blob-list pagination and manifests; curation etags
 - Relay nonce store (auth replay hardening)
-- Curation in doctor-share bundles — the web client now signs every curation
-  write, verifies-or-drops on pull, and carries the `status:`/`name:` concept
-  overrides; the remaining cross-vault piece is having a share bundle carry the
-  owner's curation array for the recipient to verify-or-drop
 - Multi-writer sync (needs new conflict machinery; ends the single-writer
   assumption — signed curation is the prerequisite, now in place)
 
