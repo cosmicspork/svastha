@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
-import { onboardViaUI, connectRelayViaUI, logBP, logFood } from './helpers'
+import { onboardViaUI, connectRelayViaUI, logBP, logFood, PASSPHRASE } from './helpers'
 
 /** Visit the Share screen, set a display name, and return this identity's
  * exchange code. Leaves the page on the Share screen. */
@@ -121,6 +121,44 @@ test('spousal sharing: grant, accept, read-only timeline, then revoke goes stale
   }, ownerEdA)
   await expect(pageB.getByTestId('person-stale')).toBeVisible({ timeout: 20_000 })
   await expect(pageB.getByTestId('spine-entry').filter({ hasText: '118/76' })).toBeVisible()
+
+  await contextA.close()
+  await contextB.close()
+})
+
+test('a scanned share link prefills the confirm box, surviving a locked-vault reload', async ({
+  browser,
+}) => {
+  const contextA = await browser.newContext()
+  const pageA = await contextA.newPage()
+  await onboardViaUI(pageA)
+  await connectRelayViaUI(pageA)
+
+  const contextB = await browser.newContext()
+  const pageB = await contextB.newPage()
+  await onboardViaUI(pageB)
+  await connectRelayViaUI(pageB)
+  const codeB = await openShareAndSetName(pageB, 'Bailey')
+
+  // Simulate a camera app opening A's link to B's QR: a genuine fresh
+  // document load (a same-document hash-only `goto` wouldn't reset the
+  // in-memory session — bouncing through about:blank forces a real one), so
+  // the vault is locked exactly as it would be on a real cold app-open. The
+  // unlock flow must land back on Share with the code param intact rather
+  // than losing it.
+  await pageA.goto('about:blank')
+  await pageA.goto(`/#/share?code=${encodeURIComponent(codeB)}`)
+
+  await expect(pageA.getByTestId('unlock-passphrase')).toBeVisible()
+  await pageA.getByTestId('unlock-passphrase').fill(PASSPHRASE)
+  await pageA.getByTestId('unlock-submit').click()
+
+  await expect(pageA.getByTestId('paste-code')).toHaveValue(codeB)
+  await expect(pageA.getByTestId('confirm-share')).toBeVisible()
+  await expect(pageA.getByTestId('parsed-fingerprint')).toBeVisible()
+
+  // The param is consumed and stripped, so a refresh won't re-trigger it.
+  await expect(pageA).toHaveURL(/#\/share$/)
 
   await contextA.close()
   await contextB.close()

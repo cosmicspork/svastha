@@ -59,11 +59,38 @@ export function fingerprint(ed25519Hex: string): string {
   return (ed25519Hex.match(/.{4}/g) ?? []).slice(0, 4).join(' ')
 }
 
-/** Render an exchange code as an SVG QR string. Safe to inject via `{@html}`:
- * the input is always this app's own generated code (never arbitrary user
+/** Render an exchange code (or any app-generated URL, e.g. from
+ * {@link exchangeLinkFor}) as an SVG QR string. Safe to inject via `{@html}`:
+ * the input is always this app's own generated string (never arbitrary user
  * text), so there is nothing here for a hostile string to exploit. */
 export function codeQrSvg(code: string): string {
   return renderSVG(code, { border: 1 })
+}
+
+/** Wrap an exchange code in a link to this app's own Share screen, so a
+ * generic camera app can open it (unlike the raw `svastha1:...` string, which
+ * has no registered scheme and reads as "no usable data" to iOS Camera — see
+ * `codeQrSvg`'s caller in `Share.svelte`). `origin` must be the caller's own
+ * `window.location.origin`, read at call time — never a hardcoded hostname,
+ * since this app has no fixed deployment domain. */
+export function exchangeLinkFor(origin: string, code: string): string {
+  return `${origin}/#/share?code=${encodeURIComponent(code)}`
+}
+
+/** Recover a raw exchange code from pasted input that might be a bare code or
+ * a full link built by {@link exchangeLinkFor} (or anything else URL-shaped
+ * with a `code` param inside the hash). Falls through to the input unchanged
+ * when there's no `#` at all — a directly pasted `svastha1:...` code never
+ * contains one, so this is a no-op for the existing paste flow. Does not
+ * itself validate the result; callers still run it through
+ * {@link parseExchangeCode} for strict validation. */
+export function extractExchangeCode(input: string): string {
+  const trimmed = input.trim()
+  const hashIndex = trimmed.indexOf('#')
+  if (hashIndex === -1) return trimmed
+  const [, query] = trimmed.slice(hashIndex).split('?')
+  if (query === undefined) return trimmed
+  return new URLSearchParams(query).get('code') ?? trimmed
 }
 
 /** Build a device-link URL: this app's own onboarding screen, on the restore
