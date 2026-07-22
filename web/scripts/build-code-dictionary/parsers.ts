@@ -73,6 +73,41 @@ export function parseLoincCsv(text: string): CodeMap {
   for (let i = 1; i < lines.length; i++) {
     const cols = splitCsvLine(lines[i])
     const code = (cols[codeIdx] ?? '').trim()
+    // LONG_COMMON_NAME (or its fallbacks above) must be stored verbatim — the
+    // LOINC license (Section 2) forbids changing field contents — so `.trim()`
+    // here is only undoing CSV whitespace padding, never normalizing the text.
+    const name = (cols[nameIdx] ?? '').trim()
+    if (code && name) out[code] = name
+  }
+  return out
+}
+
+/** LOINC's full release table (`Loinc.csv`, from the Download API's zip) ->
+ * `{ "<LOINC_NUM>": "<LONG_COMMON_NAME>" }`, filtered to COMMON_TEST_RANK 1-2000
+ * — the Top 2000+ Lab Observations subset lives in the full table as a rank
+ * column rather than a separate export when pulled via the API. See
+ * loinc-api.ts for how the release zip is fetched and unzipped. */
+export function parseLoincFullTableTop2000(text: string): CodeMap {
+  const lines = normalizeLines(text).filter((l) => l.length > 0)
+  if (lines.length === 0) return {}
+  const header = splitCsvLine(lines[0]).map((h) => h.trim().toLowerCase())
+
+  const codeIdx = header.indexOf('loinc_num')
+  const nameIdx = header.indexOf('long_common_name')
+  const rankIdx = header.indexOf('common_test_rank')
+  if (codeIdx === -1 || nameIdx === -1 || rankIdx === -1) {
+    throw new Error(
+      `LOINC full table: could not find LOINC_NUM/LONG_COMMON_NAME/COMMON_TEST_RANK in header: ${header.join(', ')}`,
+    )
+  }
+
+  const out: CodeMap = {}
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i])
+    const rank = Number((cols[rankIdx] ?? '').trim())
+    if (!Number.isFinite(rank) || rank < 1 || rank > 2000) continue
+    const code = (cols[codeIdx] ?? '').trim()
+    // Verbatim per the LOINC license (Section 2) — see parseLoincCsv above.
     const name = (cols[nameIdx] ?? '').trim()
     if (code && name) out[code] = name
   }

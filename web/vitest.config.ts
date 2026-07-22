@@ -8,6 +8,8 @@ export default defineConfig({
   test: {
     environment: 'node',
     setupFiles: ['./src/lib/__tests__/setup.ts'],
-    include: ['src/**/*.test.ts'],
+    // scripts/** covers the code-dictionary build's own tests (loinc-api.ts
+    // needs Node types unavailable to src/**, see tsconfig.scripts.json).
+    include: ['src/**/*.test.ts', 'scripts/**/*.test.ts'],
   },
 })

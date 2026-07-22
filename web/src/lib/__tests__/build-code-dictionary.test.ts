@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   splitCsvLine,
   parseLoincCsv,
+  parseLoincFullTableTop2000,
   parseRxnormConso,
   parseIcd10Order,
   dottedIcd10,
@@ -55,6 +56,32 @@ describe('parseLoincCsv', () => {
       '718-7': 'Hemoglobin [Mass/volume] in Blood',
       '2951-2': 'Sodium [Moles/volume] in Serum or Plasma',
     })
+  })
+})
+
+describe('parseLoincFullTableTop2000', () => {
+  // The full LOINC release table (Loinc.csv, from the Download API's zip)
+  // carries far more columns than this — this fixture keeps only the three
+  // the parser reads (LOINC_NUM, LONG_COMMON_NAME, COMMON_TEST_RANK), per the
+  // documented LOINC table schema (COMMON_TEST_RANK ranks the Top-2000+ set;
+  // see LOINC's usage/frequency documentation at loinc.org/usage/obs).
+  const csv = [
+    'LOINC_NUM,LONG_COMMON_NAME,COMMON_TEST_RANK',
+    '2345-7,"Glucose [Mass/volume] in Serum or Plasma",1',
+    '2160-0,"Creatinine [Mass/volume] in Serum or Plasma",2',
+    '99999-9,"Some rarely ordered test",5000',
+    '88888-8,"Not ranked",',
+  ].join('\n')
+
+  it('keeps only rows ranked 1-2000, mapping LOINC_NUM to the verbatim long common name', () => {
+    expect(parseLoincFullTableTop2000(csv)).toEqual({
+      '2345-7': 'Glucose [Mass/volume] in Serum or Plasma',
+      '2160-0': 'Creatinine [Mass/volume] in Serum or Plasma',
+    })
+  })
+
+  it('throws when the header lacks LOINC_NUM/LONG_COMMON_NAME/COMMON_TEST_RANK', () => {
+    expect(() => parseLoincFullTableTop2000('LOINC_NUM,LONG_COMMON_NAME\n1,2')).toThrow()
   })
 })
 

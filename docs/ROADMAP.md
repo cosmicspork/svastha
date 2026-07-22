@@ -8,11 +8,13 @@ into the sections below.
 
 ## Now
 
-- **Full LOINC Top-2000 dictionary** — build pipeline now ingests a
-  maintainer-supplied Top-2000 CSV (`LOINC_TOP2000_CSV=…` or
-  `--loinc-csv=…`); the download itself is account-gated, so `loinc.json`
+- **Full LOINC Top-2000 dictionary** — build pipeline now fetches LOINC
+  automatically via the Download API given a maintainer's account credentials
+  (`LOINC_USERNAME`/`LOINC_PASSWORD` in `web/.env`), with a manual-CSV fallback
+  (`LOINC_TOP2000_CSV=…`/`--loinc-csv=…`); ships the required license text
+  (`LOINC_LICENSE.txt`) and release version alongside the data. `loinc.json`
   still ships as the starter dictionary until the maintainer runs the build
-  with the real file.
+  with real credentials or a manual file (an agent/CI cannot supply either).
 
 ## Next
 
