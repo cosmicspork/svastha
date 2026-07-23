@@ -7,11 +7,10 @@
 //! node must never assume it is co-located with a relay (see
 //! `docs/ARCHITECTURE.md`, "Self-hosting"). Everything else has a safe default.
 //!
-//! The inference endpoint and API key are read and *validated* here but are
-//! otherwise **unused until D2/D3** (OCR and RAG): defining them now means the
-//! deployment surface is stable and a misconfiguration fails at boot rather than
-//! at first inference. [`validate_inference_endpoint`] is the design §8
-//! hard-constraint hook.
+//! The inference endpoint, model, and API key are read and *validated* here.
+//! Setting the endpoint **enables OCR** (D2); a misconfiguration fails at boot
+//! rather than at first inference. [`validate_inference_endpoint`] is the design
+//! §8 hard-constraint hook (synchronous, zero-retention endpoints only).
 
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
@@ -25,10 +24,18 @@ pub const ENV_DATA_DIR: &str = "SVASTHA_NODE_DATA_DIR";
 /// Ephemeral directory for decrypted plaintext (see [`crate::sync`]). Treated as
 /// disposable: on restart, anything missing simply re-syncs.
 pub const ENV_CACHE_DIR: &str = "SVASTHA_NODE_CACHE_DIR";
-/// Optional OpenAI-compatible inference endpoint (validated, unused until D2/D3).
+/// Optional OpenAI-compatible inference endpoint. When set, OCR (D2) is enabled
+/// and this is the chat-completions base the node posts vision requests to; a
+/// model id ([`ENV_INFERENCE_MODEL`]) is then required.
 pub const ENV_INFERENCE_ENDPOINT: &str = "SVASTHA_NODE_INFERENCE_ENDPOINT";
-/// Optional inference API key (unused until D2/D3).
+/// Optional inference API key. Sent as an `Authorization: Bearer` header; never
+/// logged.
 pub const ENV_INFERENCE_API_KEY: &str = "SVASTHA_NODE_INFERENCE_API_KEY";
+/// The chat-completions model id (e.g. a vision model). **Required whenever
+/// [`ENV_INFERENCE_ENDPOINT`] is set** — an OpenAI-compatible request carries a
+/// `model` field, and leaving it to an endpoint default is too surprising for a
+/// pipeline that writes proposals into someone's medical record.
+pub const ENV_INFERENCE_MODEL: &str = "SVASTHA_NODE_INFERENCE_MODEL";
 /// Optional bind address for the bootstrap page. **Loopback only** (validated).
 pub const ENV_BOOTSTRAP_ADDR: &str = "SVASTHA_NODE_BOOTSTRAP_ADDR";
 /// Optional fallback poll interval (seconds) for when the SSE stream is down.
@@ -58,15 +65,20 @@ pub enum ConfigError {
     BadPollInterval(String),
     #[error("{ENV_INFERENCE_ENDPOINT} is invalid: {0}")]
     BadInferenceEndpoint(String),
+    #[error("{ENV_INFERENCE_MODEL} is required when {ENV_INFERENCE_ENDPOINT} is set (an OpenAI-compatible request carries a model id)")]
+    MissingInferenceModel,
 }
 
-/// The inference target (OpenAI-compatible chat completions). Defined so the
-/// deployment surface is stable; not called until D2/D3.
+/// The inference target (OpenAI-compatible chat completions). Present exactly
+/// when [`ENV_INFERENCE_ENDPOINT`] is set; its presence is what enables the OCR
+/// pipeline (D2).
 #[derive(Clone, Debug)]
 pub struct InferenceConfig {
     pub endpoint: String,
     /// Present only if the operator supplied one; never logged.
     pub api_key: Option<String>,
+    /// The chat-completions model id sent in every request.
+    pub model: String,
 }
 
 /// Process-wide boot configuration.
@@ -114,7 +126,16 @@ impl Config {
                 let api_key = std::env::var(ENV_INFERENCE_API_KEY)
                     .ok()
                     .filter(|s| !s.trim().is_empty());
-                Some(InferenceConfig { endpoint, api_key })
+                let model = std::env::var(ENV_INFERENCE_MODEL)
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .ok_or(ConfigError::MissingInferenceModel)?;
+                Some(InferenceConfig {
+                    endpoint,
+                    api_key,
+                    model,
+                })
             }
             None => None,
         };

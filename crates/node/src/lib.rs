@@ -29,8 +29,12 @@ pub mod bootstrap;
 pub mod cache;
 pub mod client;
 pub mod config;
+pub mod extract;
 pub mod identity;
 pub mod index;
+pub mod inference;
+pub mod journal;
+pub mod ocr;
 pub mod poke;
 pub mod state;
 pub mod sync;
@@ -47,6 +51,8 @@ pub use config::Config;
 
 use cache::Cache;
 use client::RelayClient;
+use inference::InferenceClient;
+use journal::Journal;
 use poke::Poke;
 use state::NodeState;
 
@@ -78,6 +84,17 @@ pub fn run(config: Config) -> Result<()> {
     let cache = Arc::new(Cache::new(config.cache_dir.clone()));
     let state = Arc::new(Mutex::new(NodeState::new()));
 
+    // OCR (D2) runs only when an inference endpoint is configured. The journal is
+    // the one durable state besides the identity — content-free by construction
+    // (see `journal`); it lives in the data dir so idempotence survives a restart.
+    let inference = config.inference.as_ref().map(InferenceClient::new);
+    let mut journal = Journal::load(&config.data_dir);
+    if inference.is_some() {
+        tracing::info!("ocr enabled: inference endpoint configured");
+    } else {
+        tracing::info!("ocr disabled: no inference endpoint configured");
+    }
+
     spawn_bootstrap(&config, &code, &identity, state.clone());
 
     // SSE pokes arrive on this channel. Keep a spare sender so the receiver never
@@ -87,7 +104,14 @@ pub fn run(config: Config) -> Result<()> {
     spawn_sse(client.clone(), tx);
 
     // Initial full reconcile: enrol from the mailbox, then pull every vault.
-    reconcile(&client, &cache, &state, Poke::Sync);
+    reconcile(
+        &client,
+        &cache,
+        &state,
+        inference.as_ref(),
+        &mut journal,
+        Poke::Sync,
+    );
 
     loop {
         let poke = match rx.recv_timeout(config.poll_interval) {
@@ -99,13 +123,27 @@ pub fn run(config: Config) -> Result<()> {
                 Poke::Sync
             }
         };
-        reconcile(&client, &cache, &state, poke);
+        reconcile(
+            &client,
+            &cache,
+            &state,
+            inference.as_ref(),
+            &mut journal,
+            poke,
+        );
     }
 }
 
 /// Act on one poke (or a timer tick). Errors are logged, never fatal: a transient
 /// relay outage must not take the node down — the next tick reconciles.
-fn reconcile(client: &RelayClient, cache: &Cache, state: &Mutex<NodeState>, poke: Poke) {
+fn reconcile(
+    client: &RelayClient,
+    cache: &Cache,
+    state: &Mutex<NodeState>,
+    inference: Option<&InferenceClient>,
+    journal: &mut Journal,
+    poke: Poke,
+) {
     // A blobs poke only needs a vault pull; mailbox and sync also drain the
     // mailbox (a new enrolment needs its first pull afterward).
     if matches!(poke, Poke::Mailbox | Poke::Sync) {
@@ -142,6 +180,31 @@ fn reconcile(client: &RelayClient, cache: &Cache, state: &Mutex<NodeState>, poke
             }
         }
         Err(e) => tracing::warn!(error = %e, "vault sync failed"),
+    }
+
+    // OCR the newly-synced pages into proposals (design §7). Idempotent across
+    // ticks and restarts via the journal, so running it on every reconcile is
+    // cheap — an already-processed page short-circuits.
+    if let Some(inference) = inference {
+        match ocr::run(client, cache, state, inference, journal) {
+            Ok(r)
+                if r.proposals + r.empties + r.failed + r.resolved > 0
+                    || r.not_ready > 0
+                    || r.dropped_findings > 0 =>
+            {
+                tracing::info!(
+                    proposals = r.proposals,
+                    empties = r.empties,
+                    failed = r.failed,
+                    resolved = r.resolved,
+                    not_ready = r.not_ready,
+                    dropped_findings = r.dropped_findings,
+                    "ocr pass"
+                );
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "ocr pass failed"),
+        }
     }
 }
 

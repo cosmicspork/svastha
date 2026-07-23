@@ -11,6 +11,10 @@ categories = ["cryptography"]
 
 [dependencies]
 svastha-core = { path = "../core", version = "0.10.0" } # x-release-please-version
+# The OCR extractor is a third mapper alongside import's C-CDA/FHIR mappers: it
+# reuses import's `EventDraft` and the canonical terminology URIs (`systems`)
+# rather than inventing a parallel coding vocabulary.
+svastha-import = { path = "../import", version = "0.10.0" } # x-release-please-version
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Content-hash checks on att-/doc-/cur- blob ids, and hex identity codes.
@@ -31,6 +35,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 # OsRng for the node's disposable identity seed (mirrors core's envelope RNG).
 rand_core = { version = "0.6", features = ["getrandom"] }
+# Construct the owner's X25519 public key (proposal seal target) from the bytes
+# their key_handoff declared. Same major as core's, so one version in the tree.
+x25519-dalek = "2"
 
 [dev-dependencies]
 # Stand the real relay up in-process (its own tokio runtime on an ephemeral
