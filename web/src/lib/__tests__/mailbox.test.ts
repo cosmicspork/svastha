@@ -7,12 +7,16 @@ import {
   teardownMailbox,
   pullMailbox,
   resolveProposalIfDone,
+  sendChatMessage,
+  sendAdminCommand,
   type MailboxClient,
   type MailboxIdentity,
   type Envelope,
 } from '../mailbox'
 import { pendingInvites } from '../shared'
 import { getProposal, upsertProposal, putProposer, buildProposalRecord } from '../proposals'
+import { listChatTurns } from '../chat'
+import { listAdminLog, recordCommand, getNodeLastSeen } from '../nodeadmin'
 
 beforeEach(async () => {
   await deleteDb()
@@ -62,6 +66,21 @@ function proposalEnvelope(id: string, eventIds: string[]): Envelope {
   }
   bodies.set(id, new TextEncoder().encode(JSON.stringify(body)))
   return envelope('proposal', id)
+}
+
+function chatAnswerEnvelope(id: string, text: string, citations: string[]): Envelope {
+  bodies.set(id, new TextEncoder().encode(JSON.stringify({ role: 'answer', text, citations })))
+  return envelope('chat_msg', id)
+}
+
+function chatQuestionEnvelope(id: string, text: string): Envelope {
+  bodies.set(id, new TextEncoder().encode(JSON.stringify({ role: 'question', text, citations: [] })))
+  return envelope('chat_msg', id)
+}
+
+function adminReplyEnvelope(id: string, inReplyTo: string, ok: boolean, detail?: string): Envelope {
+  bodies.set(id, new TextEncoder().encode(JSON.stringify({ in_reply_to: inReplyTo, ok, detail })))
+  return envelope('admin_reply', id)
 }
 
 function keyHandoffEnvelope(id: string): Envelope {
@@ -232,9 +251,11 @@ describe('pullMailbox dispatch', () => {
     expect(storeGet(pendingInvites)[0].mailboxId).toBe('vaultkey-x')
   })
 
-  it('tolerates and ignores an unknown/other kind (chat_msg)', async () => {
-    bodies.set('cm-1', new TextEncoder().encode('{}'))
-    const env = envelope('chat_msg', 'cm-1')
+  it('tolerates and ignores a kind this side does not consume (proposal_result)', async () => {
+    // A proposal_result is echoed to a proposer, not received by an owner's
+    // inbox; if one shows up it is skipped by the additive-versioning rule.
+    bodies.set('pr-1', new TextEncoder().encode('{}'))
+    const env = envelope('proposal_result', 'pr-1')
     configureMailbox(fakeClient([{ id: 'item-5', from: NODE, env }]), fakeIdentity(), verifyOk)
 
     const result = await pullMailbox()
@@ -320,5 +341,119 @@ describe('resolveProposalIfDone', () => {
 
     expect(await resolveProposalIfDone('msg-2')).toBe(false)
     expect(await getProposal('msg-2')).toBeDefined()
+  })
+})
+
+describe('chat_msg routing', () => {
+  it('stores a verified node answer as a chat turn, with citations, and clears the item', async () => {
+    const env = chatAnswerEnvelope('ans-1', 'You logged headaches on the 20th.', ['ev-a', 'ev-b'])
+    const client = fakeClient([{ id: 'item-c', from: NODE, env }])
+    configureMailbox(client, fakeIdentity(), verifyOk)
+
+    const result = await pullMailbox()
+
+    expect(result.chatAnswers).toBe(1)
+    const turns = await listChatTurns()
+    expect(turns).toHaveLength(1)
+    expect(turns[0]).toMatchObject({ id: 'ans-1', role: 'node', citations: ['ev-a', 'ev-b'] })
+    // An answer is terminal — the item is deleted once stored.
+    expect(client.deleted).toContain('item-c')
+    // Last-seen advanced.
+    expect(await getNodeLastSeen()).toBeTruthy()
+  })
+
+  it('dedupes a re-pulled answer by message id', async () => {
+    const env = chatAnswerEnvelope('ans-2', 'first', [])
+    configureMailbox(fakeClient([{ id: 'item-c', from: NODE, env }]), fakeIdentity(), verifyOk)
+
+    expect((await pullMailbox()).chatAnswers).toBe(1)
+    expect((await pullMailbox()).chatAnswers).toBe(0)
+    expect(await listChatTurns()).toHaveLength(1)
+  })
+
+  it('ignores a chat question (the owner never receives its own question turns)', async () => {
+    const env = chatQuestionEnvelope('q-1', 'my own question')
+    configureMailbox(fakeClient([{ id: 'item-c', from: NODE, env }]), fakeIdentity(), verifyOk)
+
+    const result = await pullMailbox()
+
+    expect(result.chatAnswers).toBe(0)
+    expect(result.ignored).toBe(1)
+    expect(await listChatTurns()).toHaveLength(0)
+  })
+
+  it('drops a tampered chat envelope without opening it', async () => {
+    const env = chatAnswerEnvelope('ans-3', 'spoofed', [])
+    env.signature = 'BAD'
+    configureMailbox(fakeClient([{ id: 'item-c', from: NODE, env }]), fakeIdentity(), verifyOk)
+
+    const result = await pullMailbox()
+
+    expect(result.dropped).toBe(1)
+    expect(result.chatAnswers).toBe(0)
+    expect(await listChatTurns()).toHaveLength(0)
+  })
+})
+
+describe('admin_reply routing', () => {
+  it('folds a reply onto its issued command and clears the item', async () => {
+    await recordCommand({ id: 'cmd-9', command: { cmd: 'job_status' }, sentAt: '2026-07-24T10:00:00Z' })
+    const env = adminReplyEnvelope('rep-1', 'cmd-9', true, '2 jobs queued')
+    const client = fakeClient([{ id: 'item-r', from: NODE, env }])
+    configureMailbox(client, fakeIdentity(), verifyOk)
+
+    const result = await pullMailbox()
+
+    expect(result.adminReplies).toBe(1)
+    const log = await listAdminLog()
+    expect(log[0].reply).toMatchObject({ ok: true, detail: '2 jobs queued' })
+    expect(client.deleted).toContain('item-r')
+  })
+
+  it('tolerates an orphan reply (no matching command) but still clears it', async () => {
+    const env = adminReplyEnvelope('rep-2', 'never-sent', false)
+    const client = fakeClient([{ id: 'item-r', from: NODE, env }])
+    configureMailbox(client, fakeIdentity(), verifyOk)
+
+    const result = await pullMailbox()
+
+    expect(result.adminReplies).toBe(0)
+    expect(result.ignored).toBe(1)
+    expect(client.deleted).toContain('item-r')
+  })
+})
+
+describe('outbound send', () => {
+  // seal_message returns a real envelope JSON keyed on `id` so messageIdOf reads
+  // it back the way it reads a wasm-sealed envelope.
+  const sealingIdentity = () =>
+    fakeIdentity({ seal_message: (_x, kind) => JSON.stringify({ id: `sent-${kind}` }) })
+
+  it('sendChatMessage seals a question to the node, deposits it, and stores a user turn', async () => {
+    const client = fakeClient([])
+    configureMailbox(client, sealingIdentity(), verifyOk)
+
+    const turn = await sendChatMessage({ ed: NODE, x25519: NODE_X }, 'when did I last log a fever?')
+
+    expect(turn).toMatchObject({ id: 'sent-chat_msg', role: 'user', text: 'when did I last log a fever?' })
+    expect(client.put).toHaveLength(1)
+    expect(client.put[0].recipient).toBe(NODE)
+    expect(client.put[0].id).toBe('chat-sent-chat_msg')
+    const turns = await listChatTurns()
+    expect(turns.map((t) => t.id)).toEqual(['sent-chat_msg'])
+  })
+
+  it('sendAdminCommand seals a command to the node, deposits it, and records it', async () => {
+    const client = fakeClient([])
+    configureMailbox(client, sealingIdentity(), verifyOk)
+
+    const sent = await sendAdminCommand({ ed: NODE, x25519: NODE_X }, { cmd: 'job_status' })
+
+    expect(sent).toBe(true)
+    expect(client.put[0].recipient).toBe(NODE)
+    expect(client.put[0].id).toBe('admin-sent-admin_cmd')
+    const log = await listAdminLog()
+    expect(log.map((e) => e.id)).toEqual(['sent-admin_cmd'])
+    expect(log[0].command).toEqual({ cmd: 'job_status' })
   })
 })

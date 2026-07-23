@@ -87,6 +87,22 @@ export const MIGRATIONS: ((db: IDBDatabase, tx: IDBTransaction) => void)[] = [
 
     db.createObjectStore('proposers', { keyPath: 'ed' })
   },
+  // v9: the ask screen (RAG chat) and node admin surface (see lib/chat.ts,
+  // lib/nodeadmin.ts) — both device-local, never synced; the medical content in
+  // a chat turn is sealed on the mailbox and only ever at rest here (same
+  // boundary as `events`). `chat` holds one row per conversation turn, keyed by
+  // the mailbox envelope message id (the spec's dedupe identity, so a re-pulled
+  // answer never doubles), `createdAt` indexed for chronological render.
+  // `admin_log` holds one row per owner→node `admin_cmd`, keyed by that
+  // command's envelope id so the node's `admin_reply` (which carries
+  // `in_reply_to`) folds back onto it; `sentAt` indexed for newest-first.
+  (db) => {
+    const chat = db.createObjectStore('chat', { keyPath: 'id' })
+    chat.createIndex('createdAt', 'createdAt')
+
+    const adminLog = db.createObjectStore('admin_log', { keyPath: 'id' })
+    adminLog.createIndex('sentAt', 'sentAt')
+  },
 ]
 
 function requestToPromise<T>(req: IDBRequest<T>): Promise<T> {

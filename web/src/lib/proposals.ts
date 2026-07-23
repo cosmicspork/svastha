@@ -74,6 +74,14 @@ export interface ProposerRecord {
   ed: string
   x25519: string
   label: string
+  /** What this granted identity is, when enrollment knows: a processing `node`
+   * (the ask screen + node admin surface act on it) or a human `caregiver`.
+   * Optional and additive — a record written before this field, or by an
+   * enrollment path that doesn't set it, reads back `undefined`, which the node
+   * accessor (see nodeadmin.ts) treats as "not a node". Node enrollment (C1)
+   * stamps `'node'`; until it does, no node resolves and the ask screen shows
+   * its no-node empty state, which is the honest default. */
+  kind?: 'node' | 'caregiver'
 }
 
 // --- pure helpers (unit-tested directly) ---
@@ -226,6 +234,12 @@ export function proposalsFrom(fromEd: string): Promise<ProposalRecord[]> {
 
 export function getProposer(ed: string): Promise<ProposerRecord | undefined> {
   return get<ProposerRecord>('proposers', ed)
+}
+
+/** Every granted identity in the directory (nodes and caregivers alike). The
+ * ask screen / node admin surface filter this for `kind === 'node'`. */
+export function listProposers(): Promise<ProposerRecord[]> {
+  return getAll<ProposerRecord>('proposers')
 }
 
 export function putProposer(record: ProposerRecord): Promise<void> {
