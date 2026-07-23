@@ -96,6 +96,11 @@ test('curation LWW: two devices tagging the same event converge on the later wri
 
   const contextB = await browser.newContext()
   const pageB = await contextB.newPage()
+  // Block the SSE push stream on B: a poke would deliver A's '#x' before B
+  // writes, turning B's record into the union {x,y} and dissolving the
+  // concurrent-edit race this test exists to pin. With the stream blocked, B
+  // writes without having seen A's record — a genuine LWW conflict.
+  await pageB.route('**/v0/events', (route) => route.abort())
   await restoreViaUI(pageB, words, undefined, RELAY)
   await expect(pageB.getByTestId('spine-entry').filter({ hasText: 'Nausea' })).toBeVisible()
 
