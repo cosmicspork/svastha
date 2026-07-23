@@ -8,10 +8,12 @@
 //! pins the bytes):
 //!
 //! - **Content addressing.** [`Event::content_id`] is SHA-256 over the event's
-//!   clinical content, *excluding* `id` and `provenance`. The same immunization
-//!   reported by two providers (differing only in provenance) gets the same id,
-//!   so a union merge de-duplicates it. The id is deliberately version-*independent*
-//!   so a fact keeps its identity across a contract bump.
+//!   clinical content, *excluding* `id`, `provenance`, and `proposed`. The same
+//!   immunization reported by two providers (differing only in provenance) gets
+//!   the same id, so a union merge de-duplicates it; likewise a fact approved
+//!   from a proposal collapses with the same fact logged directly. The id is
+//!   deliberately version-*independent* so a fact keeps its identity across a
+//!   contract bump.
 //! - **Signing.** [`crate::keys::Identity::sign_event`] produces a [`SignedEvent`]:
 //!   the author attests to `id ‖ provenance` (the id binds all content) under a
 //!   version-tagged, domain-separated Ed25519 signature.
@@ -55,6 +57,30 @@ pub struct Provenance {
     pub source: String,
     /// Content hash of the verbatim source document this fact was derived from.
     pub source_doc: Option<String>,
+}
+
+/// Attestation that this event began as a *proposal* — a draft suggested by some
+/// granted identity (a processing node, or a future human caregiver) that the
+/// owner reviewed and signed. Optional and absent on every ordinary
+/// self-authored event: when the owner signs an approved proposal, this records
+/// *who* proposed it and *from what* source, so an approved event carries its own
+/// provenance forward. Like [`Provenance`], it is **excluded from the content id**
+/// (so an approved fact keeps the same id as the same fact logged directly, and
+/// still de-duplicates), but — unlike `Provenance`, which was always present — it
+/// is folded into the signing preimage *only when present*, so pre-existing
+/// events sign byte-identically (see [`Event::signing_bytes`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Proposed {
+    /// The proposer's Ed25519 identity (lowercase hex), e.g. the node that ran
+    /// the extraction. Data the owner vouches for by signing, not a key verified
+    /// here.
+    pub by: String,
+    /// The source blob the extraction drew from (an `att-` or `doc-` id).
+    pub source_blob: Option<String>,
+    /// The extraction method, e.g. `"ocr"`.
+    pub method: Option<String>,
+    /// The inference model id used, if any.
+    pub model: Option<String>,
 }
 
 /// The value an event carries. Lean and FHIR-informed; numeric quantities are
@@ -150,10 +176,18 @@ pub struct Event {
     pub effective_at: Option<String>,
     pub value: Option<EventValue>,
     pub provenance: Provenance,
+    /// Optional proposal provenance (see [`Proposed`]). Absent on ordinary
+    /// self-authored events; `skip_serializing_if` keeps it off the wire when
+    /// `None`, so pre-existing events serialize byte-identically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposed: Option<Proposed>,
 }
 
 impl Event {
-    /// Build an event, stamping its content-addressed [`id`](Event::id).
+    /// Build an event, stamping its content-addressed [`id`](Event::id). The
+    /// event carries no proposal provenance; attach it with
+    /// [`with_proposed`](Event::with_proposed) before signing when the event
+    /// began as an approved proposal.
     pub fn new(
         kind: EventKind,
         code: Option<Code>,
@@ -168,9 +202,18 @@ impl Event {
             effective_at,
             value,
             provenance,
+            proposed: None,
         };
         event.id = event.content_id();
         event
+    }
+
+    /// Attach proposal provenance. Consumes and returns the event; does **not**
+    /// change the content id (proposal provenance is excluded from it), so an
+    /// approved proposal keeps the same id as the same fact logged directly.
+    pub fn with_proposed(mut self, proposed: Proposed) -> Self {
+        self.proposed = Some(proposed);
+        self
     }
 
     /// The canonical byte encoding of the clinical content — `kind ‖ code? ‖
@@ -204,6 +247,23 @@ impl Event {
         out.extend_from_slice(self.content_id().as_bytes());
         put_str(&mut out, &self.provenance.source);
         put_opt_str(&mut out, &self.provenance.source_doc);
+        // Additive signed field. CANONICALIZATION INVARIANT: an absent `proposed`
+        // appends *zero* bytes — NOT a 0x00 presence byte the way an in-struct
+        // Option does (put_opt_str above). That is deliberate and load-bearing:
+        // every event authored before this field existed, and every ordinary
+        // self-authored event since, has `proposed == None` and MUST produce the
+        // exact preimage it did before, so its signature stays valid without a
+        // CONTRACT_MAJOR bump. When present, the fields are appended so the owner
+        // attests to the proposal provenance. Absence and presence are
+        // unambiguous — the verifier reconstructs the preimage from the event's
+        // own `proposed` field — so stripping or forging the field flips the
+        // recomputed preimage and fails verification.
+        if let Some(p) = &self.proposed {
+            put_str(&mut out, &p.by);
+            put_opt_str(&mut out, &p.source_blob);
+            put_opt_str(&mut out, &p.method);
+            put_opt_str(&mut out, &p.model);
+        }
         out
     }
 }
@@ -514,6 +574,84 @@ mod tests {
         let parsed: SignedEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.event, signed.event);
         assert!(parsed.verify());
+    }
+
+    // --- proposal provenance (approved-from-proposal events) ---
+
+    fn proposed() -> Proposed {
+        Proposed {
+            by: "aa".repeat(32),
+            source_blob: Some("att-deadbeef".into()),
+            method: Some("ocr".into()),
+            model: Some("some-vision-model".into()),
+        }
+    }
+
+    #[test]
+    fn proposed_is_excluded_from_content_id() {
+        // An approved proposal must share the id of the same fact logged directly,
+        // so the union/de-dup property survives the approval path.
+        let plain = observation("118", "Clinic A");
+        let with_prov = observation("118", "Clinic A").with_proposed(proposed());
+        assert_eq!(plain.id, with_prov.id);
+        assert_eq!(with_prov.id, with_prov.content_id());
+    }
+
+    #[test]
+    fn absent_proposed_signs_identically_to_before() {
+        // The core backward-compat guarantee: an event with `proposed == None`
+        // produces the exact preimage it did before the field existed (no
+        // trailing presence byte), so pre-existing signatures stay valid.
+        let ev = observation("118", "Clinic A");
+        let base = {
+            let mut out = Vec::new();
+            out.extend_from_slice(crate::version_label("event").as_bytes());
+            out.extend_from_slice(ev.content_id().as_bytes());
+            put_str(&mut out, &ev.provenance.source);
+            put_opt_str(&mut out, &ev.provenance.source_doc);
+            out
+        };
+        assert_eq!(ev.signing_bytes(), base);
+    }
+
+    #[test]
+    fn proposed_sign_verify_round_trip() {
+        let id = Identity::from_seed(b"owner seed");
+        let signed = id.sign_event(observation("118", "Clinic A").with_proposed(proposed()));
+        assert!(signed.verify());
+    }
+
+    #[test]
+    fn verify_rejects_stripped_proposed() {
+        // A signature made over an event WITH proposal provenance must fail if the
+        // field is removed in transit (and, symmetrically, if one is added).
+        let id = Identity::from_seed(b"owner seed");
+        let mut signed = id.sign_event(observation("118", "Clinic A").with_proposed(proposed()));
+        signed.event.proposed = None;
+        assert!(!signed.verify());
+    }
+
+    #[test]
+    fn verify_rejects_added_proposed() {
+        let id = Identity::from_seed(b"owner seed");
+        let mut signed = id.sign_event(observation("118", "Clinic A"));
+        signed.event.proposed = Some(proposed());
+        assert!(!signed.verify());
+    }
+
+    #[test]
+    fn proposed_serde_omits_when_absent() {
+        let ev = observation("118", "Clinic A");
+        let json = serde_json::to_value(&ev).unwrap();
+        assert!(
+            json.get("proposed").is_none(),
+            "absent proposed must not serialize"
+        );
+        let with_prov = ev.with_proposed(proposed());
+        let json = serde_json::to_value(&with_prov).unwrap();
+        assert!(json.get("proposed").is_some());
+        let parsed: Event = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed, with_prov);
     }
 
     // --- attachment value (paper records) ---

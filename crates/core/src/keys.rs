@@ -10,7 +10,7 @@
 //! deliberately changes the derived keys.
 
 use crate::curation::{CurationRecord, SignedCurationRecord};
-use crate::envelope::{DataKey, EnvelopeError, WrappedKey};
+use crate::envelope::{DataKey, EnvelopeError, SealedBox, WrappedKey};
 use crate::event::{Event, SignedEvent};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hkdf::Hkdf;
@@ -90,6 +90,19 @@ impl Identity {
     /// to this identity (or was tampered with).
     pub fn unwrap_key(&self, wrapped: &WrappedKey) -> Result<DataKey, EnvelopeError> {
         wrapped.open(&self.encryption, &self.x25519_public())
+    }
+
+    /// Open a [`SealedBox`] (a mailbox message body) that was sealed to this
+    /// identity's X25519 public key. Keeps secret-key access inside `Identity`,
+    /// exactly like [`unwrap_key`](Self::unwrap_key). Fails with
+    /// [`EnvelopeError::Aead`] if the box was not sealed to this identity, the
+    /// `aad` differs, or the ciphertext was tampered with.
+    pub fn open_sealed_box(
+        &self,
+        sealed: &SealedBox,
+        aad: &[u8],
+    ) -> Result<Vec<u8>, EnvelopeError> {
+        sealed.open(&self.encryption, &self.x25519_public(), aad)
     }
 
     /// Sign an event as this identity. Stamps the content-addressed id (so the

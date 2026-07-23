@@ -1,5 +1,5 @@
 {
-  "contract_version": 0,
+  "contract_version": 1,
   "records": [
     {
       "note": "valid signed curation record (tag list)",
