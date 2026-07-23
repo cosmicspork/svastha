@@ -339,6 +339,23 @@ pull to run (`blobs`/`mailbox`), never a blob id, count, owner, or content — s
 the channel stays zero-knowledge, and it is lossy by design: a missed poke costs
 nothing because the next pull reconciles anyway. The relay pokes a mailbox
 recipient on deposit, and a vault's owner and grantees on a blob write. The
+**same poke bus has a second transport, Web Push**, so a poke reaches a locked
+phone whose PWA is closed: for an identity that has registered a subscription
+(authed `PUT`/`DELETE /v0/push`, the standard Web Push subscription object,
+multiple per identity), a poke also goes out as a VAPID-signed Web Push on the
+same triggers. It stays **payload-free by construction** — the push carries only
+a constant, information-free marker encrypted to the subscription's keys, so the
+push services (Apple, Google, Mozilla) learn poke *timing* only, never a blob id,
+count, owner, or content; the service worker shows a generic notification and
+could not decrypt medical content anyway while the vault is locked. A sync burst
+**collapses to one** push (debounced per identity; SSE stays real-time), an
+identity holding a live SSE stream is **not** also pushed (it is foregrounded and
+already poked), and a subscription the push service reports gone is pruned. Web
+Push is **optional** — enabled only when the operator supplies a VAPID keypair;
+absent it, the `/v0/push*` endpoints answer `503` and nothing else changes. The
+subscription store is pure routing metadata, the same class as a grant edge, and
+the VAPID key authenticates only the relay to the push services, holding nothing
+that can read a notification. The
 replay window is also hardened: an ephemeral in-memory nonce store rejects a
 re-sent signature of a state-changing request within the auth freshness window
 (idempotent reads are exempt; a restart clears it — a deliberate trade-off for

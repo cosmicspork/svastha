@@ -197,6 +197,7 @@ async fn fs_mailbox_store_persists_across_router_rebuild() {
             Arc::new(MemoryShareStore::new()),
             SKEW,
             None,
+            None,
         )
     };
 

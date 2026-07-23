@@ -24,6 +24,13 @@
 //! durable backend — a poke is meaningless to a closed connection, and the
 //! nonce window is deliberately cleared by a restart (see [`nonce`]).
 //!
+//! When the operator supplies a VAPID keypair, the poke bus gains a second
+//! transport: [`push::PushService`] fans the same payload-free poke out via Web
+//! Push (`PUT`/`DELETE /v0/push`) so it reaches a locked phone whose PWA is
+//! closed. Its subscription store *is* durable routing metadata (the same class
+//! as a grant edge), but the transport is optional — with no key it is `None`
+//! and the feature is simply off. See [`push`].
+//!
 //! [`app`] builds the router for a given set of stores; the binary
 //! ([`main`](../main.rs)) wires it to in-memory (or filesystem) stores and
 //! `axum::serve`.
@@ -33,6 +40,7 @@ pub mod grants;
 pub mod mailbox;
 pub mod nonce;
 pub mod pokes;
+pub mod push;
 pub mod routes;
 pub mod share;
 pub mod store;
@@ -51,6 +59,7 @@ use grants::GrantStore;
 use mailbox::MailboxStore;
 use nonce::NonceStore;
 use pokes::PokeHub;
+use push::PushService;
 use share::ShareStore;
 use store::BlobStore;
 
@@ -69,6 +78,12 @@ pub struct AppState {
     /// Push-channel fan-out: payload-free pokes to an identity's open SSE
     /// streams (`GET /v0/events`). Lossy by design (see [`pokes`]).
     pub pokes: Arc<PokeHub>,
+    /// Web Push transport: the *second* leg of the poke bus, delivering the same
+    /// payload-free poke to a locked phone via VAPID-signed Web Push. `None` when
+    /// the operator supplied no VAPID key — push is optional, and its absence
+    /// leaves every other endpoint untouched (the `/v0/push*` routes answer
+    /// `503`). See [`push`].
+    pub push: Option<Arc<PushService>>,
     /// The web app's own origin (e.g. `https://app.example.com`), if this
     /// relay is paired with a known app deployment. When set, the landing
     /// page's QR (`routes::landing`) encodes a device-link onboarding URL
@@ -88,6 +103,7 @@ pub fn app(
     shares: Arc<dyn ShareStore>,
     max_skew_secs: u64,
     app_url: Option<String>,
+    push: Option<Arc<PushService>>,
 ) -> Router {
     let state = AppState {
         store,
@@ -100,6 +116,7 @@ pub fn app(
         nonces: Arc::new(NonceStore::new()),
         pokes: Arc::new(PokeHub::new()),
         app_url,
+        push,
     };
 
     // Full paths (no `nest`): the auth middleware reconstructs the request path
@@ -135,6 +152,14 @@ pub fn app(
         // with fetch-streaming (not native EventSource, which cannot set the
         // auth headers), so nothing special is needed here.
         .route("/v0/events", get(routes::events))
+        // Web Push subscription registration (the second poke transport) and the
+        // VAPID public key clients subscribe with. Authenticated like every other
+        // row; each answers `503` when the relay was started without a VAPID key.
+        .route(
+            "/v0/push",
+            put(routes::put_push).delete(routes::delete_push),
+        )
+        .route("/v0/push/key", get(routes::get_vapid_key))
         // Uploading and revoking a share are owner-authenticated; the read
         // (`GET`, below) is not, so it lives on the public router instead.
         .route(

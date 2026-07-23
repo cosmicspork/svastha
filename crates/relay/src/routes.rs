@@ -18,13 +18,14 @@ use axum::{
     Extension, Json,
 };
 use qrcode::{render::svg, QrCode};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use svastha_core::CONTRACT_VERSION;
 use tokio_stream::{wrappers::BroadcastStream, Stream, StreamExt};
 
 use crate::auth::Owner;
 use crate::grants::Grant;
 use crate::pokes::Poke;
+use crate::push::{subscription_key, Subscription};
 use crate::share::{ShareState, TombstoneReason};
 use crate::AppState;
 
@@ -76,6 +77,12 @@ const MIN_SHARE_TOKEN_LEN: usize = 22;
 /// grant scopes to. Neither bounds security — they only keep the metadata small.
 const MAX_GRANT_PREFIXES: usize = 16;
 const MAX_GRANT_PREFIX_LEN: usize = 128;
+
+/// Maximum accepted `PUT`/`DELETE /v0/push` body. A Web Push subscription is a
+/// small JSON object (endpoint URL plus two short base64url keys); a low cap
+/// keeps the subscription store from being used as a general-purpose scratch
+/// space and bounds the parse cost.
+const MAX_PUSH_BODY: usize = 4096;
 
 /// Liveness probe (unauthenticated).
 pub async fn health() -> &'static str {
@@ -137,7 +144,7 @@ pub async fn events(
 /// errors are swallowed for the same reason (the push channel is an
 /// optimization, not a source of truth).
 fn poke_vault_readers(state: &AppState, owner: &[u8; 32], id: &str) {
-    state.pokes.poke(owner, Poke::Blobs);
+    poke_identity(state, owner, Poke::Blobs);
     let Ok(grantees) = state.grants.grantees_of(owner) else {
         return;
     };
@@ -145,10 +152,122 @@ fn poke_vault_readers(state: &AppState, owner: &[u8; 32], id: &str) {
     for grantee in grantees {
         match state.grants.get(owner, &grantee) {
             Ok(Some(grant)) if !grant.is_expired(now) && grant.admits(id) => {
-                state.pokes.poke(&grantee, Poke::Blobs);
+                poke_identity(state, &grantee, Poke::Blobs);
             }
             _ => {}
         }
+    }
+}
+
+/// Deliver a poke to an identity over *both* legs of the bus: the live SSE
+/// streams (real-time, always) and — for an identity with registered Web Push
+/// subscriptions and no live stream — Web Push (see [`crate::push`]). The Web
+/// Push leg is a no-op when push is unconfigured, is collapsed to at most one
+/// send per identity per window, and spawns its network I/O so it never blocks
+/// the write that poked.
+fn poke_identity(state: &AppState, identity: &[u8; 32], poke: Poke) {
+    state.pokes.poke(identity, poke);
+    if let Some(push) = state.push.as_ref() {
+        push.notify(&state.pokes, *identity);
+    }
+}
+
+// --- Web Push: subscription registration + VAPID key (authenticated) ---
+
+#[derive(Serialize)]
+pub struct VapidKey {
+    /// The VAPID public key clients pass as `applicationServerKey` when they
+    /// subscribe. Base64url, exactly as `web-push` and the browser expect.
+    vapid_public_key: String,
+}
+
+/// Return the relay's VAPID public key so the PWA can subscribe with the right
+/// `applicationServerKey`. Authenticated like every other `/v0/*` row (the key is
+/// not secret, but keeping the endpoint behind the standard handshake avoids a
+/// second auth scheme). `503` when the relay was started without a VAPID key —
+/// push is optional, and its absence tells the client to stay SSE-only.
+pub async fn get_vapid_key(State(state): State<AppState>) -> Response {
+    match state.push.as_ref() {
+        Some(push) => Json(VapidKey {
+            vapid_public_key: push.public_key().to_string(),
+        })
+        .into_response(),
+        None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+/// Register (or replace) a Web Push subscription for the authenticated identity.
+/// The body is the standard Web Push subscription JSON the browser produces —
+/// `{ "endpoint": ..., "keys": { "p256dh": ..., "auth": ... } }`. An identity may
+/// hold several subscriptions (one per device/browser); each is keyed by a hash
+/// of its endpoint, so re-registering the same device replaces its entry rather
+/// than piling up duplicates. `503` when push is unconfigured.
+pub async fn put_push(
+    State(state): State<AppState>,
+    Extension(owner): Extension<Owner>,
+    body: Bytes,
+) -> StatusCode {
+    let Some(push) = state.push.as_ref() else {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    };
+    if body.len() > MAX_PUSH_BODY {
+        return StatusCode::PAYLOAD_TOO_LARGE;
+    }
+    let sub: Subscription = match serde_json::from_slice(&body) {
+        Ok(sub) => sub,
+        Err(_) => return StatusCode::BAD_REQUEST,
+    };
+    if sub.endpoint.is_empty() || sub.keys.p256dh.is_empty() || sub.keys.auth.is_empty() {
+        return StatusCode::BAD_REQUEST;
+    }
+    let key = subscription_key(&sub.endpoint);
+    match push.store().put(&owner.0, &key, &sub) {
+        Ok(()) => StatusCode::NO_CONTENT,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+/// The minimal shape a `DELETE /v0/push` body needs: just the endpoint that
+/// identifies which of the identity's subscriptions to drop.
+#[derive(Deserialize)]
+struct PushUnsubscribe {
+    endpoint: String,
+}
+
+/// Remove a Web Push subscription for the authenticated identity. A body naming a
+/// single `{ "endpoint": ... }` removes just that device's subscription; an
+/// **empty body deliberately clears every subscription for the identity** (the
+/// documented "unsubscribe this whole identity" affordance — e.g. a global "turn
+/// off notifications"). Idempotent: `204` whether or not anything matched, so a
+/// client can unsubscribe without first checking. `503` when push is unconfigured.
+pub async fn delete_push(
+    State(state): State<AppState>,
+    Extension(owner): Extension<Owner>,
+    body: Bytes,
+) -> StatusCode {
+    let Some(push) = state.push.as_ref() else {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    };
+    if body.len() > MAX_PUSH_BODY {
+        return StatusCode::PAYLOAD_TOO_LARGE;
+    }
+    let result = if body.is_empty() {
+        push.store().delete_all(&owner.0).map(|_| ())
+    } else {
+        let unsub: PushUnsubscribe = match serde_json::from_slice(&body) {
+            Ok(u) => u,
+            Err(_) => return StatusCode::BAD_REQUEST,
+        };
+        if unsub.endpoint.is_empty() {
+            return StatusCode::BAD_REQUEST;
+        }
+        push.store()
+            .delete(&owner.0, &subscription_key(&unsub.endpoint))
+            .map(|_| ())
+    };
+    match result {
+        Ok(()) => StatusCode::NO_CONTENT,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 
@@ -534,8 +653,8 @@ pub async fn put_mailbox(
         .mailbox
         .put(&recipient, &id, from.0, body.to_vec())
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    // A deposit landed: poke the recipient's open streams to pull the mailbox.
-    state.pokes.poke(&recipient, Poke::Mailbox);
+    // A deposit landed: poke the recipient (SSE + Web Push) to pull the mailbox.
+    poke_identity(&state, &recipient, Poke::Mailbox);
     Ok(StatusCode::NO_CONTENT)
 }
 
