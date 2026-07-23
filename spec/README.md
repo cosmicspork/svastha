@@ -11,12 +11,32 @@ language:
 This directory holds the written spec and language-neutral test vectors, so a
 non-Rust reimplementation or an auditor can validate against the same bytes.
 
-`svastha_core::CONTRACT_VERSION` tracks breaking changes; clients and relays
-negotiate on it so independently deployed and self-hosted pieces can coexist.
-
 Status: key derivation, the encryption envelope, the event schema, the curation
-record, and the relay wire protocol (auth handshake, blob endpoints, grants,
-mailbox, and shares) are specified below.
+record, the typed mailbox message envelope, and the relay wire protocol (auth
+handshake, blob endpoints, grants, mailbox, and shares) are specified below.
+
+## Versioning
+
+Two numbers, deliberately separate:
+
+- **`svastha_core::CONTRACT_VERSION`** — the negotiated **wire** version, reported
+  at `GET /v0/info`. Clients and relays read it to negotiate capabilities so
+  independently deployed and self-hosted pieces can coexist. It advances
+  **additively within a major**: a new envelope kind, a new optional field. It is
+  **`1`** as of the node/protocol wave (which added the typed mailbox envelope and
+  the optional event provenance field); it was `0` through the first release.
+- **The contract *major*** — the cryptographic era embedded in every HKDF /
+  domain-separation label (`svastha/v{MAJOR}/…`, currently `0`). It bumps **only**
+  on a key-rotating break that re-derives every identity and re-wraps every vault
+  key.
+
+Holding the major fixed while `CONTRACT_VERSION` advances is the whole point: an
+additive wire change must never orphan a vault. Every derived key, wrapped vault
+key, and signature made under major `0` stays valid across the `0 → 1` version
+bump — the concrete meaning of "backward compatible within a major." A change
+that *would* invalidate stored material is not additive and belongs to a future
+major, not a version bump. (This refines the earlier framing, when the two
+numbers were one: the label embeds the **major**, not the wire version.)
 
 ## Key derivation
 
@@ -35,9 +55,10 @@ encryption (wrapping vault keys to recipients) and **Ed25519** for signing
    | X25519 secret | `svastha/v{VERSION}/x25519` | encryption / key wrapping |
    | Ed25519 secret | `svastha/v{VERSION}/ed25519` | signing / auth |
 
-   `{VERSION}` is `CONTRACT_VERSION` (currently `0`, so `svastha/v0/x25519` and
-   `svastha/v0/ed25519`). The label embeds the version so a contract bump
-   deliberately changes the derived keys. The 32-byte X25519 material is used as
+   `{VERSION}` is the contract **major** (currently `0`, so `svastha/v0/x25519`
+   and `svastha/v0/ed25519`) — see "Versioning" above. The label embeds the major
+   so a *major* break deliberately changes the derived keys, while an additive
+   `CONTRACT_VERSION` bump leaves them untouched. The 32-byte X25519 material is used as
    an `x25519-dalek` `StaticSecret` (clamping happens at DH time); the 32-byte
    Ed25519 material is the `SigningKey` seed.
 
@@ -75,9 +96,11 @@ can be shared without the relay ever seeing it unwrapped:
 2. `shared = X25519(e_sk, recipient_pk)`.
 3. `wrap_key = HKDF-SHA256(ikm = shared, salt = e_pk ‖ recipient_pk,
    info = "svastha/v{VERSION}/wrap")[..32]`. Both public keys are bound into the
-   salt so the wrapping is pinned to this exchange; the `info` label embeds
-   `{VERSION}` (`CONTRACT_VERSION`, currently `0` → `svastha/v0/wrap`) so a
-   contract bump deliberately invalidates old wrappings.
+   salt so the wrapping is pinned to this exchange; the `info` label embeds the
+   contract **major** (currently `0` → `svastha/v0/wrap`, see "Versioning") so a
+   *major* break invalidates old wrappings while an additive version bump does
+   not — which is exactly what keeps an old wrapped vault key openable across the
+   `0 → 1` version bump.
 4. Seal the 32-byte data key under `wrap_key` (sealing, above, with empty `aad`).
 
 ```
@@ -105,7 +128,8 @@ An event has a `kind` (one of `observation`, `condition`, `medication_statement`
 `immunization`, `encounter`, `procedure`, `allergy_intolerance`, `document`,
 `nutrition_intake`), an optional `code` (a terminology `Code`: `system`, `code`,
 optional `display`), an optional ISO-8601 `effective_at`, an optional `value`,
-and a `provenance` (`source`, optional `source_doc`). A `value` is one of:
+a `provenance` (`source`, optional `source_doc`), and an optional `proposed`
+(see "Proposal provenance" below). A `value` is one of:
 
 - `quantity` — a decimal-string `value` and an optional UCUM `unit` (`Code`).
   Numbers are strings, never floats, so the bytes are exact and reproducible.
@@ -138,7 +162,8 @@ Fields are encoded into a deterministic byte string:
   relay-auth preimage already uses for its timestamp.
 
 The **canonical content** is `kind ‖ code? ‖ effective_at? ‖ value?`. It excludes
-`id` and `provenance`, so a fact reported by two sources canonicalizes identically.
+`id`, `provenance`, and `proposed`, so a fact reported by two sources — or the same
+fact approved from a proposal versus logged directly — canonicalizes identically.
 
 A multi-part fact (a blood pressure reading, a several-item meal, a paper record's
 photo plus its caption, a multi-page capture's N photos) is written as one event
@@ -150,10 +175,25 @@ does not change key derivation, the encryption envelope, the signing preimage
 structure, or the relay protocol, and every pre-existing event canonicalizes to
 byte-identical output (the new tag appears only in new events). The content-id
 domain tag is version-independent by design, so ids are stable regardless. It
-therefore does **not** bump `CONTRACT_VERSION`: a bump rotates every derived
-identity and HKDF label (that is the whole reason the labels embed the version)
-and would orphan every existing vault and sealed blob — the opposite of what an
-additive value shape should do. New vectors are pinned under the current version.
+therefore needs no *major* bump (which would rotate every derived identity and
+HKDF label and orphan every existing vault). New vectors are pinned under the
+current major; see "Versioning" at the top.
+
+### Proposal provenance
+
+An event carries an **optional** `proposed` object attesting it began as a
+proposal — a draft an owner reviewed and signed (see the typed mailbox envelope
+below and `docs/ARCHITECTURE.md`, "Node"):
+
+- `by` — the proposer's Ed25519 identity (hex), e.g. the processing node.
+- `source_blob` — the `att-`/`doc-` blob the extraction drew from (optional).
+- `method` — the extraction method, e.g. `"ocr"` (optional).
+- `model` — the inference model id (optional).
+
+It is **absent on every pre-existing and ordinary self-authored event** and, like
+`provenance`, is **excluded from the content id** — so an approved proposal keeps
+the same id as the same fact logged directly. Its place in the signing preimage
+is the subtle part, specified next.
 
 ### Content-addressed id
 
@@ -171,21 +211,35 @@ the union/de-dup property survives upgrades.
 The author signs, with Ed25519:
 
 ```
-sign( "svastha/v{VERSION}/event" ‖ id ‖ source ‖ source_doc? )
+sign( "svastha/v{VERSION}/event" ‖ id ‖ source ‖ source_doc?
+      ‖ [ by ‖ source_blob? ‖ method? ‖ model? ]   // ONLY when proposed present
+)
 ```
 
-where `id` is the 32 raw content-id bytes and `source`/`source_doc?` are the
-canonical provenance. Because `id` is a collision-resistant commitment to all
-content, signing `id ‖ provenance` covers the whole record. The `svastha/v{VERSION}/event`
-prefix is version-tagged and domain-separates event signatures from the relay-auth
-handshake and any other Ed25519 use. A `SignedEvent` carries the `event`, the
-`author` (Ed25519 public key), and the `signature`, both as hex.
+where `id` is the 32 raw content-id bytes, `source`/`source_doc?` are the
+canonical provenance, and `{VERSION}` is the contract **major**. Because `id` is a
+collision-resistant commitment to all content, signing `id ‖ provenance` covers
+the whole record. A `SignedEvent` carries the `event`, the `author` (Ed25519
+public key), and the `signature`, both as hex.
+
+**The `proposed` bracket is appended only when the field is present.** This is a
+load-bearing canonicalization invariant: an *absent* `proposed` appends **zero
+bytes** — not the `0x00` presence byte an in-struct option uses — so every event
+authored before this field existed produces the exact preimage it did before, and
+its signature stays valid with no *major* bump. When present, the four fields are
+appended (each with the standard length-prefix / option encoding) so the owner's
+signature attests to the proposal provenance. Absence and presence are
+unambiguous, since a verifier reconstructs the preimage from the event's own
+`proposed` field; stripping or forging the field flips the recomputed preimage and
+fails verification.
 
 Test vectors: [`vectors/event.json`](vectors/event.json). Each entry pins a
 structured `event` → its `canon` bytes and `id`; signed entries add a
 `signer_seed`, the `author`, and the (deterministic, RFC 8032) `signature`. Two
-entries differ only in provenance to pin the cross-source id collision. Regenerate
-with `cargo run -p svastha-core --example event_vectors` (only on a deliberate,
+entries differ only in provenance to pin the cross-source id collision. The
+existing (proposal-free) signed vectors are themselves the guard that an absent
+`proposed` changes nothing: they still reproduce byte-for-byte. Regenerate with
+`cargo run -p svastha-core --example event_vectors` (only on a deliberate,
 version-bumped contract change).
 
 ## Curation record
@@ -241,10 +295,9 @@ first**, then merges only what verified.
 **Versioning.** Signing a curation record is *additive*: it does not touch key
 derivation, the encryption envelope, the signing-preimage structure of events, or
 the relay protocol, and no pre-existing wire value changes shape. Like the
-`attachment` value shape before it, it therefore does **not** bump
-`CONTRACT_VERSION` — a bump rotates every derived identity and HKDF label and would
-orphan every existing vault, the opposite of what an additive record should do.
-New vectors are pinned under the current version.
+`attachment` value shape before it, it therefore needs no *major* bump (which
+would rotate every derived identity and HKDF label and orphan every existing
+vault). New vectors are pinned under the current major.
 
 Test vectors: [`vectors/curation.json`](vectors/curation.json). One valid record
 pins its canonical preimage and deterministic (RFC 8032) signature; three tamper
@@ -252,6 +305,138 @@ cases (a mutated `value`, a mutated `key`, and a signature re-attributed to a
 wrong `author`) each pin `valid: false`, the outcome a correct verifier must
 produce. Regenerate with `cargo run -p svastha-core --example curation_vectors`
 (only on a deliberate, version-bumped contract change).
+
+## Mailbox message envelope
+
+Everything new on the store-and-forward mailbox — proposals, node administration,
+cited Q&A, and the vault-key handoff that used to be the mailbox's only, implicit
+payload — rides one typed, versioned, end-to-end-encrypted **message envelope**.
+It is the wave's principal contract addition. The relay is blind to it: the body
+is sealed, and the envelope is opaque bytes the relay stores and forwards like any
+other mailbox item.
+
+A `MailboxMessage` is a flat JSON object, all byte fields lowercase hex:
+
+```
+{ v, kind, from, sent_at, id, body, signature }
+```
+
+- `v` — the **envelope version**, a single byte (currently `1`). Distinct from
+  `CONTRACT_VERSION`: the envelope shape can revise on its own cadence. It rides in
+  the signed bytes, so tampering with it fails verification.
+- `kind` — one of `proposal`, `proposal_result`, `admin_cmd`, `admin_reply`,
+  `chat_msg`, `key_handoff`. Selects how a recipient interprets the opened body.
+- `from` — the sender's 32-byte Ed25519 public key; the envelope is signed by it.
+- `sent_at` — the sender's clock in **Unix milliseconds** (an `i64`),
+  informational and never trusted for ordering.
+- `id` — the 32-byte message id (below), carried so a relay can de-duplicate a
+  message it sees more than once (and so cross-relay dedupe is trivial later).
+- `body` — the kind-specific plaintext **sealed to the recipient's X25519 key** (a
+  sealed box, below).
+- `signature` — the 64-byte Ed25519 signature over the signing preimage.
+
+### Sealing the body
+
+The body is sealed to the recipient with the **same ECIES construction as key
+wrapping**, generalized from a fixed 32-byte data key to an arbitrary-length
+payload — a **sealed box**:
+
+1. The sender generates an ephemeral X25519 keypair `(e_sk, e_pk)`.
+2. `shared = X25519(e_sk, recipient_pk)`.
+3. `box_key = HKDF-SHA256(ikm = shared, salt = e_pk ‖ recipient_pk,
+   info = "svastha/v{MAJOR}/mailbox-box")[..32]`. The label is **domain-separated
+   from key wrapping** (`…/wrap`) so a message-seal can never be opened as a
+   key-wrap or vice versa, and embeds the contract major like every other label.
+4. Seal the plaintext under `box_key` (payload sealing, with empty `aad`).
+
+```
+seal_box(recipient_pk, plaintext) -> e_pk(32) ‖ nonce(24) ‖ ciphertext+tag
+```
+
+The `body` field is these bytes. Empty `aad` is deliberate: the envelope signature
+(below) binds the body to its envelope, so no separate AEAD binding is needed.
+
+### Message id and signing (sealed, then signed)
+
+The **canonical bytes** of the envelope are `v ‖ kind ‖ from ‖ sent_at ‖ body`,
+using the contract's standard encoding — a single byte for `v`, length-prefixed
+strings/bytes (u32 big-endian length), big-endian fixed-width integers, and `from`
+as its 32 raw bytes. `kind` is encoded as its wire name (the `snake_case` string),
+length-prefixed, so reordering the enum cannot change ids. `from` **is** included
+(a message from a different sender is a different message; there is no
+cross-source collapse to preserve, unlike an event's content id).
+
+```
+id = SHA-256( "svastha/mailbox-msg-id\0" ‖ canonical_bytes )
+```
+
+The id domain tag is **version-independent** (like the event-id tag): a message's
+dedupe identity is stable regardless of the build that produced it. The author
+then signs, with Ed25519:
+
+```
+sign( "svastha/v{MAJOR}/mailbox" ‖ id )
+```
+
+Because `id` commits to every field, signing it covers the whole envelope — the
+same shape as an event signing its content id. The `…/mailbox` label
+domain-separates these from event, curation, and relay-auth signatures.
+
+**Sealed then signed → verify-or-drop before decrypting.** The body is sealed
+first; the signature then covers the id, which commits to the sealed body. A
+recipient therefore **verifies first and drops on failure**, without the decrypt
+path ever running — the same posture as a curation record from a doctor-share
+bundle. `verify` recomputes the id from the fields (rejecting a mismatched stored
+`id`) and checks the signature against `from`; any tampering with `v`, `kind`,
+`from`, `sent_at`, or the sealed `body` changes the recomputed id and fails, and a
+wrong `from` is the wrong verification key.
+
+### Body schemas
+
+The sealed plaintext each `kind` carries is defined in `crates/core` (so the node
+and the web client share one shape) but is **minimal and additively extensible**:
+optional fields default, unknown fields are ignored, so a newer sender can add
+fields without breaking an older reader. None of it is signed or hashed by the
+envelope — it is opaque sealed bytes to the crypto above.
+
+- `key_handoff` — `{ from_ed, from_x25519, label, wrapped_hex }`. `wrapped_hex` is
+  a wrapped vault key (today) or wrapped keyring (once key epochs land) as
+  `WrappedKey` wire bytes. This is the typed successor to the bare wrapped-key
+  deposit (see grandfathering below).
+- `proposal` — `{ proposals: [ { event, source_blob?, method?, model? } … ] }`,
+  each `event` an **unsigned but schema-valid** draft the owner signs on approval
+  (stamping `proposed`, with `by` = the envelope `from`). The proposer is the
+  envelope `from`, not repeated per draft.
+- `proposal_result` — `{ proposal_id, accepted: [id…], rejected: [id…] }`: the
+  owner's decision echoed to the proposer (event content ids).
+- `admin_cmd` — `{ command }`, a tagged owner→node command
+  (`set_inference_endpoint`, `job_status`, `log_tail`). The node accepts commands
+  only from an identity holding a live grant *it itself* issued; node-global
+  administration stays with the host operator.
+- `admin_reply` — `{ in_reply_to, ok, detail? }`.
+- `chat_msg` — `{ role, text, citations: [event_id…] }`: a retrieval-augmented Q&A
+  turn; an answer carries the event ids it cited.
+
+### Grandfathering the bare wrapped-key deposit
+
+Before this envelope, the mailbox carried one implicit payload: a small unsigned
+JSON blob with a `wrapped_hex` field (`{ v, from_ed, from_x25519, label,
+wrapped_hex }`). That format **still parses within the current major** — a reader
+tries the typed envelope first, then falls back to the legacy deposit; the two are
+unambiguous (a typed envelope requires `kind`/`from`/`id`/`body`/`signature`, a
+legacy one requires `from_ed`/`from_x25519`/`wrapped_hex`, and neither parses as
+the other). The wrapped key inside stays openable precisely because the major is
+held fixed across the version bump. New senders send a `key_handoff` envelope.
+
+Test vectors: [`vectors/mailbox.json`](vectors/mailbox.json). Two valid,
+freshly-sealed vectors (a `key_handoff` and a `proposal`) pin the canonical bytes,
+message id, signing bytes, signature, and full envelope, and carry the seeds and
+nonces to reproduce every byte and to open the body end-to-end; two tamper cases
+(a flipped signature, and a mutated `sent_at` whose stored id no longer matches)
+pin `valid: false`; one legacy vector pins that a bare wrapped-key deposit still
+parses and unwraps. Regenerate with
+`cargo run -p svastha-core --example mailbox_vectors` (only on a deliberate,
+version-bumped contract change).
 
 ## Relay wire protocol
 
@@ -380,13 +565,17 @@ already synced to their device; the client is responsible for saying so.
 
 ### Mailbox
 
-A store-and-forward drop box, used to hand a grantee the vault key a grant
-alone doesn't carry: the depositor wraps it (ECIES) to the recipient's X25519
-key before depositing, so the relay only ever sees ciphertext. Any authed
-identity may deposit into any recipient's mailbox — there is nothing to
-protect at deposit time, since the payload is opaque and the recipient decides
-whether to trust it (see the client-side accept flow in
-`docs/ARCHITECTURE.md`). Reading, listing, and deleting are scoped to the
+A store-and-forward drop box. Deposits are opaque to the relay: a depositor seals
+the payload to the recipient's X25519 key before depositing, so the relay only
+ever sees ciphertext. Every new deposit is a typed **mailbox message envelope**
+(see "Mailbox message envelope" above) — proposals, node admin, chat, and the
+`key_handoff` that carries a wrapped vault key; a bare wrapped-key deposit
+(today's pre-envelope format) is still accepted and grandfathered client-side. The
+relay treats all of these identically: opaque bytes it routes by recipient. Any
+authed identity may deposit into any recipient's mailbox — there is nothing to
+protect at deposit time, since the payload is opaque and the recipient
+verifies-or-drops and decides whether to trust it (see the client-side accept flow
+in `docs/ARCHITECTURE.md`). Reading, listing, and deleting are scoped to the
 caller's own mailbox.
 
 | Method & path | Auth | Body | Success | Notes |
@@ -397,9 +586,10 @@ caller's own mailbox.
 | `DELETE /v0/mailbox/{id}` | yes | — | `204` / `404` | delete one |
 
 `{recipient}` is 64 lowercase hex chars or `400`; `{id}` reuses the blob `{id}`
-rule above. The 4 KiB cap is deliberately small: a mailbox item carries one
-wrapped vault key plus a small JSON envelope, never anything larger, so the
-cap bounds the spam surface without constraining legitimate use. The
+rule above. The 4 KiB cap is deliberately small: a mailbox item carries a typed
+envelope whose sealed body is a wrapped key, a small proposal batch, or a chat
+turn, never anything larger, so the cap bounds the spam surface without
+constraining legitimate use. The
 `svastha-from` header is the relay's attestation of the depositor's
 already-verified auth identity — not a claim the client makes about itself —
 which the receiving client then binds to whatever identity the payload itself

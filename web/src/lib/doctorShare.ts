@@ -20,6 +20,7 @@ import { isoToMillis } from './time'
 import { fromHex } from './hex'
 import { bytesToBase64, base64ToBytes } from './base64'
 import { attachmentBytes } from './attachments'
+import { getProvenance } from './provenance'
 import { get, getAll, put } from './db'
 
 /** Token alphabet: URL-safe base64 minus the dot the relay would also allow —
@@ -127,7 +128,13 @@ export function deriveShareCategories(
  * of any captured paper record referenced by those events (base64, keyed by the
  * content hash the `attachment` value carries), so a recipient with no vault key
  * and no relay auth can still open them — a share re-encrypts everything it
- * needs under its own key. Omitted when the scope has no attachments. */
+ * needs under its own key. Omitted when the scope has no attachments.
+ * `documents` does the same for imported source documents (a `doc-` blob an
+ * event's `provenance.source_doc` points at) — keyed by the same content hash,
+ * carrying `name` alongside the bytes since (unlike an attachment) a `doc-`
+ * blob has no stored mime; the recipient derives it from the name the same way
+ * the owner's own viewer does (see `provenance.ts`'s `mimeForDocName`). Omitted
+ * when the scope references none. */
 export interface ShareBundle {
   v: 1
   created_at: string
@@ -135,6 +142,7 @@ export interface ShareBundle {
   signer: string
   events: StoredEvent[]
   attachments?: Record<string, string>
+  documents?: Record<string, { name: string; bytes: string }>
   /** The owner's `status:`/`name:` concept curation for the concepts these
    * events fold into — signed records the recipient verifies-or-drops against
    * `signer`, exactly as it does the events. Only these two namespaces cross
@@ -152,6 +160,18 @@ export function referencedAttachmentShas(events: StoredEvent[]): string[] {
   for (const se of events) {
     const v = se.event.value
     if (v && 'attachment' in v) shas.add(v.attachment.sha256)
+  }
+  return [...shas].sort()
+}
+
+/** The distinct content hashes of every imported source document these events'
+ * provenance points at, in sha order. Mirrors {@link referencedAttachmentShas}
+ * for the `doc-` namespace, so the create UI can count both the same way. */
+export function referencedDocumentShas(events: StoredEvent[]): string[] {
+  const shas = new Set<string>()
+  for (const se of events) {
+    const sha = se.event.provenance.source_doc
+    if (sha) shas.add(sha)
   }
   return [...shas].sort()
 }
@@ -203,14 +223,15 @@ export function applyMedScope(
  * Ed25519 public key; it is re-encoded to base64url so the recipient can pin
  * every event's `author` (and every carried curation record's `author`) to the
  * one signer named by the bundle. `attachments` (sha256 → base64 plaintext
- * bytes) and `curation` (signed `status:`/`name:` records) are inlined only
- * when non-empty. */
+ * bytes), `documents` (sha256 → name + base64 plaintext bytes), and `curation`
+ * (signed `status:`/`name:` records) are inlined only when non-empty. */
 export function buildBundle(
   events: StoredEvent[],
   signerEd25519Hex: string,
   createdAtIso: string,
   attachments: Record<string, string> = {},
   curation: SignedCurationRecord[] = [],
+  documents: Record<string, { name: string; bytes: string }> = {},
 ): ShareBundle {
   const bundle: ShareBundle = {
     v: 1,
@@ -219,6 +240,7 @@ export function buildBundle(
     events,
   }
   if (Object.keys(attachments).length > 0) bundle.attachments = attachments
+  if (Object.keys(documents).length > 0) bundle.documents = documents
   if (curation.length > 0) bundle.curation = curation
   return bundle
 }
@@ -303,15 +325,27 @@ export async function createDoctorShare(params: {
     const bytes = await attachmentBytes(sha256)
     if (bytes) attachments[sha256] = bytesToBase64(bytes)
   }
-  const bundle = buildBundle(events, identity.ed25519_public_hex, createdAtIso, attachments, curation)
+  // Same treatment for the imported source documents these events point at.
+  // Reads the local `provenance` store regardless of that blob's own sync
+  // status — a doc- blob too large for the relay's body cap still lives on the
+  // importing device (see import.ts's `tooLargeToSync`), so a share created
+  // from that device can still carry it even though a relay pull couldn't. A
+  // device that never received the blob (synced from elsewhere) silently omits
+  // it here, mirroring the attachment loop above.
+  const documents: Record<string, { name: string; bytes: string }> = {}
+  for (const sha256 of referencedDocumentShas(events)) {
+    const doc = await getProvenance(sha256)
+    if (doc) documents[sha256] = { name: doc.name, bytes: bytesToBase64(doc.bytes) }
+  }
+  const bundle = buildBundle(events, identity.ed25519_public_hex, createdAtIso, attachments, curation, documents)
   const plaintext = new TextEncoder().encode(JSON.stringify(bundle))
   // A share is capped tighter than a blob (relay's 8 MiB share ceiling). Catch
   // it here with an honest message rather than letting the PUT 413 — attachments
-  // are the only thing that can push a scoped subset over.
+  // and source documents are what can push a scoped subset over.
   if (plaintext.length > SHARE_MAX_BYTES) {
     throw new Error(
-      'This selection is too large to share — it includes more photo pages than a single ' +
-        'link can carry. Narrow the dates or categories, or share fewer paper records.',
+      'This selection is too large to share — it includes more photo pages or documents than a ' +
+        'single link can carry. Narrow the dates or categories, or share fewer paper records or documents.',
     )
   }
   const aad = new TextEncoder().encode(token)

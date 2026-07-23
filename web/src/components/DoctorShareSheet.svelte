@@ -21,6 +21,7 @@
     deriveShareCategories,
     filterEventsForScope,
     referencedAttachmentShas,
+    referencedDocumentShas,
     EXPIRY_CHOICES,
     DEFAULT_EXPIRY_DAYS,
     type DoctorShareRecord,
@@ -135,10 +136,11 @@
         (se) => se.event.kind === 'medication_statement' && statuses.get(conceptKey(se.event)) === 'inactive',
       ),
   )
-  // Paper records travel inside the share bundle (their bytes are inlined), so
-  // surface the page count honestly — it's what can push a share toward the
-  // relay's size cap.
+  // Paper records and imported source documents both travel inside the share
+  // bundle (their bytes are inlined), so surface both counts honestly — they're
+  // what can push a share toward the relay's size cap.
   const pageCount = $derived(referencedAttachmentShas(scopedEvents).length)
+  const documentCount = $derived(referencedDocumentShas(scopedEvents).length)
 
   const scopeDescription = $derived.by(() => {
     const allNonSensitive = nonSensitiveCategories.every((c) => selected.has(c))
@@ -383,6 +385,11 @@
         {#if pageCount > 0}
           <span class="muted" data-testid="share-pages"
             >· includes 📷 {pageCount} photo {pageCount === 1 ? 'page' : 'pages'}</span
+          >
+        {/if}
+        {#if documentCount > 0}
+          <span class="muted" data-testid="share-documents"
+            >· 📄 {documentCount} {documentCount === 1 ? 'document' : 'documents'}</span
           >
         {/if}
       </p>

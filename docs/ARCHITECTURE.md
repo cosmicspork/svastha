@@ -34,9 +34,14 @@ between a TypeScript client and a Rust server.
 `svastha_core::CONTRACT_VERSION` versions the on-the-wire format (envelope, event
 schema, relay protocol). Independently deployed and self-hosted pieces will run
 different builds, so the version is negotiated and changes are backward
-compatible within a major. `spec/` holds the written contract and
-language-neutral test vectors so an auditor or a non-Rust reimplementation can
-validate against the same bytes.
+compatible within a major. That "within a major" is now concrete: the negotiated
+`CONTRACT_VERSION` (the wire version, reported at `GET /v0/info`) is separate from
+the contract *major* embedded in every HKDF / signing label. Additive changes — a
+new envelope kind, a new optional field — advance the wire version within a fixed
+major, so no key rotates and no stored blob is orphaned; only a key-rotating break
+bumps the major. `spec/` holds the written contract and language-neutral test
+vectors so an auditor or a non-Rust reimplementation can validate against the same
+bytes, and `spec/README.md`'s "Versioning" section is authoritative on the split.
 
 ## Identity and keys
 
@@ -129,6 +134,13 @@ typed, signed, stably-identified events, plus a thin mutable curation overlay
   per component sharing an `effective_at` — grouping is presentational.
 - Only the small curation overlay needs conflict resolution (last-writer-wins or
   similar).
+- An event may optionally attest that it began as an approved **proposal**: an
+  owner-signed `proposed` field records who proposed it (a processing node, or a
+  future human caregiver) and from what source blob, method, and model. It is
+  absent on ordinary self-authored events and excluded from the content id — so an
+  approved proposal keeps the same id as the same fact logged directly — while the
+  owner's signature still covers it. This is what lets a granted identity *suggest*
+  events the owner reviews and signs, without ever forging history (see "Node").
 
 This keeps conflict handling light even with multiple concurrent writers (for
 example a caregiver and the patient), so a heavyweight CRDT framework is not
@@ -331,11 +343,17 @@ handshake" subsections.
 both still pure routing metadata: a grant store (owner authorizes grantee to
 read, queried in both directions so a device can list who it shares with and
 who shares with it) and a mailbox store (a store-and-forward drop box any
-authed identity may deposit into, used to hand a grantee the wrapped vault key
-a grant alone doesn't carry). `GET /v0/shared/{owner}/blobs...` answers `404`
-identically for "no such blob" and "no grant," so probing never leaks the
-sharing graph. See `spec/README.md`'s "Grants" and "Mailbox" subsections for
-the endpoint contract.
+authed identity may deposit into). The mailbox began as the way to hand a
+grantee the wrapped vault key a grant alone doesn't carry; it now carries a
+**typed, versioned, end-to-end-encrypted message envelope** for everything the
+node/protocol wave adds — proposals, node administration, cited Q&A — with the
+wrapped-key handoff folded in as one `key_handoff` kind (a bare pre-envelope
+deposit is still grandfathered). The envelope is sealed to the recipient and
+signed by the sender, so a recipient verifies-or-drops before decrypting; the
+relay stays blind, forwarding opaque bytes. `GET /v0/shared/{owner}/blobs...`
+answers `404` identically for "no such blob" and "no grant," so probing never
+leaks the sharing graph. See `spec/README.md`'s "Mailbox message envelope",
+"Grants", and "Mailbox" sections for the contract.
 
 ## Node (`crates/node`, later release)
 
@@ -488,11 +506,12 @@ Two roles with different trust properties:
 
 - **Relay.** Keyless and dumb. Anyone can run the binary and point a client at it.
   A compromised relay leaks nothing but ciphertext and metadata.
-- **Processing node.** A trusted device in the key circle (it holds keys and sees
-  plaintext), for running local LLMs on your own hardware, for example a Mac mini.
-  It reuses the device-enrollment primitive. Reach it over a private mesh
-  (Tailscale, WireGuard), not public port-forwarding. A compromised node leaks
-  plaintext, so it must be secured accordingly.
+- **Processing node.** A trusted client in the key circle (it holds keys and
+  sees plaintext), running the processing pipeline on infrastructure you trust.
+  Wherever it runs — a machine at home, a VPS, a cluster — its host sits inside
+  the trust boundary: a compromised node leaks plaintext, so the host must be
+  secured accordingly. The node needs no inbound connections (it reaches the
+  relay outbound), so a deployment stays secure regardless of network topology.
 
 Keep these separate so the hosted relay stays truthfully zero-knowledge while
 power users can run everything locally, from the same codebase.
