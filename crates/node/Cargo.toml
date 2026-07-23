@@ -11,3 +11,32 @@ categories = ["cryptography"]
 
 [dependencies]
 svastha-core = { path = "../core", version = "0.10.0" } # x-release-please-version
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Content-hash checks on att-/doc-/cur- blob ids, and hex identity codes.
+hex = "0.4"
+sha2 = "0.10"
+# att-/doc- blob bodies carry their bytes base64-encoded in JSON.
+base64 = "0.22"
+# Fallible plumbing (config, IO, relay round-trips) and typed config errors.
+anyhow = "1"
+thiserror = "2"
+# Blocking, signed relay HTTP client (blobs, mailbox, grants) and the long-lived
+# SSE poke stream read incrementally — the same crate the devtool already uses.
+ureq = "3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Render the printed identity code as a QR: unicode for the logs, SVG for the
+# localhost bootstrap page. No raster/image dependency pulled in.
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+# OsRng for the node's disposable identity seed (mirrors core's envelope RNG).
+rand_core = { version = "0.6", features = ["getrandom"] }
+
+[dev-dependencies]
+# Stand the real relay up in-process (its own tokio runtime on an ephemeral
+# port) so the node's client logic is exercised against the actual wire API —
+# the same pattern the devtool's integration test uses.
+svastha-relay = { path = "../relay" }
+tokio = { version = "1", features = ["rt-multi-thread", "net"] }
+axum = "0.8"
+tempfile = "3"
