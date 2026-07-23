@@ -180,10 +180,11 @@ impl WrappedKey {
     ) -> Result<DataKey, EnvelopeError> {
         let ephemeral_public = PublicKey::from(self.ephemeral_public);
         let shared = secret.diffie_hellman(&ephemeral_public);
-        let mut wrap_key = derive_wrap_key(
+        let mut wrap_key = derive_box_key(
             shared.as_bytes(),
             &self.ephemeral_public,
             recipient_public.as_bytes(),
+            "wrap",
         );
         let plaintext = aead_open(&wrap_key, &self.sealed.nonce, &self.sealed.ciphertext, &[]);
         wrap_key.zeroize();
@@ -216,10 +217,11 @@ pub fn wrap_key_with_ephemeral(
     let ephemeral_secret = StaticSecret::from(ephemeral_secret);
     let ephemeral_public = PublicKey::from(&ephemeral_secret);
     let shared = ephemeral_secret.diffie_hellman(recipient);
-    let mut wrap_key = derive_wrap_key(
+    let mut wrap_key = derive_box_key(
         shared.as_bytes(),
         ephemeral_public.as_bytes(),
         recipient.as_bytes(),
+        "wrap",
     );
     let ciphertext = aead_seal(&wrap_key, &nonce, &key.0, &[]);
     wrap_key.zeroize();
@@ -229,19 +231,126 @@ pub fn wrap_key_with_ephemeral(
     }
 }
 
-/// Derive the 32-byte wrapping key from the DH shared secret. The two public
-/// keys are bound in as the HKDF salt and the contract version in the `info`
-/// label, so the wrapping is pinned to this exchange and this contract version.
-fn derive_wrap_key(
+/// The label domain-separating the mailbox message-body seal from the vault-key
+/// wrap (both are ECIES to an X25519 recipient over the same primitives). Kept
+/// beside the `"wrap"` uses above so the two operations stay visibly distinct.
+const MAILBOX_BOX_LABEL: &str = "mailbox-box";
+
+/// A payload sealed to a recipient's X25519 public key (ECIES / sealed box): the
+/// same construction as [`WrappedKey`], generalized from a fixed 32-byte data key
+/// to an arbitrary-length body. Carries the ephemeral public key the recipient
+/// redoes the DH against. Canonical wire form is `ephemeral_public(32) ‖
+/// sealed_bytes` (the same layout as [`WrappedKey`]). Used for the typed mailbox
+/// message body (see [`crate::mailbox`]); only the recipient's X25519 secret can
+/// open it, so the relay only ever forwards ciphertext.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SealedBox {
+    ephemeral_public: [u8; KEY_LEN],
+    sealed: Sealed,
+}
+
+impl SealedBox {
+    /// Serialize to the canonical `ephemeral_public ‖ sealed` byte form.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let sealed = self.sealed.to_bytes();
+        let mut out = Vec::with_capacity(KEY_LEN + sealed.len());
+        out.extend_from_slice(&self.ephemeral_public);
+        out.extend_from_slice(&sealed);
+        out
+    }
+
+    /// Parse the canonical byte form.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, EnvelopeError> {
+        if bytes.len() < KEY_LEN {
+            return Err(EnvelopeError::Format);
+        }
+        let mut ephemeral_public = [0u8; KEY_LEN];
+        ephemeral_public.copy_from_slice(&bytes[..KEY_LEN]);
+        Ok(Self {
+            ephemeral_public,
+            sealed: Sealed::from_bytes(&bytes[KEY_LEN..])?,
+        })
+    }
+
+    /// Open with the recipient's X25519 secret and public key. Crate-internal; the
+    /// public entry point is [`crate::keys::Identity::open_sealed_box`], which
+    /// keeps secret-key access inside `Identity` (mirroring [`WrappedKey::open`]).
+    pub(crate) fn open(
+        &self,
+        secret: &StaticSecret,
+        recipient_public: &PublicKey,
+        aad: &[u8],
+    ) -> Result<Vec<u8>, EnvelopeError> {
+        let ephemeral_public = PublicKey::from(self.ephemeral_public);
+        let shared = secret.diffie_hellman(&ephemeral_public);
+        let mut box_key = derive_box_key(
+            shared.as_bytes(),
+            &self.ephemeral_public,
+            recipient_public.as_bytes(),
+            MAILBOX_BOX_LABEL,
+        );
+        let plaintext = aead_open(&box_key, &self.sealed.nonce, &self.sealed.ciphertext, aad);
+        box_key.zeroize();
+        plaintext
+    }
+}
+
+/// Seal an arbitrary payload to a recipient's X25519 public key, using a fresh
+/// ephemeral keypair and nonce. Only the holder of the recipient's secret can
+/// open it. `aad` is authenticated but not encrypted.
+pub fn seal_to(recipient: &PublicKey, plaintext: &[u8], aad: &[u8]) -> SealedBox {
+    let mut ephemeral_secret = [0u8; KEY_LEN];
+    OsRng.fill_bytes(&mut ephemeral_secret);
+    let sealed =
+        seal_to_with_ephemeral(recipient, plaintext, aad, ephemeral_secret, random_nonce());
+    ephemeral_secret.zeroize();
+    sealed
+}
+
+/// Seal with a caller-supplied ephemeral secret and nonce. Both must be fresh per
+/// seal in production, so this exists only for reproducible test vectors;
+/// production callers use [`seal_to`].
+pub fn seal_to_with_ephemeral(
+    recipient: &PublicKey,
+    plaintext: &[u8],
+    aad: &[u8],
+    ephemeral_secret: [u8; KEY_LEN],
+    nonce: [u8; NONCE_LEN],
+) -> SealedBox {
+    let ephemeral_secret = StaticSecret::from(ephemeral_secret);
+    let ephemeral_public = PublicKey::from(&ephemeral_secret);
+    let shared = ephemeral_secret.diffie_hellman(recipient);
+    let mut box_key = derive_box_key(
+        shared.as_bytes(),
+        ephemeral_public.as_bytes(),
+        recipient.as_bytes(),
+        MAILBOX_BOX_LABEL,
+    );
+    let ciphertext = aead_seal(&box_key, &nonce, plaintext, aad);
+    box_key.zeroize();
+    SealedBox {
+        ephemeral_public: ephemeral_public.to_bytes(),
+        sealed: Sealed { nonce, ciphertext },
+    }
+}
+
+/// Derive the 32-byte content-encryption key from the DH shared secret. The two
+/// public keys are bound in as the HKDF salt, so the derivation is pinned to this
+/// exchange; the `operation` label (via [`crate::version_label`]) both embeds the
+/// contract major and domain-separates the two ECIES uses — wrapping a data key
+/// (`"wrap"`) versus sealing a mailbox message body (`"mailbox-box"`) — so a
+/// key-wrap can never be opened as a message-seal or vice versa.
+fn derive_box_key(
     shared: &[u8],
     ephemeral_public: &[u8; KEY_LEN],
     recipient_public: &[u8; KEY_LEN],
+    operation: &str,
 ) -> [u8; KEY_LEN] {
     let mut salt = [0u8; KEY_LEN * 2];
     salt[..KEY_LEN].copy_from_slice(ephemeral_public);
     salt[KEY_LEN..].copy_from_slice(recipient_public);
     let hk = Hkdf::<Sha256>::new(Some(&salt), shared);
-    let info = crate::version_label("wrap");
+    let info = crate::version_label(operation);
     let mut okm = [0u8; KEY_LEN];
     hk.expand(info.as_bytes(), &mut okm)
         .expect("HKDF expand of 32 bytes is always within bounds");
@@ -386,6 +495,58 @@ mod tests {
     /// Test-only peek at a data key's bytes, to assert wrap/unwrap preserves it.
     fn data_key_bytes(key: &DataKey) -> &[u8; KEY_LEN] {
         &key.0
+    }
+
+    #[test]
+    fn sealed_box_round_trip() {
+        let recipient = Identity::from_seed(b"recipient seed");
+        let sealed = seal_to(
+            &recipient.x25519_public(),
+            b"a mailbox message body",
+            b"aad",
+        );
+        let parsed = SealedBox::from_bytes(&sealed.to_bytes()).unwrap();
+        assert_eq!(
+            recipient.open_sealed_box(&parsed, b"aad").unwrap(),
+            b"a mailbox message body"
+        );
+    }
+
+    #[test]
+    fn sealed_box_rejects_wrong_recipient() {
+        let recipient = Identity::from_seed(b"recipient seed");
+        let attacker = Identity::from_seed(b"attacker seed");
+        let sealed = seal_to(&recipient.x25519_public(), b"secret", b"");
+        assert!(matches!(
+            attacker.open_sealed_box(&sealed, b""),
+            Err(EnvelopeError::Aead)
+        ));
+    }
+
+    #[test]
+    fn sealed_box_rejects_wrong_aad() {
+        let recipient = Identity::from_seed(b"recipient seed");
+        let sealed = seal_to(&recipient.x25519_public(), b"secret", b"context-a");
+        assert!(matches!(
+            recipient.open_sealed_box(&sealed, b"context-b"),
+            Err(EnvelopeError::Aead)
+        ));
+    }
+
+    #[test]
+    fn sealed_box_and_wrapped_key_are_domain_separated() {
+        // A 32-byte payload sealed as a message body must NOT open as a wrapped
+        // vault key even though both are ECIES to the same recipient: the two
+        // derivations use different HKDF labels ("mailbox-box" vs "wrap").
+        let recipient = Identity::from_seed(b"recipient seed");
+        let key_bytes = [7u8; KEY_LEN];
+        let sealed = seal_to(&recipient.x25519_public(), &key_bytes, b"");
+        // Reinterpret the sealed-box bytes as a WrappedKey and try to unwrap.
+        let as_wrapped = WrappedKey::from_bytes(&sealed.to_bytes()).unwrap();
+        assert!(matches!(
+            recipient.unwrap_key(&as_wrapped),
+            Err(EnvelopeError::Aead)
+        ));
     }
 
     // --- pinned spec vectors ---

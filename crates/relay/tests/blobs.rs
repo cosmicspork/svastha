@@ -43,7 +43,7 @@ async fn health_and_info_need_no_auth() {
         .unwrap();
     assert_eq!(info.status(), StatusCode::OK);
     let json: serde_json::Value = serde_json::from_slice(&body_bytes(info).await).unwrap();
-    assert_eq!(json["contract_version"], 0);
+    assert_eq!(json["contract_version"], 1);
 }
 
 #[tokio::test]

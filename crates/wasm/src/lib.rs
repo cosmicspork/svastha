@@ -15,6 +15,7 @@ use svastha_core::curation::{merge as merge_curation_records, SignedCurationReco
 use svastha_core::envelope::{wrap_key, DataKey, Sealed, WrappedKey};
 use svastha_core::event::{Code, Event, EventKind, EventValue, Provenance, SignedEvent};
 use svastha_core::keys::Identity;
+use svastha_core::mailbox::{MailboxMessage, MessageKind};
 use svastha_core::relay::{sign_request as relay_sign_request, AuthRequest};
 use x25519_dalek::PublicKey;
 
@@ -131,6 +132,47 @@ impl WasmIdentity {
         let key = self.identity.unwrap_key(&wrapped).map_err(to_js)?;
         Ok(WasmDataKey { key })
     }
+
+    /// Seal and sign a typed mailbox envelope: `body` is sealed to
+    /// `recipient_x25519_public` and the envelope is signed by this identity.
+    /// `kind` is the wire name (`proposal`, `proposal_result`, `admin_cmd`,
+    /// `admin_reply`, `chat_msg`, `key_handoff`); `sent_at` is Unix milliseconds
+    /// (taken as `f64` so a JS `Date.now()` passes directly — it is exact for any
+    /// real timestamp). Returns the `MailboxMessage` JSON to deposit at the
+    /// recipient's mailbox. See `spec/README.md`, "Mailbox message envelope".
+    pub fn seal_message(
+        &self,
+        recipient_x25519_public: &[u8],
+        kind: &str,
+        sent_at: f64,
+        body: &[u8],
+    ) -> Result<String, JsError> {
+        let bytes: [u8; 32] = recipient_x25519_public
+            .try_into()
+            .map_err(|_| JsError::new("recipient public key must be 32 bytes"))?;
+        let recipient = PublicKey::from(bytes);
+        let kind = parse_message_kind(kind)?;
+        let msg = MailboxMessage::seal(&self.identity, &recipient, kind, sent_at as i64, body);
+        serde_json::to_string(&msg).map_err(to_js)
+    }
+
+    /// Open a typed mailbox envelope sealed to this identity. **Verifies first**
+    /// (the verify-or-drop posture) and errors if the signature or message id does
+    /// not check out, so a caller that gets bytes back knows the envelope is
+    /// authentic. Returns the decrypted body plaintext.
+    pub fn open_message(&self, envelope_json: &str) -> Result<Vec<u8>, JsError> {
+        let msg: MailboxMessage = serde_json::from_str(envelope_json).map_err(to_js)?;
+        if !msg.verify() {
+            return Err(JsError::new("mailbox envelope failed verification"));
+        }
+        msg.open(&self.identity).map_err(to_js)
+    }
+}
+
+/// Parse a mailbox message-kind wire name into the contract enum.
+fn parse_message_kind(kind: &str) -> Result<MessageKind, JsError> {
+    serde_json::from_value(serde_json::Value::String(kind.to_string()))
+        .map_err(|_| JsError::new("unknown mailbox message kind"))
 }
 
 /// The event-content fields a caller supplies; the id is derived, not provided.
@@ -225,6 +267,17 @@ pub fn verify_event(signed_json: &str) -> Result<bool, JsError> {
 pub fn verify_curation(signed_json: &str) -> Result<bool, JsError> {
     let signed: SignedCurationRecord = serde_json::from_str(signed_json).map_err(to_js)?;
     Ok(signed.verify())
+}
+
+/// Verify a `MailboxMessage` JSON envelope: does the stored id match the
+/// recomputed one and the signature bind it to `from`? The verify-or-drop check a
+/// recipient runs before opening (or even acting on) a mailbox item. Opening
+/// (`open_message`) verifies again, so a caller may drop on `false` here without
+/// decrypting.
+#[wasm_bindgen]
+pub fn verify_message(envelope_json: &str) -> Result<bool, JsError> {
+    let msg: MailboxMessage = serde_json::from_str(envelope_json).map_err(to_js)?;
+    Ok(msg.verify())
 }
 
 /// Last-writer-wins merge of two `SignedCurationRecord` JSON strings for the same
