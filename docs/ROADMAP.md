@@ -48,9 +48,12 @@ harvest a PR's "## Deferred" notes into the list.
 - Bluetooth medical devices; Apple HealthKit; Android Health Connect
 - ABDM boundary adapter (consent-federated — a different trust model)
 - Research marketplace (the grant primitive at different settings)
-- Processing node (`crates/node`): OCR, extraction, de-identification,
-  local RAG — delegating inference to a user-supplied OpenAI-compatible
-  endpoint
+
+## Processing node
+
+- OCR, extraction, de-identification, local RAG (`crates/node`) — delegates
+  inference to a user-supplied OpenAI-compatible endpoint; not tied to the
+  native wrapper
 
 ## Intentionally not doing
 
