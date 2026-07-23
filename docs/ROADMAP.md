@@ -16,6 +16,9 @@ harvest a PR's "## Deferred" notes into the list.
 - Key rotation for real revocation
 - Blob-list pagination and manifests; curation etags
 - Relay nonce store (auth replay hardening)
+- Multi-relay replication — client-driven; relays stay dumb replicas, no
+  inter-relay protocol (contract enablers — envelope message ids, mergeable
+  epoch ids — land with the protocol wave)
 
 ## Sharing
 
