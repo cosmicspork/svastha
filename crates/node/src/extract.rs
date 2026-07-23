@@ -114,13 +114,10 @@ fn to_draft(f: Finding) -> Option<EventDraft> {
     // AllergyIntolerance carries its substance as the *value* (Coded), not the
     // event code — mirroring `crates/import`'s allergy convention exactly.
     let (code, value) = if kind == EventKind::AllergyIntolerance {
-        match value
+        let v = value
             .clone()
-            .or_else(|| code.clone().map(EventValue::Coded))
-        {
-            Some(v) => (None, Some(v)),
-            None => return None,
-        }
+            .or_else(|| code.clone().map(EventValue::Coded))?;
+        (None, Some(v))
     } else {
         (code, value)
     };
