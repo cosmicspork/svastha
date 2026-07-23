@@ -7,8 +7,8 @@ harvest a PR's "## Deferred" notes into the list.
 
 ## Capture & documents
 
-- **OCR for captured documents** — native OS OCR via the wrapper, or the
-  processing node; human-in-the-loop for handwriting.
+- **OCR for captured documents** — via the processing node (proposals the
+  owner approves); human-in-the-loop for handwriting.
 
 ## Sync & protocol
 
@@ -30,6 +30,8 @@ harvest a PR's "## Deferred" notes into the list.
 - Richer grant terms (family/caregiver beyond the household pair)
 - Caregiver proposals — a granted identity suggests events, the owner
   approves and signs (rides the proposer-agnostic proposal mechanism)
+- Cryptographic grant scoping (per-scope data keys) — relay-blind namespace
+  enforcement; the true-ZK version of prefix-scoped grants
 
 ## Import
 
@@ -57,6 +59,10 @@ harvest a PR's "## Deferred" notes into the list.
 - OCR, extraction, de-identification, local RAG (`crates/node`) — delegates
   inference to a user-supplied OpenAI-compatible endpoint; not tied to the
   native wrapper
+- Narrative-notes extraction — mine imported `doc-` prose for coded-event
+  proposals (follow-up to OCR proposals)
+- Sender-sealed push notification hints — richer lock-screen text needs a
+  service-worker-accessible key custody decision first
 
 ## Intentionally not doing
 
