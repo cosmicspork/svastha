@@ -4,7 +4,7 @@
   import { allEvents, type StoredEvent } from '../lib/events'
   import { buildTimeline, categoriesPresent } from '../lib/timeline'
   import { loadDictionaryIndex, dictionaryStatus } from '../lib/dictionary'
-  import { CATEGORIES, CATEGORY_META, type Category } from '../lib/category'
+  import { CATEGORIES, CATEGORY_META, categorize, type Category } from '../lib/category'
   import { allCurationByPrefix, allTags, setHidden } from '../lib/curation'
   import { attachmentBytes } from '../lib/attachments'
   import { getProvenance, provenanceBytes, mimeForDocName } from '../lib/provenance'
@@ -12,6 +12,7 @@
   import SpineEntry from './SpineEntry.svelte'
   import AttachmentViewer from './AttachmentViewer.svelte'
   import TagChips from './TagChips.svelte'
+  import { focusedEventId } from '../lib/spine-focus'
 
   // `readonly` (the person screen, over a share's cached events) supplies its
   // own already-loaded `events` and skips the own-vault fetch, the shared
@@ -93,6 +94,24 @@
   const shown = $derived(filteredDays.slice(0, visibleDays))
   const present = $derived(new Set(categoriesPresent(events)))
   const filterChips = $derived(CATEGORIES.filter((c) => present.has(c)))
+
+  // Deep-link focus: a citation on the ask screen targets one of the owner's
+  // events. Only the own-record spine honors it (a citation always points into
+  // the owner's own log). Drop the category filter to 'all' if it would hide the
+  // target, then let the matching SpineEntry scroll+pulse; clear after it lands.
+  const highlightId = $derived(readonly ? null : $focusedEventId)
+  $effect(() => {
+    const id = highlightId
+    if (id === null) return
+    if (
+      filter !== 'all' &&
+      !events.some((e) => e.event.id === id && categorize(e.event) === filter)
+    ) {
+      filter = 'all'
+    }
+    const timer = setTimeout(() => focusedEventId.set(null), 4000)
+    return () => clearTimeout(timer)
+  })
 
   // Per-entry animation delays, staggered across days: ~20ms apiece, capped so
   // a full screen never takes more than 250ms to settle.
@@ -230,6 +249,7 @@
               tags={readonly ? [] : (tagsByEvent.get(entry.eventIds[0]) ?? [])}
               hidden={!readonly && hiddenEvents.has(entry.eventIds[0])}
               editable={!readonly}
+              highlightEventId={highlightId}
               onTagsChanged={handleTagsChanged}
               onToggleHidden={handleToggleHidden}
               onOpenViewer={(e) => (viewerEntry = e)}

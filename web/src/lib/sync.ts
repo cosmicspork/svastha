@@ -20,6 +20,7 @@ import { writable } from 'svelte/store'
 import { pullShared, teardownSharing } from './shared'
 import { pullMailbox, teardownMailbox } from './mailbox'
 import { bytesToBase64, base64ToBytes } from './base64'
+import { runEventStream } from './events-stream'
 
 /** The relay surface this engine needs — narrower than `RelayClient` so
  * tests can supply an in-memory fake without fighting `RelayClient`'s
@@ -35,6 +36,13 @@ export interface BlobClient {
 export interface SealKey {
   seal(plaintext: Uint8Array, aad: Uint8Array): Uint8Array
   open(sealed: Uint8Array, aad: Uint8Array): Uint8Array
+}
+
+/** The optional push-channel surface. `RelayClient` satisfies it; a bare
+ * `BlobClient` test fake does not, so the SSE stream simply never starts under
+ * unit tests (the poll timer alone drives them, as before). */
+interface StreamClient {
+  openEventStream(signal: AbortSignal): Promise<Response>
 }
 
 /** A namespace plug-in. `doc-` and `cur-` arrive in later PRs and register
@@ -525,6 +533,31 @@ export async function pullAll(): Promise<void> {
 const PULL_INTERVAL_MS = 5 * 60 * 1000
 let pullTimer: ReturnType<typeof setInterval> | null = null
 
+// The push channel (relay SSE). Aborting stops its reconnect loop for good.
+let streamAbort: AbortController | null = null
+
+/**
+ * Bring up the relay push stream if the client supports it: a poke never
+ * carries content, only *which* pull to run, so a `mailbox` poke triggers the
+ * mailbox scan and a `blobs`/`sync` poke a full pull. The stream is a latency
+ * shortcut layered over the authoritative poll (`pullTimer`) — lossy and
+ * reconnecting on its own, so a missed poke costs nothing.
+ */
+function startEventStream(relay: BlobClient): void {
+  const streamer = relay as Partial<StreamClient>
+  if (typeof streamer.openEventStream !== 'function') return
+  streamAbort = new AbortController()
+  const openStream = streamer.openEventStream.bind(streamer) as StreamClient['openEventStream']
+  void runEventStream({
+    openStream,
+    onPoke: (poke) => {
+      if (poke === 'mailbox') void pullMailbox()
+      else void pullAll()
+    },
+    signal: streamAbort.signal,
+  })
+}
+
 /** Dynamically imported (see the module doc comment) so this file never
  * statically depends on events.ts's runtime. */
 async function installEventsHook(): Promise<void> {
@@ -582,6 +615,7 @@ export function syncInit(relay: BlobClient, key: SealKey): void {
 
   void pullAll()
   pullTimer = setInterval(() => void pullAll(), PULL_INTERVAL_MS)
+  startEventStream(relay)
 }
 
 /** Stop the engine and forget the relay/vault key — called on lock/logout. */
@@ -602,4 +636,6 @@ export function syncTeardown(): void {
   }
   if (pullTimer) clearInterval(pullTimer)
   pullTimer = null
+  streamAbort?.abort()
+  streamAbort = null
 }

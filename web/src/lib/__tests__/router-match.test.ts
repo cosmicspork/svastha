@@ -34,6 +34,7 @@ describe('matchRoute', () => {
     expect(matchRoute('#/share')).toEqual({ path: '/share', params: {} })
     expect(matchRoute('#/share/people')).toEqual({ path: '/share/people', params: {} })
     expect(matchRoute('#/share/doctor')).toEqual({ path: '/share/doctor', params: {} })
+    expect(matchRoute('#/ask')).toEqual({ path: '/ask', params: {} })
     expect(matchRoute('#/import')).toEqual({ path: '/import', params: {} })
     expect(matchRoute('#/correlate')).toEqual({ path: '/correlate', params: {} })
   })

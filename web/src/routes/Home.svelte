@@ -93,6 +93,9 @@
       </button>
     {/each}
   {/if}
+  <button class="switch-chip ask" onclick={() => navigate('#/ask')} data-testid="nav-ask">
+    Ask
+  </button>
   <button class="switch-chip patterns" onclick={() => navigate('#/correlate')} data-testid="nav-correlate">
     Patterns
   </button>

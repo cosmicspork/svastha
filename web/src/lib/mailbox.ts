@@ -38,6 +38,14 @@ import {
   getProposer,
   type DraftEvent,
 } from './proposals'
+import { appendTurn, type ChatTurn } from './chat'
+import {
+  applyAdminReply,
+  recordCommand,
+  noteNodeSeen,
+  isEnrolledNode,
+  type AdminCommand,
+} from './nodeadmin'
 
 /** The mailbox surface this layer needs. `RelayClient` satisfies it
  * structurally (mirrors shared.ts's `SharingClient`). */
@@ -195,6 +203,22 @@ interface KeyHandoffBody {
   wrapped_hex: string
 }
 
+/** The kind-specific chat body (spec's `ChatMsgBody`). The owner deposits
+ * `question` turns; the node deposits `answer` turns carrying `citations`. */
+interface ChatMsgBody {
+  role: 'question' | 'answer'
+  text: string
+  citations?: string[]
+}
+
+/** The kind-specific admin-reply body (spec's `AdminReplyBody`). `in_reply_to`
+ * is the owner's `admin_cmd` message id, so a reply folds onto its command. */
+interface AdminReplyBody {
+  in_reply_to: string
+  ok: boolean
+  detail?: string
+}
+
 // --- pull ---
 
 export interface MailboxPullResult {
@@ -209,8 +233,14 @@ export interface MailboxPullResult {
    * a body that would not open, or unparseable bytes — counted and logged the
    * way the share viewer counts dropped events. */
   dropped: number
-  /** Envelopes of a kind this layer does not act on yet (proposal_result,
-   * admin_*, chat_msg, unknown) — tolerated and skipped, not dropped. */
+  /** Node answers stored this pull (verified `chat_msg` answer turns, deduped by
+   * message id). */
+  chatAnswers: number
+  /** Node `admin_reply` bodies folded onto their issued command this pull. */
+  adminReplies: number
+  /** Envelopes of a kind this layer does not act on (proposal_result, admin_cmd,
+   * a chat question echoed back, an orphan reply, unknown future kinds) —
+   * tolerated and skipped, not dropped. */
   ignored: number
 }
 
@@ -226,6 +256,8 @@ export async function pullMailbox(): Promise<MailboxPullResult> {
     proposalsAdded: 0,
     merged: 0,
     dropped: 0,
+    chatAnswers: 0,
+    adminReplies: 0,
     ignored: 0,
   }
   if (!client || !identity || !verifyMessage) return result
@@ -298,9 +330,24 @@ export async function pullMailbox(): Promise<MailboxPullResult> {
         if (added) result.proposalsAdded++
         break
       }
+      case 'chat_msg': {
+        const outcome = await handleChatMsg(env, itemId, body)
+        if (outcome === 'stored') result.chatAnswers++
+        else if (outcome === 'dropped') result.dropped++
+        else result.ignored++
+        break
+      }
+      case 'admin_reply': {
+        const outcome = await handleAdminReply(env, itemId, body)
+        if (outcome === 'applied') result.adminReplies++
+        else if (outcome === 'dropped') result.dropped++
+        else result.ignored++
+        break
+      }
       default:
-        // proposal_result, admin_cmd, admin_reply, chat_msg, and any unknown
-        // future kind: tolerated and skipped (spec's additive-versioning rule).
+        // proposal_result (echoed to a proposer, not received here), admin_cmd
+        // (owner→node, never received here), and any unknown future kind:
+        // tolerated and skipped (spec's additive-versioning rule).
         result.ignored++
     }
   }
@@ -409,6 +456,128 @@ async function handleProposal(env: Envelope, itemId: string, body: Uint8Array): 
     })),
   })
   return upsertProposal(record)
+}
+
+/** A verified inbound node message's fate: rendered, refused, or tolerated. */
+type NodeMsgOutcome = 'stored' | 'applied' | 'dropped' | 'ignored'
+
+/**
+ * Store a verified `chat_msg` **answer** as a node turn, deduped by envelope
+ * message id, and advance the node's last-seen. **Sender-gated:** the envelope
+ * signature proves who signed, not that the signer is the owner's node — mailbox
+ * deposits are open to any authenticated identity — so an answer from an
+ * identity that is not an enrolled node is `dropped` (never stored, never
+ * rendered as if it came from the node), not merely ignored. Only an `answer`
+ * role is stored (the owner never receives its own `question`); a node's
+ * non-answer is tolerated (`ignored`). The item is deleted once handled by the
+ * node: an answer is terminal, unlike a proposal the owner acts on later.
+ */
+async function handleChatMsg(env: Envelope, itemId: string, body: Uint8Array): Promise<NodeMsgOutcome> {
+  if (!(await isEnrolledNode(env.from))) return 'dropped'
+
+  let parsed: ChatMsgBody
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(body)) as ChatMsgBody
+  } catch {
+    return 'ignored'
+  }
+  if (parsed.role !== 'answer') return 'ignored'
+
+  const turn: ChatTurn = {
+    id: env.id,
+    role: 'node',
+    text: parsed.text ?? '',
+    citations: Array.isArray(parsed.citations) ? parsed.citations : [],
+    createdAt: new Date().toISOString(),
+  }
+  const added = await appendTurn(turn)
+  await noteNodeSeen(turn.createdAt)
+  if (client) await client.deleteMailbox(itemId)
+  return added ? 'stored' : 'ignored'
+}
+
+/**
+ * Fold a verified `admin_reply` onto the `admin_cmd` it answers, advance
+ * last-seen, and delete the item. **Sender-gated** identically to
+ * `handleChatMsg`: a reply from an identity that is not an enrolled node is
+ * `dropped`. Beyond the gate, `in_reply_to` must match a command this device
+ * actually issued — commands only ever go to the enrolled node, so the two
+ * together mean a reply is accepted only from the node the command was sent to;
+ * an orphan reply (no such command) is tolerated (`ignored`).
+ */
+async function handleAdminReply(env: Envelope, itemId: string, body: Uint8Array): Promise<NodeMsgOutcome> {
+  if (!(await isEnrolledNode(env.from))) return 'dropped'
+
+  let parsed: AdminReplyBody
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(body)) as AdminReplyBody
+  } catch {
+    return 'ignored'
+  }
+  if (typeof parsed.in_reply_to !== 'string' || parsed.in_reply_to === '') return 'ignored'
+
+  const applied = await applyAdminReply(parsed.in_reply_to, {
+    ok: parsed.ok === true,
+    detail: typeof parsed.detail === 'string' ? parsed.detail : undefined,
+    receivedAt: new Date().toISOString(),
+  })
+  await noteNodeSeen(new Date().toISOString())
+  if (client) await client.deleteMailbox(itemId)
+  return applied ? 'applied' : 'ignored'
+}
+
+// --- outbound: seal owner→node chat questions and admin commands ---
+//
+// The ask screen and node admin surface call these; they own the sealing (to
+// the node's X25519, from the proposer directory) and deposit, then record the
+// local turn / command, mirroring how `resolveProposalIfDone` below seals and
+// deposits a reply. The medical content in a question is sealed here and never
+// logged.
+
+/** The minimum a send needs from the node directory: where to deposit (Ed25519)
+ * and what to seal to (X25519). `ProposerRecord` satisfies it structurally. */
+export interface NodeTarget {
+  ed: string
+  x25519: string
+}
+
+/** The message id the relay and every client dedupe on lives inside the sealed
+ * envelope JSON (see spec's "Message id"); read it back so the local turn keys
+ * on the exact same id an eventual reply/echo will reference. */
+function messageIdOf(envelopeJson: string): string {
+  return (JSON.parse(envelopeJson) as { id: string }).id
+}
+
+/**
+ * Seal a `chat_msg` question to the node and deposit it, then store the local
+ * `user` turn keyed by the envelope message id. Returns the stored turn, or
+ * `null` if the mailbox layer is not configured. Never logs `text` (it is
+ * medical content).
+ */
+export async function sendChatMessage(node: NodeTarget, text: string): Promise<ChatTurn | null> {
+  if (!client || !identity) return null
+  const body = new TextEncoder().encode(JSON.stringify({ role: 'question', text, citations: [] }))
+  const envelope = identity.seal_message(fromHex(node.x25519), 'chat_msg', Date.now(), body)
+  const id = messageIdOf(envelope)
+  await client.putMailbox(node.ed, `chat-${id}`, new TextEncoder().encode(envelope))
+  const turn: ChatTurn = { id, role: 'user', text, citations: [], createdAt: new Date().toISOString() }
+  await appendTurn(turn)
+  return turn
+}
+
+/**
+ * Seal an `admin_cmd` to the node and deposit it, then record the local command
+ * keyed by the envelope message id (so the node's `admin_reply`, which carries
+ * that id as `in_reply_to`, folds back onto it). Returns whether it was sent.
+ */
+export async function sendAdminCommand(node: NodeTarget, command: AdminCommand): Promise<boolean> {
+  if (!client || !identity) return false
+  const body = new TextEncoder().encode(JSON.stringify({ command }))
+  const envelope = identity.seal_message(fromHex(node.x25519), 'admin_cmd', Date.now(), body)
+  const id = messageIdOf(envelope)
+  await client.putMailbox(node.ed, `admin-${id}`, new TextEncoder().encode(envelope))
+  await recordCommand({ id, command, sentAt: new Date().toISOString() })
+  return true
 }
 
 // --- resolution: echo the decision back to the proposer ---

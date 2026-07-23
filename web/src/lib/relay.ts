@@ -218,11 +218,23 @@ export class RelayClient {
     return true
   }
 
+  // --- push channel: a long-lived poke stream the relay writes to ---
+
+  /** Open the authed `GET /v0/events` push stream (see `spec/README.md`, "Push
+   * channel"). Returns the raw streaming `Response`; the caller reads
+   * `response.body` incrementally (see events-stream.ts). `signal` aborts the
+   * fetch when the stream is torn down. A `GET` is not replay-guarded, so
+   * re-opening on reconnect needs nothing special. */
+  openEventStream(signal: AbortSignal): Promise<Response> {
+    return this.fetch('GET', '/v0/events', undefined, undefined, signal)
+  }
+
   private fetch(
     method: string,
     path: string,
     body?: Uint8Array,
     extraHeaders?: Record<string, string>,
+    signal?: AbortSignal,
   ): Promise<Response> {
     const payload = body ?? new Uint8Array()
     const timestamp = Math.floor(Date.now() / 1000)
@@ -235,6 +247,7 @@ export class RelayClient {
         'svastha-signature': toHex(signature),
         ...extraHeaders,
       },
+      signal,
     }
     // GET/DELETE carry no body; fetch rejects a body on those methods. The cast
     // bridges TS's generic Uint8Array and the DOM BodyInit union — a Uint8Array

@@ -26,6 +26,7 @@ const KNOWN_PATTERNS = [
   '/share/people',
   '/share/doctor',
   '/proposals',
+  '/ask',
   // A doctor-share cold-load link. The single `:frag` segment is
   // `{token}.{key}.{relay}`; the fragment is parsed in shareRecipient.ts, not
   // here (this router only needs to route to the share view).

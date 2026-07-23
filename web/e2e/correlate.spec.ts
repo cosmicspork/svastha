@@ -86,6 +86,12 @@ test('curation LWW: two devices tagging the same event converge on the later wri
   page,
   browser,
 }) => {
+  // Block the SSE push stream on BOTH devices: this test pins LWW merge
+  // semantics at an explicit sync point, and pokes make pulls fire at
+  // arbitrary moments (B would see A's write before its own; A would pull
+  // mid-edit). With the stream blocked, the authoritative pull path is the
+  // only merge point and the race is exactly the one under test.
+  await page.route('**/v0/events', (route) => route.abort())
   const words = await onboardViaUI(page)
   await connectRelayViaUI(page)
 
@@ -96,6 +102,7 @@ test('curation LWW: two devices tagging the same event converge on the later wri
 
   const contextB = await browser.newContext()
   const pageB = await contextB.newPage()
+  await pageB.route('**/v0/events', (route) => route.abort())
   await restoreViaUI(pageB, words, undefined, RELAY)
   await expect(pageB.getByTestId('spine-entry').filter({ hasText: 'Nausea' })).toBeVisible()
 
@@ -114,6 +121,7 @@ test('curation LWW: two devices tagging the same event converge on the later wri
   await pageB.getByTestId('tag-input').fill('y')
   await pageB.getByTestId('tag-input').press('Enter')
   await expect(pageB.getByTestId('tag-chip')).toContainText('#y')
+  await waitForPushed(pageB)
 
   // After A syncs, LWW converges both devices on B's later write.
   await syncNow(page)

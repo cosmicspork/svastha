@@ -26,6 +26,7 @@
   import ShareDoctor from './routes/share/Doctor.svelte'
   import Person from './routes/Person.svelte'
   import Proposals from './routes/Proposals.svelte'
+  import Ask from './routes/Ask.svelte'
   import Import from './routes/Import.svelte'
   import Correlate from './routes/Correlate.svelte'
   import Bloom from './components/Bloom.svelte'
@@ -147,6 +148,8 @@
       <ShareDoctor />
     {:else if route.path === '/proposals'}
       <Proposals />
+    {:else if route.path === '/ask'}
+      <Ask />
     {:else if route.path === '/person/:ed'}
       <Person ed={route.params.ed} />
     {:else if route.path === '/import'}

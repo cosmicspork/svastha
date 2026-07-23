@@ -13,6 +13,7 @@
     tags = [],
     hidden = false,
     editable = true,
+    highlightEventId = null,
     onTagsChanged,
     onToggleHidden,
     onOpenViewer,
@@ -22,6 +23,9 @@
     /** Entrance animation runs only on the spine's first render. */
     animate: boolean
     delay: number
+    /** When this id is one of the entry's events, the row scrolls into view and
+     * pulses — the deep-link target a citation on the ask screen jumps to. */
+    highlightEventId?: string | null
     /** Curation tags for this entry's primary event (see TimelineEntry's
      * `eventIds` doc comment on why only the first id is used). Empty and
      * non-editable on a read-only (shared) spine — curation is owner-only in
@@ -43,6 +47,14 @@
 
   const meta = $derived(CATEGORY_META[entry.category])
   const primaryEventId = $derived(entry.eventIds[0])
+  const highlighted = $derived(
+    highlightEventId !== null && entry.eventIds.includes(highlightEventId),
+  )
+  // The row element, so a deep-linked citation can scroll it into view.
+  let rowEl = $state<HTMLDivElement | null>(null)
+  $effect(() => {
+    if (highlighted && rowEl) rowEl.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  })
   // A captured paper record: the row opens the viewer instead of the inline
   // detail stub (there's a photo to look at, not a coding to read).
   const isPaper = $derived((entry.attachments?.length ?? 0) > 0)
@@ -109,13 +121,16 @@
   </div>
 {:else}
   <div
+    bind:this={rowEl}
     class="entry"
     class:enter={animate}
     class:flare={entry.flare}
+    class:highlight={highlighted}
     style:animation-delay={animate ? `${delay}ms` : undefined}
     data-testid="spine-entry"
     data-category={entry.category}
     data-flare={entry.flare}
+    data-highlighted={highlighted}
   >
     <span
       class="dot"
@@ -274,6 +289,28 @@
   .entry.flare {
     box-shadow: inset 2px 0 0 var(--flare);
     padding-left: var(--space-2);
+  }
+
+  /* A deep-linked citation's target: a brief tinted ring so the eye lands on the
+     right row. The reduced-motion kill-switch in base.css drops the pulse; the
+     resting tint stays, so the target is still visibly marked. */
+  .entry.highlight {
+    border-radius: var(--radius-sm);
+    background: var(--action-muted);
+    box-shadow: 0 0 0 2px var(--action);
+    animation: highlight-pulse 1.2s ease-out;
+  }
+
+  @keyframes highlight-pulse {
+    0% {
+      box-shadow: 0 0 0 2px var(--action);
+    }
+    50% {
+      box-shadow: 0 0 0 5px var(--action-muted);
+    }
+    100% {
+      box-shadow: 0 0 0 2px var(--action);
+    }
   }
 
   /* The trigger resets the global button chrome; the 44px min-height is the
