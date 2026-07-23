@@ -34,7 +34,13 @@ import {
   type DraftEvent,
 } from './proposals'
 import { appendTurn, type ChatTurn } from './chat'
-import { applyAdminReply, recordCommand, noteNodeSeen, type AdminCommand } from './nodeadmin'
+import {
+  applyAdminReply,
+  recordCommand,
+  noteNodeSeen,
+  isEnrolledNode,
+  type AdminCommand,
+} from './nodeadmin'
 
 /** The mailbox surface this layer needs. `RelayClient` satisfies it
  * structurally (mirrors shared.ts's `SharingClient`). */
@@ -298,12 +304,16 @@ export async function pullMailbox(): Promise<MailboxPullResult> {
         break
       }
       case 'chat_msg': {
-        if (await handleChatMsg(env, itemId, body)) result.chatAnswers++
+        const outcome = await handleChatMsg(env, itemId, body)
+        if (outcome === 'stored') result.chatAnswers++
+        else if (outcome === 'dropped') result.dropped++
         else result.ignored++
         break
       }
       case 'admin_reply': {
-        if (await handleAdminReply(itemId, body)) result.adminReplies++
+        const outcome = await handleAdminReply(env, itemId, body)
+        if (outcome === 'applied') result.adminReplies++
+        else if (outcome === 'dropped') result.dropped++
         else result.ignored++
         break
       }
@@ -409,22 +419,30 @@ async function handleProposal(env: Envelope, itemId: string, body: Uint8Array): 
   return upsertProposal(record)
 }
 
+/** A verified inbound node message's fate: rendered, refused, or tolerated. */
+type NodeMsgOutcome = 'stored' | 'applied' | 'dropped' | 'ignored'
+
 /**
  * Store a verified `chat_msg` **answer** as a node turn, deduped by envelope
- * message id, and advance the node's last-seen. Only `answer` turns are stored —
- * the owner never receives its own `question` turns, so one arriving is tolerated
- * (returns false → counted as ignored). The mailbox item is deleted once stored:
- * an answer is terminal, unlike a proposal (which the owner acts on later).
- * Returns whether a new turn was stored.
+ * message id, and advance the node's last-seen. **Sender-gated:** the envelope
+ * signature proves who signed, not that the signer is the owner's node — mailbox
+ * deposits are open to any authenticated identity — so an answer from an
+ * identity that is not an enrolled node is `dropped` (never stored, never
+ * rendered as if it came from the node), not merely ignored. Only an `answer`
+ * role is stored (the owner never receives its own `question`); a node's
+ * non-answer is tolerated (`ignored`). The item is deleted once handled by the
+ * node: an answer is terminal, unlike a proposal the owner acts on later.
  */
-async function handleChatMsg(env: Envelope, itemId: string, body: Uint8Array): Promise<boolean> {
+async function handleChatMsg(env: Envelope, itemId: string, body: Uint8Array): Promise<NodeMsgOutcome> {
+  if (!(await isEnrolledNode(env.from))) return 'dropped'
+
   let parsed: ChatMsgBody
   try {
     parsed = JSON.parse(new TextDecoder().decode(body)) as ChatMsgBody
   } catch {
-    return false
+    return 'ignored'
   }
-  if (parsed.role !== 'answer') return false
+  if (parsed.role !== 'answer') return 'ignored'
 
   const turn: ChatTurn = {
     id: env.id,
@@ -436,23 +454,28 @@ async function handleChatMsg(env: Envelope, itemId: string, body: Uint8Array): P
   const added = await appendTurn(turn)
   await noteNodeSeen(turn.createdAt)
   if (client) await client.deleteMailbox(itemId)
-  return added
+  return added ? 'stored' : 'ignored'
 }
 
 /**
- * Fold a verified `admin_reply` onto the `admin_cmd` it answers (`in_reply_to`),
- * advance last-seen, and delete the now-handled item. Returns whether it matched
- * a command this device issued; an orphan reply (no such command on record) is
- * tolerated (counted as ignored) but its item is still cleared.
+ * Fold a verified `admin_reply` onto the `admin_cmd` it answers, advance
+ * last-seen, and delete the item. **Sender-gated** identically to
+ * `handleChatMsg`: a reply from an identity that is not an enrolled node is
+ * `dropped`. Beyond the gate, `in_reply_to` must match a command this device
+ * actually issued — commands only ever go to the enrolled node, so the two
+ * together mean a reply is accepted only from the node the command was sent to;
+ * an orphan reply (no such command) is tolerated (`ignored`).
  */
-async function handleAdminReply(itemId: string, body: Uint8Array): Promise<boolean> {
+async function handleAdminReply(env: Envelope, itemId: string, body: Uint8Array): Promise<NodeMsgOutcome> {
+  if (!(await isEnrolledNode(env.from))) return 'dropped'
+
   let parsed: AdminReplyBody
   try {
     parsed = JSON.parse(new TextDecoder().decode(body)) as AdminReplyBody
   } catch {
-    return false
+    return 'ignored'
   }
-  if (typeof parsed.in_reply_to !== 'string' || parsed.in_reply_to === '') return false
+  if (typeof parsed.in_reply_to !== 'string' || parsed.in_reply_to === '') return 'ignored'
 
   const applied = await applyAdminReply(parsed.in_reply_to, {
     ok: parsed.ok === true,
@@ -461,7 +484,7 @@ async function handleAdminReply(itemId: string, body: Uint8Array): Promise<boole
   })
   await noteNodeSeen(new Date().toISOString())
   if (client) await client.deleteMailbox(itemId)
-  return applied
+  return applied ? 'applied' : 'ignored'
 }
 
 // --- outbound: seal owner→node chat questions and admin commands ---

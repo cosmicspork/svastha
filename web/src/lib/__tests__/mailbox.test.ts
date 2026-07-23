@@ -68,19 +68,25 @@ function proposalEnvelope(id: string, eventIds: string[]): Envelope {
   return envelope('proposal', id)
 }
 
-function chatAnswerEnvelope(id: string, text: string, citations: string[]): Envelope {
+function chatAnswerEnvelope(id: string, text: string, citations: string[], from = NODE): Envelope {
   bodies.set(id, new TextEncoder().encode(JSON.stringify({ role: 'answer', text, citations })))
-  return envelope('chat_msg', id)
+  return envelope('chat_msg', id, from)
 }
 
-function chatQuestionEnvelope(id: string, text: string): Envelope {
+function chatQuestionEnvelope(id: string, text: string, from = NODE): Envelope {
   bodies.set(id, new TextEncoder().encode(JSON.stringify({ role: 'question', text, citations: [] })))
-  return envelope('chat_msg', id)
+  return envelope('chat_msg', id, from)
 }
 
-function adminReplyEnvelope(id: string, inReplyTo: string, ok: boolean, detail?: string): Envelope {
+function adminReplyEnvelope(
+  id: string,
+  inReplyTo: string,
+  ok: boolean,
+  detail?: string,
+  from = NODE,
+): Envelope {
   bodies.set(id, new TextEncoder().encode(JSON.stringify({ in_reply_to: inReplyTo, ok, detail })))
-  return envelope('admin_reply', id)
+  return envelope('admin_reply', id, from)
 }
 
 function keyHandoffEnvelope(id: string): Envelope {
@@ -345,6 +351,11 @@ describe('resolveProposalIfDone', () => {
 })
 
 describe('chat_msg routing', () => {
+  // The sender gate accepts an answer only from an enrolled node; seed NODE as one.
+  beforeEach(async () => {
+    await putProposer({ ed: NODE, x25519: NODE_X, label: 'Home node', kind: 'node' })
+  })
+
   it('stores a verified node answer as a chat turn, with citations, and clears the item', async () => {
     const env = chatAnswerEnvelope('ans-1', 'You logged headaches on the 20th.', ['ev-a', 'ev-b'])
     const client = fakeClient([{ id: 'item-c', from: NODE, env }])
@@ -393,9 +404,28 @@ describe('chat_msg routing', () => {
     expect(result.chatAnswers).toBe(0)
     expect(await listChatTurns()).toHaveLength(0)
   })
+
+  it('drops a VALIDLY-signed answer from a non-node identity (spoof gate)', async () => {
+    // A third party who knows the owner's identity code can deposit a
+    // well-signed chat_msg. It must never render as an answer from the node.
+    const other = 'b'.repeat(64)
+    const env = chatAnswerEnvelope('ans-4', 'your record shows a fabricated result', [], other)
+    configureMailbox(fakeClient([{ id: 'item-c', from: other, env }]), fakeIdentity(), verifyOk)
+
+    const result = await pullMailbox()
+
+    expect(result.dropped).toBe(1)
+    expect(result.chatAnswers).toBe(0)
+    expect(result.ignored).toBe(0)
+    expect(await listChatTurns()).toHaveLength(0)
+  })
 })
 
 describe('admin_reply routing', () => {
+  beforeEach(async () => {
+    await putProposer({ ed: NODE, x25519: NODE_X, label: 'Home node', kind: 'node' })
+  })
+
   it('folds a reply onto its issued command and clears the item', async () => {
     await recordCommand({ id: 'cmd-9', command: { cmd: 'job_status' }, sentAt: '2026-07-24T10:00:00Z' })
     const env = adminReplyEnvelope('rep-1', 'cmd-9', true, '2 jobs queued')
@@ -420,6 +450,23 @@ describe('admin_reply routing', () => {
     expect(result.adminReplies).toBe(0)
     expect(result.ignored).toBe(1)
     expect(client.deleted).toContain('item-r')
+  })
+
+  it('drops a VALIDLY-signed reply from a non-node identity (spoof gate)', async () => {
+    // Even a reply whose in_reply_to matches a real command must be refused if it
+    // did not come from an enrolled node.
+    await recordCommand({ id: 'cmd-8', command: { cmd: 'job_status' }, sentAt: '2026-07-24T10:00:00Z' })
+    const other = 'b'.repeat(64)
+    const env = adminReplyEnvelope('rep-3', 'cmd-8', true, 'forged ok', other)
+    const client = fakeClient([{ id: 'item-r', from: other, env }])
+    configureMailbox(client, fakeIdentity(), verifyOk)
+
+    const result = await pullMailbox()
+
+    expect(result.dropped).toBe(1)
+    expect(result.adminReplies).toBe(0)
+    const log = await listAdminLog()
+    expect(log[0].reply).toBeUndefined() // the real command stays unanswered
   })
 })
 

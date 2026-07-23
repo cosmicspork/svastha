@@ -7,6 +7,7 @@ import {
   describeCommand,
   sortNewestFirst,
   enrolledNode,
+  isEnrolledNode,
   recordCommand,
   applyAdminReply,
   refreshAdminLog,
@@ -53,6 +54,19 @@ describe('enrolledNode', () => {
     const node = await enrolledNode()
     expect(node?.ed).toBe(NODE)
     expect(node?.x25519).toBe(NODE_X)
+  })
+})
+
+describe('isEnrolledNode (the inbound sender gate)', () => {
+  it('is true only for an enrolled node identity', async () => {
+    const other = 'b'.repeat(64)
+    await putProposer({ ed: NODE, x25519: NODE_X, label: 'Home node', kind: 'node' })
+    await putProposer({ ed: other, x25519: 'f'.repeat(64), label: 'Partner', kind: 'caregiver' })
+    expect(await isEnrolledNode(NODE)).toBe(true)
+    // A caregiver-kind grantee is not a node — its signed chat/admin is refused.
+    expect(await isEnrolledNode(other)).toBe(false)
+    // An identity absent from the directory entirely is refused.
+    expect(await isEnrolledNode('c'.repeat(64))).toBe(false)
   })
 })
 

@@ -63,16 +63,39 @@ export function sortNewestFirst(entries: AdminLogEntry[]): AdminLogEntry[] {
 }
 
 /**
- * The enrolled processing node, or `null` when none is enrolled. Resolved from
- * the shared granted-identity directory (`proposers`) by `kind === 'node'`;
- * node enrollment (C1) writes it. The ask screen and this surface both treat a
- * `null` here as the first-class "no node enrolled" empty state. The design
- * models a single node ("my node"); if several ever carried the marker, the
- * first is used (documented, not a supported multi-node story in v1).
+ * The single source of "which identities are the owner's node": the granted
+ * identity directory (`proposers`) filtered to `kind === 'node'`. Both the
+ * send-target resolution (`enrolledNode`) and the inbound sender gate
+ * (`isEnrolledNode`) go through this one filter, so the gate can never drift
+ * from the target — a `chat_msg`/`admin_reply` is only accepted from an identity
+ * a question/command could have been sent to.
+ */
+async function nodeProposers(): Promise<ProposerRecord[]> {
+  return (await listProposers()).filter((p) => p.kind === 'node')
+}
+
+/**
+ * The enrolled processing node, or `null` when none is enrolled. Node enrollment
+ * (C1) writes the directory. The ask screen and this surface both treat a `null`
+ * here as the first-class "no node enrolled" empty state. The design models a
+ * single node ("my node"); if several ever carried the marker, the first is used
+ * (documented, not a supported multi-node story in v1).
  */
 export async function enrolledNode(): Promise<ProposerRecord | null> {
-  const proposers = await listProposers()
-  return proposers.find((p) => p.kind === 'node') ?? null
+  return (await nodeProposers())[0] ?? null
+}
+
+/**
+ * The inbound sender gate: is `ed` an enrolled node? Envelope verification only
+ * proves the sender *signed* the message — mailbox deposits are open to any
+ * authenticated identity (that is how invites work), so a valid signature is not
+ * proof the sender is the owner's node. An `answer`/`admin_reply` is rendered as
+ * coming from the node only when this holds; anything else is dropped, never
+ * shown. Accepting chat from non-node identities, if it is ever wanted, must
+ * arrive by deliberate design, not by default-accept.
+ */
+export async function isEnrolledNode(ed: string): Promise<boolean> {
+  return (await nodeProposers()).some((p) => p.ed === ed)
 }
 
 // --- store ---
