@@ -153,6 +153,93 @@ async fn blob_write_pokes_a_grantee() {
 }
 
 #[tokio::test]
+async fn scoped_out_grantee_is_not_poked() {
+    // A prefix-scoped grantee is not woken for a write it could not read. This is
+    // a courtesy, not a leak boundary (a poke carries no id either way), so a
+    // spurious poke would only cost a harmless empty pull — but the relay already
+    // knows the scope, so it skips it.
+    let app = router();
+    let alice = Identity::from_seed(b"alice");
+    let bob = Identity::from_seed(b"bob");
+
+    // Bob may read only att- blobs.
+    let grant = app
+        .clone()
+        .oneshot(signed(
+            &alice,
+            "PUT",
+            &format!("/v0/grants/{}", hex_pk(&bob)),
+            br#"{"prefixes":["att-"]}"#,
+            now(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(grant.status(), StatusCode::NO_CONTENT);
+
+    let mut bob_stream = open_events(&app, &bob).await;
+
+    // Alice writes an ev- blob, outside Bob's scope: no poke reaches Bob.
+    let put_ev = app
+        .clone()
+        .oneshot(signed(&alice, "PUT", "/v0/blobs/ev-9", b"sealed", now()))
+        .await
+        .unwrap();
+    assert_eq!(put_ev.status(), StatusCode::NO_CONTENT);
+    let quiet = tokio::time::timeout(Duration::from_millis(300), bob_stream.next()).await;
+    assert!(quiet.is_err(), "scoped-out grantee was poked for ev-");
+
+    // An att- write is within scope: now Bob is poked.
+    let put_att = app
+        .clone()
+        .oneshot(signed(
+            &alice,
+            "PUT",
+            "/v0/blobs/att-9",
+            b"sealed",
+            now() + 1,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(put_att.status(), StatusCode::NO_CONTENT);
+    let frame = next_frame(&mut bob_stream).await;
+    assert!(frame.contains("event: blobs"), "got: {frame}");
+}
+
+#[tokio::test]
+async fn expired_grantee_is_not_poked() {
+    // An expired grant should not poke its grantee at all — it behaves as no
+    // grant everywhere, the push channel included.
+    let app = router();
+    let alice = Identity::from_seed(b"alice");
+    let bob = Identity::from_seed(b"bob");
+
+    let base = now();
+    let expired = format!(r#"{{"expires_at":{}}}"#, base - 1);
+    let grant = app
+        .clone()
+        .oneshot(signed(
+            &alice,
+            "PUT",
+            &format!("/v0/grants/{}", hex_pk(&bob)),
+            expired.as_bytes(),
+            base,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(grant.status(), StatusCode::NO_CONTENT);
+
+    let mut bob_stream = open_events(&app, &bob).await;
+    let put = app
+        .clone()
+        .oneshot(signed(&alice, "PUT", "/v0/blobs/ev-8", b"sealed", base + 1))
+        .await
+        .unwrap();
+    assert_eq!(put.status(), StatusCode::NO_CONTENT);
+    let quiet = tokio::time::timeout(Duration::from_millis(300), bob_stream.next()).await;
+    assert!(quiet.is_err(), "expired grantee was poked");
+}
+
+#[tokio::test]
 async fn blob_write_does_not_poke_an_unrelated_identity() {
     let app = router();
     let alice = Identity::from_seed(b"alice");

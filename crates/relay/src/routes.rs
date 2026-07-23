@@ -23,6 +23,7 @@ use svastha_core::CONTRACT_VERSION;
 use tokio_stream::{wrappers::BroadcastStream, Stream, StreamExt};
 
 use crate::auth::Owner;
+use crate::grants::Grant;
 use crate::pokes::Poke;
 use crate::share::{ShareState, TombstoneReason};
 use crate::AppState;
@@ -67,6 +68,14 @@ pub const SHARE_EXPIRES_HEADER: &str = "svastha-share-expires";
 /// long enough to be unguessable: ≥ 22 chars of the `[A-Za-z0-9._-]` alphabet
 /// is ≈ 128 bits of entropy when the client fills it with a CSPRNG.
 const MIN_SHARE_TOKEN_LEN: usize = 22;
+
+/// Upper bounds on a grant's prefix allowlist, so a `PUT /v0/grants/{grantee}`
+/// body cannot bloat the stored routing metadata. A blob id is at most 128 chars
+/// (see [`valid_id`]), so a prefix never usefully exceeds that; the count cap is
+/// generous for the handful of namespaces (`ev-`, `att-`, `doc-`, `cur-`) a real
+/// grant scopes to. Neither bounds security — they only keep the metadata small.
+const MAX_GRANT_PREFIXES: usize = 16;
+const MAX_GRANT_PREFIX_LEN: usize = 128;
 
 /// Liveness probe (unauthenticated).
 pub async fn health() -> &'static str {
@@ -116,16 +125,29 @@ pub async fn events(
     Sse::new(stream).keep_alive(KeepAlive::new().interval(SSE_HEARTBEAT))
 }
 
-/// Poke everyone who can read `owner`'s vault that its blobs changed: the
-/// owner's own other devices, plus every identity the owner has granted read
-/// access to. Best-effort and never fails the write — a missed poke is
-/// corrected by the next pull. Grant lookup errors are swallowed for the same
-/// reason (the push channel is an optimization, not a source of truth).
-fn poke_vault_readers(state: &AppState, owner: &[u8; 32]) {
+/// Poke everyone who can read `owner`'s vault that a blob `id` changed: the
+/// owner's own other devices (always — the owner reads their whole vault), plus
+/// every grantee whose grant would actually let them *see* that id. A grantee is
+/// skipped when its grant is expired or its prefix allowlist excludes `id`, so a
+/// scoped-out grantee is not woken for a write it cannot read. Best-effort and
+/// never fails the write — a missed poke is corrected by the next pull, and a
+/// *spurious* poke to a scoped-out grantee would only cost a harmless empty pull,
+/// so scoping here is a courtesy, not a correctness or leak boundary (a poke
+/// carries no id — the grantee never learns which blob changed). Grant lookup
+/// errors are swallowed for the same reason (the push channel is an
+/// optimization, not a source of truth).
+fn poke_vault_readers(state: &AppState, owner: &[u8; 32], id: &str) {
     state.pokes.poke(owner, Poke::Blobs);
-    if let Ok(grantees) = state.grants.grantees_of(owner) {
-        for grantee in grantees {
-            state.pokes.poke(&grantee, Poke::Blobs);
+    let Ok(grantees) = state.grants.grantees_of(owner) else {
+        return;
+    };
+    let now = now_secs();
+    for grantee in grantees {
+        match state.grants.get(owner, &grantee) {
+            Ok(Some(grant)) if !grant.is_expired(now) && grant.admits(id) => {
+                state.pokes.poke(&grantee, Poke::Blobs);
+            }
+            _ => {}
         }
     }
 }
@@ -229,9 +251,10 @@ pub async fn put_blob(
         .store
         .put(&owner.0, &id, body.to_vec())
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    // Blobs changed: poke the owner's other devices and any grantees so a
-    // connected client pulls promptly instead of waiting for its timer.
-    poke_vault_readers(&state, &owner.0);
+    // Blobs changed: poke the owner's other devices and any grantee whose scope
+    // admits this id, so a connected client pulls promptly instead of waiting
+    // for its timer.
+    poke_vault_readers(&state, &owner.0, &id);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -282,7 +305,7 @@ pub async fn delete_blob(
     match state.store.delete(&owner.0, &id) {
         Ok(true) => {
             // The blob set changed; poke readers the same as on a write.
-            poke_vault_readers(&state, &owner.0);
+            poke_vault_readers(&state, &owner.0, &id);
             StatusCode::NO_CONTENT
         }
         Ok(false) => StatusCode::NOT_FOUND,
@@ -319,16 +342,39 @@ fn valid_pubkey_hex(s: &str) -> Option<[u8; 32]> {
 // --- grants: relay-level read authorization, pure routing metadata ---
 
 /// Authorize `grantee` (the caller's partner) to read the caller's shared
-/// blobs. Idempotent — granting an already-grantee is a no-op success.
+/// blobs. Idempotent and an **upsert**: re-granting an existing grantee replaces
+/// its scope, so this is also how an owner re-scopes a live grant in place.
+///
+/// The optional scope rides an optional JSON **body** — `{ "prefixes": [...],
+/// "expires_at": <unix-secs> }`, both fields optional. An **empty body** is an
+/// unscoped grant (full read, no expiry) — which is exactly what a legacy client
+/// that never sends a body produces, so old and new callers coexist. Because the
+/// auth preimage binds the body hash, the scope is covered by the caller's
+/// signature for free; no separate binding is needed.
 pub async fn put_grant(
     State(state): State<AppState>,
     Extension(owner): Extension<Owner>,
     Path(grantee_hex): Path<String>,
+    body: Bytes,
 ) -> Result<StatusCode, StatusCode> {
     let grantee = valid_pubkey_hex(&grantee_hex).ok_or(StatusCode::BAD_REQUEST)?;
+    // Empty body = unscoped grant (and the legacy no-body request shape).
+    let grant: Grant = if body.is_empty() {
+        Grant::default()
+    } else {
+        serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?
+    };
+    if grant.prefixes.len() > MAX_GRANT_PREFIXES
+        || grant
+            .prefixes
+            .iter()
+            .any(|p| p.len() > MAX_GRANT_PREFIX_LEN)
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
     state
         .grants
-        .put(&owner.0, &grantee)
+        .put(&owner.0, &grantee, &grant)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -392,35 +438,48 @@ pub async fn list_shared(
 }
 
 /// List `owner`'s blob ids, gated on a live grant from `owner` to the caller.
-/// `404` for a missing grant, exactly as for a missing blob below — a caller
-/// probing an ungranted owner cannot distinguish "not shared with you" from
-/// "nothing there" (see [`get_shared_blob`]'s doc comment).
+/// `404` for a missing (or expired) grant, exactly as for a missing blob below
+/// — a caller probing an ungranted owner cannot distinguish "not shared with
+/// you" from "nothing there" (see [`get_shared_blob`]'s doc comment). When the
+/// grant carries a prefix allowlist, the listing is filtered to admitted ids, so
+/// the grantee never even learns which other ids exist.
 pub async fn list_shared_blobs(
     State(state): State<AppState>,
     Extension(caller): Extension<Owner>,
     Path(owner_hex): Path<String>,
 ) -> Result<Json<BlobList>, StatusCode> {
     let owner = valid_pubkey_hex(&owner_hex).ok_or(StatusCode::BAD_REQUEST)?;
-    if !state
-        .grants
-        .has(&owner, &caller.0)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    {
-        return Err(StatusCode::NOT_FOUND);
-    }
+    let grant = live_grant(&state, &owner, &caller.0)?;
     let ids = state
         .store
         .list(&owner)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .into_iter()
+        .filter(|id| grant.admits(id))
+        .collect();
     Ok(Json(BlobList { ids }))
 }
 
+/// Fetch the caller's live grant on `owner`, or `Err(404)` when there is no
+/// grant *or* it has expired. An expired grant is treated as absent so the
+/// two-404 non-leak rule keeps holding: a probing caller cannot tell an expired
+/// grant, a revoked one, and one that never existed apart. Returns the grant so
+/// callers can apply its prefix allowlist.
+fn live_grant(state: &AppState, owner: &[u8; 32], caller: &[u8; 32]) -> Result<Grant, StatusCode> {
+    match state.grants.get(owner, caller) {
+        Ok(Some(grant)) if !grant.is_expired(now_secs()) => Ok(grant),
+        Ok(_) => Err(StatusCode::NOT_FOUND),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
 /// Fetch a blob from `owner`'s vault, gated on a live grant from `owner` to the
-/// caller. A missing grant and a missing blob both answer `404`: if "no grant"
-/// answered differently (say, `403`), a caller could probe an arbitrary public
-/// key and learn whether it grants them access, which leaks the sharing graph
-/// — metadata the relay is supposed to keep opaque to everyone but the two
-/// parties. One status code for both cases keeps that graph unobservable.
+/// caller. A missing grant, an **expired** grant, an id **outside the grant's
+/// prefix allowlist**, and a missing blob all answer `404`: if any of them
+/// answered differently, a caller could probe and learn something the relay is
+/// supposed to keep opaque — whether an arbitrary key grants them access (the
+/// sharing graph), or which ids exist outside their scope. One status code for
+/// every "you can't have this" case keeps all of that unobservable.
 pub async fn get_shared_blob(
     State(state): State<AppState>,
     Extension(caller): Extension<Owner>,
@@ -432,10 +491,14 @@ pub async fn get_shared_blob(
     if !valid_id(&id) {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    match state.grants.has(&owner, &caller.0) {
-        Ok(true) => {}
-        Ok(false) => return StatusCode::NOT_FOUND.into_response(),
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    let grant = match live_grant(&state, &owner, &caller.0) {
+        Ok(grant) => grant,
+        Err(status) => return status.into_response(),
+    };
+    // An id outside the allowlist is invisible: same 404 as a missing blob, so
+    // the excluded namespace is indistinguishable from an empty one.
+    if !grant.admits(&id) {
+        return StatusCode::NOT_FOUND.into_response();
     }
     match state.store.get(&owner, &id) {
         Ok(Some(blob)) => {
