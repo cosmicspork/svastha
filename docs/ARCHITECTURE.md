@@ -66,9 +66,16 @@ unrecoverable loss is a problem.
   revocability, purpose). Family and caregiver access and the future research
   marketplace are the same primitive at different settings. An ongoing grant is a
   subscription to the filtered tail of the append-only log.
-- **Revocation** is key rotation: re-wrap to everyone except the revoked party and
-  encrypt future events under the new key. It cannot retract already-decrypted
-  data, and the UX must say so.
+- **Revocation** is key rotation, done through **key epochs** rather than bulk
+  re-encryption. The vault key is a *keyring*: the original key is epoch 0, and a
+  rotation mints a new epoch that future blobs seal under while every earlier epoch
+  stays in the ring so existing blobs keep opening (an append-only log earns an
+  append-only key history). Revoking re-keys each still-trusted grantee to the new
+  keyring and hands the revoked identity nothing. It cannot retract what was
+  already decrypted or the old-epoch material a party already holds — the UX must
+  say so — but everything sealed after the rotation is beyond the revoked party.
+  The keyring, its opaque mergeable epoch ids, and the AAD epoch marker are
+  specified in `spec/README.md`'s "Key epochs" section.
 - **Key discovery** is out of band (in-person QR, short verification codes),
   because the sharing graph is mostly people who physically meet.
 
@@ -447,25 +454,32 @@ by prefix:
 | Blob id | Contents |
 |---|---|
 | `ev-{event_id_hex}` | one sealed `SignedEvent` (JSON) |
-| `vault.key` | the vault data key, wrapped to the owner's own X25519 key |
+| `vault.key` | the vault **keyring** — each epoch key wrapped to the owner's own X25519 key, serialized into one blob (a legacy single wrapped key still reads as an epoch-0 keyring). See "Key epochs" in `spec/README.md`. |
 | `doc-{sha256_hex}` | one imported source document's verbatim bytes (name + base64 bytes, JSON), keyed by its own content hash |
 | `att-{sha256_hex}` | one captured document's bytes (mime + base64 bytes, JSON — a photographed paper record or an attached PDF), keyed by the plaintext content hash the event's `attachment` value carries |
 | `cur-{sha256_hex(key)}` | one sealed `SignedCurationRecord` (JSON — tag/note/hide/favorite, see the Event model's "Curation overlay" subsection), keyed by the hash of its own app-level `key`. Unlike `ev-`/`doc-`/`att-`, this blob is **mutable**: a write `PUT`s over the existing id rather than minting a new one. |
 
-**AAD = blob id.** Every blob sealed under the vault key uses the UTF-8 bytes
-of its own blob id as the AEAD associated data. The relay stores opaque
-ciphertext under ids it controls the routing of, so without this binding it
-could serve blob A's ciphertext under blob B's id undetected; with it, any such
-swap fails authentication at open time. For `ev-` blobs the embedded event id
-is additionally checked against the blob-id suffix after opening, and the event
-signature must verify — a malicious relay cannot inject or substitute events.
+**AAD = blob id (plus epoch marker).** Every blob sealed under an epoch key uses
+its blob id as the AEAD associated data, so the relay — which controls the routing
+ids — cannot serve blob A's ciphertext under blob B's id undetected; any such swap
+fails authentication at open time. With key epochs the AAD also **binds the
+epoch**: the genesis epoch uses the bare `blob_id` (byte-identical to the
+pre-epoch contract, so old blobs still open), and any rotated epoch uses
+`blob_id ‖ 0x1f ‖ epoch_id`. The marker is never stored — opening trial-decrypts
+across the keyring's epochs until one authenticates — so the relay stays blind to
+rotation cadence (see "Key epochs" in `spec/README.md`). For `ev-` blobs the
+embedded event id is additionally checked against the blob-id suffix after
+opening, and the event signature must verify — a malicious relay cannot inject or
+substitute events.
 
-**Self-wrapped vault key.** `vault.key` is the vault data key wrapped to the
-owner's own X25519 public key with the envelope's standard `wrap_key` — the
-same ECIES construction used for sharing, with the owner as recipient. A
-wrapped key is already end-to-end protected, so it is stored as-is with no
-extra sealing (it could not be sealed under the vault key anyway: it *is* how
-a restoring device obtains that key).
+**Self-wrapped keyring.** `vault.key` is the vault keyring — each epoch key
+wrapped to the owner's own X25519 public key with the envelope's standard
+`wrap_key` (the same ECIES construction used for sharing, owner as recipient),
+serialized into one blob. Wrapped keys are already end-to-end protected, so the
+blob is stored as-is with no extra sealing (it could not be sealed under the vault
+key anyway: it *is* how a restoring device obtains those keys). A legacy
+single-key `vault.key` predating epochs still reads, as a one-epoch genesis
+keyring.
 
 **No manifest.** The log is append-only and events are content-addressed, so
 `GET /v0/blobs` plus a local diff converges on its own: anything remote and
@@ -485,22 +499,28 @@ logging on both.
 `vault.key` handshake before the sync engine starts: if the relay already holds
 one for this identity, the device unwraps and adopts it (re-sealing its local
 keyvault record under the adopted key); if not, the device publishes its own.
-Effectively first-writer-wins: whichever device publishes first is the key
-every later device adopts. If two fresh devices race the publish itself, the
-last `PUT` sticks (blobs are replace-on-put; there is no compare-and-swap) and
-the other adopts it on its next connect — acceptable for v1 because the
-enforced ordering (no event push before this handshake) guarantees no events
-are ever sealed under the discarded key.
+Effectively first-writer-wins on the genesis epoch: whichever device publishes
+first is the epoch-0 key every later device adopts. Because a `vault.key` is now a
+keyring, a device that has rotated locally and finds a different keyring at the
+relay **merges** the two by union (every epoch key is kept; newest is chosen
+deterministically) rather than discarding either, and re-publishes the merged
+ring — so an offline rotation never orphans a blob and independently-rotated
+replicas converge. If two fresh devices race the initial publish, the last `PUT`
+sticks (blobs are replace-on-put; there is no compare-and-swap) and the other
+merges it on its next connect — acceptable because the enforced ordering (no event
+push before this handshake) guarantees no events are ever sealed under a discarded
+key.
 
 **Export files.** The encrypted export is a single JSON container of the same
-sealed blobs the relay stores — same namespaces, same AAD = blob id binding —
-plus the self-wrapped vault key. Importing it therefore runs the identical
-open/verify/LWW path as a relay pull and dedupes by content id automatically:
-`ev-`/`doc-`/`att-` blobs land as new or are skipped as duplicates, `cur-` blobs
-merge by LWW. Import requires the same seed — the wrapped vault key must unwrap, which
-only the owning identity can do — and blobs open under the file's own key, so a
-backup made before a relay-won key adoption still restores (a differing session
-key is reported, never a rejection). The plaintext export is one-way out and can
+sealed blobs the relay stores — same namespaces, same AAD binding (blob id, plus
+the epoch marker for rotated blobs) — plus the self-wrapped keyring. Importing it
+therefore runs the identical open/verify/LWW path as a relay pull and dedupes by
+content id automatically: `ev-`/`doc-`/`att-` blobs land as new or are skipped as
+duplicates, `cur-` blobs merge by LWW. Import requires the same seed — the wrapped
+keyring must unwrap, which only the owning identity can do — and blobs open under
+the file's own keyring (whichever epoch sealed each), so a backup made before a
+relay-won key adoption or a later rotation still restores (a differing session key
+is reported, never a rejection). The plaintext export is one-way out and can
 never be imported (it carries no sealed bytes). The container is app-level
 packaging of bytes the wire contract already defines, sitting below it like the
 `vault.key` blob does, so it needs no `spec/` or `CONTRACT_VERSION` change.
