@@ -75,6 +75,20 @@ impl PokeHub {
             .subscribe()
     }
 
+    /// Whether the identity currently holds at least one live SSE stream. Used by
+    /// the Web Push transport to suppress a redundant push to a foregrounded
+    /// client that already got the real-time poke here (see
+    /// [`push::PushService::notify`](crate::push::PushService::notify)). A channel
+    /// with zero receivers (every stream dropped, not yet reclaimed) counts as no
+    /// live stream. Best-effort, like everything on this bus.
+    pub fn has_live_stream(&self, identity: &[u8; 32]) -> bool {
+        self.channels
+            .lock()
+            .unwrap()
+            .get(identity)
+            .is_some_and(|tx| tx.receiver_count() > 0)
+    }
+
     /// Poke an identity's open streams, best-effort. A no-op if nobody is
     /// listening. Never blocks and never fails the caller: a write path pokes
     /// and moves on, because delivery is not required for correctness. When the

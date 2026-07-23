@@ -14,7 +14,6 @@ harvest a PR's "## Deferred" notes into the list.
 
 ## Sharing
 
-- Device list and revoke UI
 - QR seed handoff (auto-provision a new device)
 - Relay-less file share; cross-device doctor-share management
 - Share-history clearing after the tombstone sweep

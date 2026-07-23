@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { contract_version } from '../../lib/svastha'
+  import { contract_version, WasmKeyring } from '../../lib/svastha'
+  import { KeyringBlobKey } from '../../lib/keyring'
   import { session } from '../../lib/session.svelte'
   import { getAll } from '../../lib/db'
   import Sheet from '../../components/Sheet.svelte'
@@ -205,12 +206,19 @@
     exportEncBusy = true
     try {
       const now = new Date()
+      // Seal and self-wrap through the vault **keyring** so a rotated vault backs
+      // up every epoch. Offline (no relay connected, so no reconciled keyring),
+      // fall back to a genesis ring built from the vault key — the backup is
+      // re-sealed from local plaintext under a key this identity holds, so it is
+      // always openable by the same seed.
+      const keyring =
+        session.keyring ?? WasmKeyring.genesis(vaultKey, fromHex(identity.x25519_public_hex))
+      const blobKey = new KeyringBlobKey(keyring, identity)
       const built = await buildEncryptedExport({
         ids: await listLocalBlobIds(),
-        seal: (id) => sealLocalBlob(id, vaultKey),
-        // Self-wrap idiom from vault.ts's ensureVaultKeyBlob — the same bytes
-        // the relay's vault.key blob holds.
-        wrappedVaultKey: vaultKey.wrap_to(fromHex(identity.x25519_public_hex)),
+        seal: (id) => sealLocalBlob(id, blobKey),
+        // The same wrapped-keyring bytes the relay's vault.key blob holds.
+        wrappedVaultKey: keyring.to_bytes(),
         contractVersion: version,
         now,
       })
@@ -254,10 +262,21 @@
     importBusy = true
     try {
       const parsed = parseEncryptedExport(await file.text())
+      // Open the backup's blobs under the FILE'S own wrapped keyring (a legacy
+      // bare-key backup reads as a genesis ring). `newest_key` throws if the ring
+      // was wrapped to a different identity — the same same-seed proof the old
+      // single-key `unwrap_key` gave. Staleness compares the file's ring against
+      // the session's by container bytes (a differing/older epoch set).
+      const sessionKeyring =
+        session.keyring ?? WasmKeyring.genesis(vaultKey, fromHex(identity.x25519_public_hex))
       const summary = await importEncryptedExport(parsed, {
-        unwrapKey: (wrapped) => identity.unwrap_key(wrapped),
-        sessionKeyBytes: vaultKey.to_bytes(),
-        keyBytes: (k) => (k as unknown as { to_bytes(): Uint8Array }).to_bytes(),
+        unwrapKey: (wrapped) => {
+          const ring = WasmKeyring.from_bytes(wrapped)
+          ring.newest_key(identity) // throws on a foreign identity
+          return new KeyringBlobKey(ring, identity)
+        },
+        sessionKeyBytes: sessionKeyring.to_bytes(),
+        keyBytes: (k) => (k as KeyringBlobKey).containerBytes(),
         apply: applySealedBlob,
         enqueue,
         drain,
