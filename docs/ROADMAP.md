@@ -8,13 +8,9 @@ into the sections below.
 
 ## Now
 
-- **Full LOINC Top-2000 dictionary** — build pipeline now fetches LOINC
-  automatically via the Download API given a maintainer's account credentials
-  (`LOINC_USERNAME`/`LOINC_PASSWORD` in `web/.env`), with a manual-CSV fallback
-  (`LOINC_TOP2000_CSV=…`/`--loinc-csv=…`); ships the required license text
-  (`LOINC_LICENSE.txt`) and release version alongside the data. `loinc.json`
-  still ships as the starter dictionary until the maintainer runs the build
-  with real credentials or a manual file (an agent/CI cannot supply either).
+- **PDF attachments** — paper-record capture is photos-only today.
+- **Imported source documents in the viewer** — render `doc-` provenance
+  blobs through the same attachment viewer captured records use.
 
 ## Next
 
