@@ -15,8 +15,11 @@
 /// any key or invalidate any stored blob — that is what [`CONTRACT_MAJOR`] is
 /// for. The node/protocol wave opened the contract with the typed mailbox
 /// envelope (see [`mailbox`]) and the optional event provenance field, both
-/// additive, bumping this from `0` to `1`.
-pub const CONTRACT_VERSION: u32 = 1;
+/// additive, bumping this from `0` to `1`; it then added key epochs (the
+/// `vault.key` keyring, see [`keyring`]) — an epoch marker rides in the AAD and a
+/// legacy single-key `vault.key` still reads as epoch 0, so no key rotates —
+/// bumping it from `1` to `2`.
+pub const CONTRACT_VERSION: u32 = 2;
 
 /// The cryptographic era embedded in every HKDF / domain-separation label — key
 /// derivation, key wrapping, and the event/curation/relay-auth/mailbox signing
@@ -42,6 +45,7 @@ pub(crate) fn version_label(operation: &str) -> String {
 pub mod curation;
 pub mod envelope;
 pub mod event;
+pub mod keyring;
 pub mod keys;
 pub mod mailbox;
 pub mod relay;

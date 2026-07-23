@@ -11,9 +11,10 @@ language:
 This directory holds the written spec and language-neutral test vectors, so a
 non-Rust reimplementation or an auditor can validate against the same bytes.
 
-Status: key derivation, the encryption envelope, the event schema, the curation
-record, the typed mailbox message envelope, and the relay wire protocol (auth
-handshake, blob endpoints, grants, mailbox, and shares) are specified below.
+Status: key derivation, the encryption envelope, the vault-key keyring (key
+epochs), the event schema, the curation record, the typed mailbox message
+envelope, and the relay wire protocol (auth handshake, blob endpoints, grants,
+mailbox, and shares) are specified below.
 
 ## Versioning
 
@@ -23,8 +24,9 @@ Two numbers, deliberately separate:
   at `GET /v0/info`. Clients and relays read it to negotiate capabilities so
   independently deployed and self-hosted pieces can coexist. It advances
   **additively within a major**: a new envelope kind, a new optional field. It is
-  **`1`** as of the node/protocol wave (which added the typed mailbox envelope and
-  the optional event provenance field); it was `0` through the first release.
+  **`2`** as of the node/protocol wave: `1` added the typed mailbox envelope and
+  the optional event provenance field, and `2` added key epochs (the vault-key
+  keyring); it was `0` through the first release.
 - **The contract *major*** — the cryptographic era embedded in every HKDF /
   domain-separation label (`svastha/v{MAJOR}/…`, currently `0`). It bumps **only**
   on a key-rotating break that re-derives every identity and re-wraps every vault
@@ -32,11 +34,19 @@ Two numbers, deliberately separate:
 
 Holding the major fixed while `CONTRACT_VERSION` advances is the whole point: an
 additive wire change must never orphan a vault. Every derived key, wrapped vault
-key, and signature made under major `0` stays valid across the `0 → 1` version
-bump — the concrete meaning of "backward compatible within a major." A change
-that *would* invalidate stored material is not additive and belongs to a future
-major, not a version bump. (This refines the earlier framing, when the two
-numbers were one: the label embeds the **major**, not the wire version.)
+key, and signature made under major `0` stays valid across every version bump —
+the concrete meaning of "backward compatible within a major." A change that
+*would* invalidate stored material is not additive and belongs to a future major,
+not a version bump. (This refines the earlier framing, when the two numbers were
+one: the label embeds the **major**, not the wire version.)
+
+Key epochs (version `2`) are the sharpest test of this discipline: rotation adds
+new epoch keys, never touching the old ones, and the keyring's byte format is
+new — but no *derived* value moves. A legacy single-key `vault.key` still reads
+(as epoch 0), every pre-epoch blob still opens under its unchanged genesis key,
+and the epoch marker rides in AEAD associated data, not in any signed or derived
+preimage. So the pre-existing test vectors are byte-identical across the `1 → 2`
+bump except for the `contract_version` field itself.
 
 ## Key derivation
 
@@ -116,6 +126,99 @@ recipient `seed`, `ephemeral_secret`, `nonce`, and `data_key` → `wrapped` (the
 recipient seed lets a reimplementation exercise unwrap end-to-end). All bytes are
 hex. Regenerate with `cargo run -p svastha-core --example envelope_vectors` (only
 on a deliberate, version-bumped contract change).
+
+## Key epochs (the vault keyring)
+
+Revocation is key rotation, and rotation must be real without ever bulk
+re-encrypting an append-only log. So the vault key becomes a **keyring** of epoch
+keys: the original data key is **epoch 0** (the *genesis* epoch); a rotation mints
+a fresh epoch key; new blobs seal under the newest epoch, and existing blobs are
+never re-sealed — their epoch key stays in the ring so they keep opening. An
+append-only log earns an append-only key history. This was `CONTRACT_VERSION`
+`2`; it changes no derived value (see "Versioning").
+
+### Keyring wire format
+
+`vault.key` was a bare `WrappedKey`; it becomes a serialized keyring — every epoch
+key wrapped to the owner (the same self-wrapped ECIES construction), concatenated
+into one blob, still stored as-is (it is how a restoring device obtains the keys,
+so it cannot itself be sealed under them). The container is:
+
+```
+"svkr" ‖ format(1) ‖ count(u32)
+      ‖ [ epoch_id(16) ‖ created_at(i64) ‖ len(u32) ‖ wrapped_key ]…
+```
+
+Integers are big-endian; `wrapped_key` is `WrappedKey` wire bytes. Entries
+serialize in canonical order (ascending `(created_at, epoch_id)`), so the same set
+of epochs always yields identical `vault.key` bytes. `format` is `1` and revises
+only if the *framing* changes, independent of `CONTRACT_VERSION`.
+
+**Grandfathering.** A legacy single-key `vault.key` is a bare `WrappedKey`, which
+has no `svkr` prefix. It is read as a one-epoch **genesis** keyring — the same
+posture as the mailbox's grandfathered bare wrapped-key deposit. A reader tries the
+container first and falls back to the bare-wrapped parse, so nothing an owner
+already stored becomes unreadable within the major.
+
+### Opaque, mergeable epoch ids
+
+An epoch id is **opaque** — random for a rotation, a fixed all-zero sentinel for
+genesis — never a sequence counter. Ordering lives in the keyring structure
+(`created_at`, tie-broken by id), not in the id. Two replicas that rotate
+independently therefore mint *distinct* ids instead of colliding on the same
+integer, and the fixed genesis id lets two devices that each wrote their own
+genesis dedupe to one epoch instead of forking the un-rotated vault.
+
+**Newest selection.** The current epoch (what new blobs seal under) is the maximum
+by `(created_at, id)` — deterministic across any replicas holding the same epochs,
+so a merged keyring agrees on the current epoch with no shared clock.
+
+**Merge** is the **union of epochs**, keyed on the id. Because no id ever names two
+different keys, the union keeps every distinct epoch key and loses none — the
+property that lets keyrings from independent sources (or a relay-held `vault.key`
+against a local one) reconcile. It is commutative and deterministic: where both
+rings carry an id, the entry with the lexicographically greater wrapped bytes wins
+(such entries wrap the same key, so the choice affects only the exact bytes).
+
+### Epoch marker in the AAD (backward-compatible)
+
+A sealed blob binds its epoch to the ciphertext through the AEAD **associated
+data**, so the relay never sees a rotation marker — it stays as blind to rotation
+cadence as to everything else — yet a blob cannot be replayed under the wrong
+epoch. The scheme is deliberately backward compatible:
+
+- **Genesis epoch** (id all-zero): `aad = blob_id` — byte-identical to the
+  pre-epoch contract (see "Sync and backup" in `docs/ARCHITECTURE.md`), so every
+  blob sealed before epochs existed still opens.
+- **Any rotated epoch**: `aad = blob_id ‖ 0x1f ‖ epoch_id`. The `0x1f` (ASCII unit
+  separator) is outside the relay's blob-id charset `[A-Za-z0-9._-]`, so it can
+  never occur inside a blob id — a marked AAD can never collide with the bare AAD
+  of some other blob.
+
+The marker is **not stored anywhere**: opening tries each epoch's `(key, aad)`
+pair until the AEAD authenticates. Because each epoch has a distinct key, only the
+correct pair opens, so trial decryption cannot cross epochs and nothing new
+reaches the relay.
+
+### Re-keying grantees
+
+On rotation, each still-trusted grantee is handed the keyring **re-wrapped to
+them** (every epoch key unwrapped from the owner and re-wrapped to the grantee's
+X25519 key, preserving ids and clocks) through a `key_handoff` message (below).
+It can then open every past and current epoch. A revoked identity is simply never
+handed the new ring, and its grant edge is deleted. As ever, this cannot retract
+what the revoked party already decrypted or the old-epoch material it already
+holds — the honest-revocation caveat — but everything sealed *after* the rotation
+is beyond it.
+
+Test vectors: [`vectors/keyring.json`](vectors/keyring.json). `genesis_legacy`
+pins that a bare single-key `vault.key` parses as genesis and unwraps;
+`multi_epoch` pins a genesis-plus-two-rotations keyring's bytes and newest
+selection; `rotated_blob` pins a blob sealed under a non-zero epoch with its marked
+AAD; `pre_epoch_blob` pins that a bare-AAD blob still opens under genesis; `merge`
+pins a union of two independently-rotated replicas and its newest. Regenerate with
+`cargo run -p svastha-core --example keyring_vectors` (only on a deliberate,
+version-bumped contract change).
 
 ## Event schema
 
@@ -400,9 +503,10 @@ fields without breaking an older reader. None of it is signed or hashed by the
 envelope — it is opaque sealed bytes to the crypto above.
 
 - `key_handoff` — `{ from_ed, from_x25519, label, wrapped_hex }`. `wrapped_hex` is
-  a wrapped vault key (today) or wrapped keyring (once key epochs land) as
-  `WrappedKey` wire bytes. This is the typed successor to the bare wrapped-key
-  deposit (see grandfathering below).
+  a **wrapped keyring** (the keyring container bytes from "Key epochs" above,
+  wrapped to the recipient), or — grandfathered — a bare wrapped vault key, which a
+  keyring reader accepts as a one-epoch genesis keyring. This is the typed
+  successor to the bare wrapped-key deposit (see grandfathering below).
 - `proposal` — `{ proposals: [ { event, source_blob?, method?, model? } … ] }`,
   each `event` an **unsigned but schema-valid** draft the owner signs on approval
   (stamping `proposed`, with `by` = the envelope `from`). The proposer is the
