@@ -56,6 +56,49 @@ export async function logEvent(drafts: Draft[]): Promise<StoredEvent[]> {
   return stored
 }
 
+/** The event content the owner signs, minus the derived id — the shape a
+ * proposal draft carries and an edit-then-approve produces. `provenance` is
+ * the draft's own (the proposer's), preserved on approval. */
+export interface ApprovableContent {
+  kind: EventKind
+  code?: Code | null
+  effective_at?: string | null
+  value?: EventValue | null
+  provenance: { source: string; source_doc: string | null }
+}
+
+/** The `proposed` provenance the owner stamps when approving a draft: who
+ * proposed it (the envelope `from`) and what the extraction drew from. */
+export interface ProposedProvenance {
+  by: string
+  source_blob?: string
+  method?: string
+  model?: string
+}
+
+/**
+ * Sign an approved (or edited-then-approved) proposal draft with the session
+ * identity, stamping `proposed` so the owner's signature attests to the
+ * proposal provenance. `proposed` is excluded from the content id (see
+ * `spec/README.md`, "Proposal provenance"), so an approved fact keeps the same
+ * id as the same fact logged directly — approving a duplicate is an idempotent
+ * `put`. Stored and pushed exactly like a self-logged event: the same
+ * `onEventsLogged` hook enqueues its `ev-` blob for sync.
+ */
+export async function approveProposedEvent(
+  content: ApprovableContent,
+  proposed: ProposedProvenance,
+): Promise<StoredEvent> {
+  const identity = session.identity
+  if (!identity) throw new Error('Session is locked — cannot sign events.')
+  const signed = JSON.parse(
+    identity.sign_event(JSON.stringify({ ...content, proposed })),
+  ) as StoredEvent
+  await put('events', signed)
+  onEventsLogged([signed])
+  return signed
+}
+
 export function allEvents(): Promise<StoredEvent[]> {
   return getAll<StoredEvent>('events')
 }

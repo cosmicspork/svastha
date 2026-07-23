@@ -15,6 +15,7 @@ import { isoToMillis } from './time'
 import { fingerprint } from './exchange'
 import type { PendingInvite } from './shared'
 import type { DoctorShareRecord } from './doctorShare'
+import type { ProposalRecord } from './proposals'
 
 const STORE = 'notifications'
 
@@ -28,6 +29,7 @@ export const EXPIRY_THRESHOLD_DAYS = 3
 
 export type NotificationKind =
   | 'share-invite'
+  | 'proposals-pending'
   | 'doctor-share-expiring'
   | 'dictionary-update'
   | 'app-update'
@@ -95,6 +97,34 @@ export function deriveInviteNotifications(invites: PendingInvite[]): Notificatio
     createdAt: new Date().toISOString(),
     data: { action: 'View', href: '#/share' },
   }))
+}
+
+/** One notification per proposer with pending drafts, keyed by the proposer's
+ * Ed25519 key so re-derivation never mints two. Content-free by design: the
+ * title is a count and the body is the proposer fingerprint (the same
+ * eyeball-match string invites show) — a proposal may reference any category,
+ * including sensitive ones, so the medical content never reaches this surface.
+ * The count in the id keeps the reminder honest as drafts are worked through:
+ * a resolved-down count re-fires (a fresh, higher-signal reminder), while a
+ * re-derivation at the same count is deduped. */
+export function deriveProposalNotifications(records: ProposalRecord[]): Notification[] {
+  const byProposer = new Map<string, number>()
+  for (const r of records) {
+    const pending = r.drafts.filter((d) => d.status === 'pending').length
+    if (pending > 0) byProposer.set(r.fromEd, (byProposer.get(r.fromEd) ?? 0) + pending)
+  }
+  const out: Notification[] = []
+  for (const [fromEd, count] of byProposer) {
+    out.push({
+      id: `proposals-pending:${fromEd}:${count}`,
+      kind: 'proposals-pending',
+      title: `${count} ${count === 1 ? 'proposal' : 'proposals'} waiting for review`,
+      body: fingerprint(fromEd),
+      createdAt: new Date().toISOString(),
+      data: { action: 'Review', href: '#/proposals' },
+    })
+  }
+  return out
 }
 
 /** Reminders for active doctor links expiring within {@link EXPIRY_THRESHOLD_DAYS}.

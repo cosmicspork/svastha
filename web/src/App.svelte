@@ -24,13 +24,18 @@
   import SharePeople from './routes/share/People.svelte'
   import ShareDoctor from './routes/share/Doctor.svelte'
   import Person from './routes/Person.svelte'
+  import Proposals from './routes/Proposals.svelte'
   import Import from './routes/Import.svelte'
   import Correlate from './routes/Correlate.svelte'
   import Bloom from './components/Bloom.svelte'
   import ShareView from './components/ShareView.svelte'
   import AppHeader from './components/AppHeader.svelte'
   import { loadNotifications } from './lib/notifications'
-  import { startInviteNotifications, scanForNotifications } from './lib/notification-sources'
+  import {
+    startInviteNotifications,
+    startProposalNotifications,
+    scanForNotifications,
+  } from './lib/notification-sources'
 
   let ready = $state(false)
   let vaultExists = $state(false)
@@ -83,14 +88,18 @@
   // once a session is unlocked, tearing the invite subscription down on lock.
   // Same gating as the sync effect above (never during the cold share path).
   let inviteUnsub: (() => void) | null = null
+  let proposalUnsub: (() => void) | null = null
   $effect(() => {
     if (isShare || !ready || locked() || !vaultExists) {
       inviteUnsub?.()
       inviteUnsub = null
+      proposalUnsub?.()
+      proposalUnsub = null
       return
     }
     loadNotifications()
     inviteUnsub ??= startInviteNotifications()
+    proposalUnsub ??= startProposalNotifications()
     scanForNotifications()
   })
 </script>
@@ -133,6 +142,8 @@
       <SharePeople />
     {:else if route.path === '/share/doctor'}
       <ShareDoctor />
+    {:else if route.path === '/proposals'}
+      <Proposals />
     {:else if route.path === '/person/:ed'}
       <Person ed={route.params.ed} />
     {:else if route.path === '/import'}

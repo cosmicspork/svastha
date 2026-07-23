@@ -7,7 +7,6 @@ import {
   sharedEventsFor,
   configureSharing,
   teardownSharing,
-  checkMailboxForInvites,
   acceptInvite,
   declineInvite,
   pullShared,
@@ -76,85 +75,9 @@ describe('shares CRUD', () => {
   })
 })
 
-describe('checkMailboxForInvites', () => {
-  it('surfaces a verified vaultkey- item as a pending invite', async () => {
-    const payload = {
-      v: 1,
-      from_ed: OWNER_ED,
-      from_x25519: OWNER_X,
-      label: 'Partner',
-      wrapped_hex: 'ab',
-    }
-    const blob = new TextEncoder().encode(JSON.stringify(payload))
-    const client = fakeSharingClient({
-      listMailbox: async () => [{ id: 'vaultkey-aaaaaaaa', from: OWNER_ED }],
-      getMailbox: async (id) => (id === 'vaultkey-aaaaaaaa' ? { blob, from: OWNER_ED } : null),
-    })
-    configureSharing(client, fakeIdentity())
-
-    await checkMailboxForInvites()
-
-    expect(storeGet(pendingInvites)).toEqual([
-      {
-        mailboxId: 'vaultkey-aaaaaaaa',
-        fromEd: OWNER_ED,
-        fromX: OWNER_X,
-        label: 'Partner',
-        wrappedKeyHex: 'ab',
-      },
-    ])
-  })
-
-  it('ignores an item whose svastha-from does not match the payload', async () => {
-    const payload = { v: 1, from_ed: OWNER_ED, from_x25519: OWNER_X, label: 'x', wrapped_hex: 'ab' }
-    const blob = new TextEncoder().encode(JSON.stringify(payload))
-    const attacker = 'c'.repeat(64)
-    const client = fakeSharingClient({
-      listMailbox: async () => [{ id: 'vaultkey-x', from: attacker }],
-      getMailbox: async () => ({ blob, from: attacker }),
-    })
-    configureSharing(client, fakeIdentity())
-
-    await checkMailboxForInvites()
-
-    expect(storeGet(pendingInvites)).toEqual([])
-  })
-
-  it('ignores an item whose wrapped key does not unwrap', async () => {
-    const payload = { v: 1, from_ed: OWNER_ED, from_x25519: OWNER_X, label: 'x', wrapped_hex: 'ab' }
-    const blob = new TextEncoder().encode(JSON.stringify(payload))
-    const client = fakeSharingClient({
-      listMailbox: async () => [{ id: 'vaultkey-x', from: OWNER_ED }],
-      getMailbox: async () => ({ blob, from: OWNER_ED }),
-    })
-    const badIdentity: UnwrapIdentity = {
-      unwrap_key: () => {
-        throw new Error('wrong recipient')
-      },
-    }
-    configureSharing(client, badIdentity)
-
-    await checkMailboxForInvites()
-
-    expect(storeGet(pendingInvites)).toEqual([])
-  })
-
-  it('ignores non-vaultkey- ids and unparsable JSON', async () => {
-    const client = fakeSharingClient({
-      listMailbox: async () => [
-        { id: 'other-item', from: OWNER_ED },
-        { id: 'vaultkey-bad', from: OWNER_ED },
-      ],
-      getMailbox: async (id) =>
-        id === 'vaultkey-bad' ? { blob: new TextEncoder().encode('not json'), from: OWNER_ED } : null,
-    })
-    configureSharing(client, fakeIdentity())
-
-    await checkMailboxForInvites()
-
-    expect(storeGet(pendingInvites)).toEqual([])
-  })
-})
+// The mailbox scan that surfaces invites now lives in the one consumption
+// layer, mailbox.ts (see mailbox.test.ts). shared.ts keeps only the invite
+// state and the accept/decline actions covered below.
 
 describe('acceptInvite / declineInvite', () => {
   const invite = {

@@ -9,6 +9,8 @@ import { resealVaultKey } from './keyvault'
 import { fromHex } from './hex'
 import { syncInit } from './sync'
 import { configureSharing } from './shared'
+import { configureMailbox } from './mailbox'
+import { verify_message } from './svastha'
 
 const VAULT_KEY_BLOB_ID = 'vault.key'
 
@@ -67,8 +69,11 @@ export async function connectRelay(relay: RelayClient): Promise<void> {
   if (!session.vaultKey) throw new Error('Session is locked.')
   syncInit(relay, session.vaultKey)
   // `relay` (a `RelayClient`) and `session.identity` (a `WasmIdentity`) satisfy
-  // sharing's narrower `SharingClient`/`UnwrapIdentity` interfaces structurally
-  // — see shared.ts's doc comment on why it takes these in rather than reading
-  // the session itself.
-  if (session.identity) configureSharing(relay, session.identity)
+  // sharing's and the mailbox layer's narrower interfaces structurally — see
+  // those modules' doc comments on why they take these in rather than reading
+  // the session itself. `verify_message` is the wasm verify-or-drop gate.
+  if (session.identity) {
+    configureSharing(relay, session.identity)
+    configureMailbox(relay, session.identity, verify_message)
+  }
 }

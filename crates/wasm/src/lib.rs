@@ -13,7 +13,7 @@ use wasm_bindgen::prelude::*;
 
 use svastha_core::curation::{merge as merge_curation_records, SignedCurationRecord};
 use svastha_core::envelope::{wrap_key, DataKey, Sealed, WrappedKey};
-use svastha_core::event::{Code, Event, EventKind, EventValue, Provenance, SignedEvent};
+use svastha_core::event::{Code, Event, EventKind, EventValue, Proposed, Provenance, SignedEvent};
 use svastha_core::keyring::Keyring;
 use svastha_core::keys::Identity;
 use svastha_core::mailbox::{MailboxMessage, MessageKind};
@@ -88,17 +88,27 @@ impl WasmIdentity {
     }
 
     /// Sign a clinical event. `content_json` is the event content
-    /// (`kind`, optional `code`/`effective_at`/`value`, and `provenance`); the
-    /// content-addressed id is stamped from it. Returns the `SignedEvent` JSON.
+    /// (`kind`, optional `code`/`effective_at`/`value`, `provenance`, and an
+    /// optional `proposed` provenance object); the content-addressed id is
+    /// stamped from it. Returns the `SignedEvent` JSON.
+    ///
+    /// A present `proposed` is what the proposal inbox stamps when the owner
+    /// approves a draft: `proposed` is excluded from the content id (so an
+    /// approved fact keeps the same id as one logged directly) but folded into
+    /// the signing preimage, so the owner's signature attests to the proposal
+    /// provenance. See `spec/README.md`, "Proposal provenance".
     pub fn sign_event(&self, content_json: &str) -> Result<String, JsError> {
         let content: EventContent = serde_json::from_str(content_json).map_err(to_js)?;
-        let event = Event::new(
+        let mut event = Event::new(
             content.kind,
             content.code,
             content.effective_at,
             content.value,
             content.provenance,
         );
+        if let Some(proposed) = content.proposed {
+            event = event.with_proposed(proposed);
+        }
         let signed = self.identity.sign_event(event);
         serde_json::to_string(&signed).map_err(to_js)
     }
@@ -187,6 +197,11 @@ struct EventContent {
     #[serde(default)]
     value: Option<EventValue>,
     provenance: Provenance,
+    /// Optional proposal provenance. Absent (and thus a no-op) for ordinary
+    /// self-authored events and for the id-only [`event_id`] dry run — it never
+    /// affects the content id, only the signing preimage.
+    #[serde(default)]
+    proposed: Option<Proposed>,
 }
 
 /// The curation fields a caller supplies; `author` and the signature are derived.

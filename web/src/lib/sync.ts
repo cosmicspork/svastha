@@ -17,7 +17,8 @@ import { get, put, getAll } from './db'
 import { verify_event } from './svastha'
 import type { StoredEvent } from './events'
 import { writable } from 'svelte/store'
-import { checkMailboxForInvites, pullShared, teardownSharing } from './shared'
+import { pullShared, teardownSharing } from './shared'
+import { pullMailbox, teardownMailbox } from './mailbox'
 import { bytesToBase64, base64ToBytes } from './base64'
 
 /** The relay surface this engine needs — narrower than `RelayClient` so
@@ -510,10 +511,10 @@ export async function pullAll(): Promise<void> {
     void drain()
   }
 
-  // Sharing rides the same pull cycle: surface any new mailbox invites, then
-  // pull whatever accepted shares have new events, after this device's own
-  // pull/push reconcile above.
-  await checkMailboxForInvites()
+  // Sharing rides the same pull cycle: consume the mailbox (invites + proposal
+  // inbox) once, then pull whatever accepted shares have new events, after this
+  // device's own pull/push reconcile above.
+  await pullMailbox()
   await pullShared()
 
   patchStatus({ lastPullAt: new Date().toISOString() })
@@ -590,6 +591,7 @@ export function syncTeardown(): void {
   draining = false
   patchStatus({ configured: false })
   teardownSharing()
+  teardownMailbox()
   void clearEventsHook()
   if (typeof window !== 'undefined') {
     window.removeEventListener('online', handleOnline)
