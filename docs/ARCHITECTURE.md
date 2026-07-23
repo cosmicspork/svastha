@@ -275,7 +275,9 @@ fall through to the earlier layers.
   by union automatically, no separate reconciliation step needed. The verbatim
   source document is still kept, as an encrypted provenance blob (`doc-*`, see
   "Sync and backup" below) — the mapping will keep improving, and the blob is
-  what lets a fact be re-derived later without the original export.
+  what lets a fact be re-derived later without the original export. An
+  imported entry's detail panel can open that blob in the same viewer captured
+  paper records use, so the original C-CDA/FHIR document stays one tap away.
 
   Import is not only structured facts: the narrative sections a clinician
   actually writes (plan of care, assessment, reason for visit, physical
