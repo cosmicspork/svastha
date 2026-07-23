@@ -16,8 +16,6 @@ harvest a PR's "## Deferred" notes into the list.
 - Key rotation for real revocation
 - Blob-list pagination and manifests; curation etags
 - Relay nonce store (auth replay hardening)
-- Multi-writer sync (needs new conflict machinery; ends the single-writer
-  assumption — signed curation is the prerequisite, now in place)
 
 ## Sharing
 
@@ -27,6 +25,8 @@ harvest a PR's "## Deferred" notes into the list.
 - `doc-` blobs in doctor-share bundles
 - Share-history clearing after the tombstone sweep
 - Richer grant terms (family/caregiver beyond the household pair)
+- Caregiver proposals — a granted identity suggests events, the owner
+  approves and signs (rides the proposer-agnostic proposal mechanism)
 
 ## Import
 
@@ -57,6 +57,12 @@ harvest a PR's "## Deferred" notes into the list.
 
 ## Intentionally not doing
 
+- **Multi-writer vaults** — capable-of-owning and capable-of-approving are
+  the same threshold: a capable owner approves proposals from granted
+  identities; below that threshold the record has honestly changed hands
+  (custody transfer via the social-recovery seed). One custodian identity
+  per vault; seeds are never co-held between adults (a seed co-holder is
+  unrevocable forever). Caregivers are revocable grantee-proposers.
 - **Ordered-prescriptions import** — ordered is not taken; importing orders
   would fabricate a medication history. Test-locked exclusion.
 - **SNOMED CT / CPT names in the offline dictionary** — licensing; those
