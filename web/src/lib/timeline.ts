@@ -359,11 +359,18 @@ function formatPaperRecord(
     .map(textOf)
     .filter((t): t is string => t !== null)
     .join(', ')
-  const pages = attachments.length
+  const count = attachments.length
+  // Photos-only records keep the camera + "pages" wording; the moment a
+  // non-image (a PDF) is in the mix, "pages" is wrong, so shift to the neutral
+  // paperclip + "items".
+  const allImages = attachments.every((a) => a.mime.startsWith('image/'))
+  const hint = allImages
+    ? `📷 ${count} ${count === 1 ? 'page' : 'pages'}`
+    : `📎 ${count} ${count === 1 ? 'item' : 'items'}`
   return {
     label: caption || 'Paper record',
     value: '',
-    hint: `📷 ${pages} ${pages === 1 ? 'page' : 'pages'}`,
+    hint,
     attachments,
     flare: false,
   }

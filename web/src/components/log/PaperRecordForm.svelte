@@ -4,15 +4,19 @@
   import { toLocalIso } from '../../lib/time'
   import { logEvent } from '../../lib/events'
   import { enqueue, drain } from '../../lib/sync'
-  import { downscaleToJpeg, storeAttachment } from '../../lib/attachments'
+  import { downscaleToJpeg, storeAttachment, MAX_ATTACHMENT_BYTES } from '../../lib/attachments'
   import { paperRecordDrafts } from '../../lib/drafts'
 
-  // A photographed page held in memory before save: the downscaled JPEG bytes
-  // plus an object URL for its thumbnail. Nothing is hashed or stored until the
-  // user commits, so removing a page here leaves no trace.
+  // One attachment held in memory before save: a photographed page (downscaled
+  // JPEG) or a picked PDF, plus an object URL (its thumbnail for a photo, a
+  // stable key + cleanup handle for a PDF) and the mime/name to store. Nothing
+  // is hashed or stored until the user commits, so removing one here leaves no
+  // trace.
   interface Pending {
     bytes: Uint8Array
     url: string
+    mime: string
+    name: string
   }
 
   let photos = $state<Pending[]>([])
@@ -45,6 +49,12 @@
   }
 
   const canSave = $derived(photos.length > 0 && !processing)
+  const hasPdf = $derived(photos.some((p) => p.mime === 'application/pdf'))
+  // >1 mixed items are "items" (a page count is wrong once a PDF is in); a
+  // photos-only batch keeps "pages"; a single item is just "Save".
+  const saveLabel = $derived(
+    photos.length <= 1 ? 'Save' : hasPdf ? `Save ${photos.length} items` : `Save ${photos.length} pages`,
+  )
 
   async function onFilesPicked(e: Event) {
     const input = e.currentTarget as HTMLInputElement
@@ -60,7 +70,7 @@
         try {
           const bytes = await downscaleToJpeg(file)
           const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: 'image/jpeg' }))
-          photos = [...photos, { bytes, url }]
+          photos = [...photos, { bytes, url, mime: 'image/jpeg', name: file.name }]
         } catch {
           error = 'Could not read one of the photos — try again or pick another.'
         }
@@ -68,6 +78,45 @@
     } finally {
       processing = false
     }
+  }
+
+  async function onPdfsPicked(e: Event) {
+    const input = e.currentTarget as HTMLInputElement
+    const files = Array.from(input.files ?? [])
+    input.value = ''
+    if (files.length === 0) return
+
+    processing = true
+    error = ''
+    try {
+      for (const file of files) {
+        // Hard-reject at pick time: an oversize attachment can't be stored, and
+        // silently dropping it at save (or letting it exceed the relay's blob
+        // cap and never sync) would be invisible data loss. Skip it, keep the
+        // rest. PDFs are stored raw — no downscale — so file.size is the bytes.
+        if (file.size > MAX_ATTACHMENT_BYTES) {
+          error =
+            'That PDF is over 11 MB — too large to attach. Export a smaller version and try again.'
+          continue
+        }
+        try {
+          const bytes = new Uint8Array(await file.arrayBuffer())
+          const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: 'application/pdf' }))
+          photos = [...photos, { bytes, url, mime: 'application/pdf', name: file.name }]
+        } catch {
+          error = 'Could not read one of the files — try again or pick another.'
+        }
+      }
+    } finally {
+      processing = false
+    }
+  }
+
+  /** Human-readable byte size for a pending PDF tile (e.g. "1.8 MB"). */
+  function formatSize(bytes: number): string {
+    const mb = bytes / (1024 * 1024)
+    if (mb >= 1) return `${mb.toFixed(1)} MB`
+    return `${Math.max(1, Math.round(bytes / 1024))} KB`
   }
 
   function removePhoto(index: number) {
@@ -85,7 +134,7 @@
       // fetch their att- blobs; then enqueue those blobs (logEvent only handles
       // the ev- ones), then create the events.
       const captured = []
-      for (const p of photos) captured.push(await storeAttachment(p.bytes))
+      for (const p of photos) captured.push(await storeAttachment(p.bytes, p.mime))
       await enqueue(captured.map((c) => `att-${c.sha256}`))
       void drain()
 
@@ -112,8 +161,8 @@
 </div>
 
 <p class="muted intro">
-  Photograph a handout, a doctor's note, or any paper record. It's stored encrypted, and
-  each page is one photo.
+  Photograph a handout, a doctor's note, or any paper record — or attach a PDF you were sent.
+  It's stored encrypted.
 </p>
 
 <div class="stack">
@@ -132,6 +181,20 @@
     </span>
   </label>
 
+  <label class="pick compact" data-testid="paper-pick-pdf">
+    <input
+      type="file"
+      accept="application/pdf"
+      multiple
+      onchange={onPdfsPicked}
+      data-testid="paper-file-pdf"
+    />
+    <span class="pick-face">
+      <span class="pick-glyph" aria-hidden="true">📄</span>
+      <span>Add a PDF</span>
+    </span>
+  </label>
+
   {#if processing}
     <p class="muted" data-testid="paper-processing">Processing…</p>
   {/if}
@@ -140,11 +203,19 @@
     <div class="thumbs" data-testid="paper-thumbs">
       {#each photos as photo, i (photo.url)}
         <div class="thumb">
-          <img src={photo.url} alt={`Page ${i + 1}`} />
+          {#if photo.mime === 'application/pdf'}
+            <div class="pdf-tile" data-testid="paper-thumb-pdf">
+              <span class="pdf-glyph" aria-hidden="true">📄</span>
+              <span class="pdf-name">{photo.name}</span>
+              <span class="pdf-size">{formatSize(photo.bytes.length)}</span>
+            </div>
+          {:else}
+            <img src={photo.url} alt={`Page ${i + 1}`} />
+          {/if}
           <button
             type="button"
             class="remove"
-            aria-label={`Remove page ${i + 1}`}
+            aria-label={`Remove item ${i + 1}`}
             onclick={() => removePhoto(i)}
             data-testid="paper-remove"
           >
@@ -197,7 +268,7 @@
       onclick={save}
       data-testid="save"
     >
-      {saving ? 'Saving…' : `Save${photos.length > 1 ? ` ${photos.length} pages` : ''}`}
+      {saving ? 'Saving…' : saveLabel}
     </button>
   </div>
 </div>
@@ -264,6 +335,49 @@
 
   .pick-glyph {
     font-size: var(--text-xl);
+  }
+
+  /* The PDF picker is a secondary, lower-profile row under the camera target. */
+  .pick.compact {
+    margin-top: var(--space-2);
+  }
+
+  .pick.compact .pick-face {
+    min-height: 48px;
+    font-size: var(--text-sm);
+  }
+
+  .pdf-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-1);
+    width: 100%;
+    height: 100%;
+    padding: var(--space-1);
+    background: var(--surface);
+    text-align: center;
+  }
+
+  .pdf-glyph {
+    font-size: var(--text-lg);
+  }
+
+  .pdf-name {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-data);
+    font-size: var(--text-xs);
+    color: var(--text);
+  }
+
+  .pdf-size {
+    font-family: var(--font-data);
+    font-size: var(--text-xs);
+    color: var(--muted);
   }
 
   .thumbs {

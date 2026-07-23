@@ -20,9 +20,6 @@ into the sections below.
 
 - **OCR for captured documents** — native OS OCR via the wrapper, or the
   processing node; human-in-the-loop for handwriting.
-- **PDF attachments** — paper-record capture is photos-only today.
-- **Imported source documents in the viewer** — render `doc-` provenance
-  blobs through the same attachment viewer captured records use.
 
 ## Later
 

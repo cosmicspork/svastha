@@ -275,7 +275,9 @@ fall through to the earlier layers.
   by union automatically, no separate reconciliation step needed. The verbatim
   source document is still kept, as an encrypted provenance blob (`doc-*`, see
   "Sync and backup" below) — the mapping will keep improving, and the blob is
-  what lets a fact be re-derived later without the original export.
+  what lets a fact be re-derived later without the original export. An
+  imported entry's detail panel can open that blob in the same viewer captured
+  paper records use, so the original C-CDA/FHIR document stays one tap away.
 
   Import is not only structured facts: the narrative sections a clinician
   actually writes (plan of care, assessment, reason for visit, physical
@@ -288,12 +290,13 @@ fall through to the earlier layers.
   the frozen audit surface — the canonical encoding and content-id rules never
   move to accommodate a parser fix.
 - **Paper records.** A handed-over paper document (a specialist's notes, a
-  printed med list — the common case in India) is photographed in the app,
-  downscaled on-device, and stored as a `document` event whose `attachment`
-  value content-addresses the encrypted image blob (`att-*`, see "Sync and
-  backup" below); a caption rides as a sibling text event. The photo is a
-  first-class record — synced, exported, viewable in-app, and includable in
-  doctor shares. **OCR stays out of the web app by design**: reading the
+  printed med list — the common case in India) is photographed in the app and
+  downscaled on-device, or a PDF the user was sent is attached raw; either is
+  stored as a `document` event whose `attachment` value content-addresses the
+  encrypted blob (`att-*`, see "Sync and backup" below); a caption rides as a
+  sibling text event. The photo or PDF is a first-class record — synced,
+  exported, viewable in-app (PDFs render via a lazy-loaded pdf.js), and
+  includable in doctor shares. **OCR stays out of the web app by design**: reading the
   photo's contents belongs to native OS OCR through the wrapper or the
   processing node (human-in-the-loop for handwriting), inside the user's trust
   boundary.
@@ -402,7 +405,7 @@ by prefix:
 | `ev-{event_id_hex}` | one sealed `SignedEvent` (JSON) |
 | `vault.key` | the vault data key, wrapped to the owner's own X25519 key |
 | `doc-{sha256_hex}` | one imported source document's verbatim bytes (name + base64 bytes, JSON), keyed by its own content hash |
-| `att-{sha256_hex}` | one captured document page's bytes (mime + base64 bytes, JSON — a photographed paper record), keyed by the plaintext content hash the event's `attachment` value carries |
+| `att-{sha256_hex}` | one captured document's bytes (mime + base64 bytes, JSON — a photographed paper record or an attached PDF), keyed by the plaintext content hash the event's `attachment` value carries |
 | `cur-{sha256_hex(key)}` | one sealed `SignedCurationRecord` (JSON — tag/note/hide/favorite, see the Event model's "Curation overlay" subsection), keyed by the hash of its own app-level `key`. Unlike `ev-`/`doc-`/`att-`, this blob is **mutable**: a write `PUT`s over the existing id rather than minting a new one. |
 
 **AAD = blob id.** Every blob sealed under the vault key uses the UTF-8 bytes

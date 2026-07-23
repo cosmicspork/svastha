@@ -143,6 +143,17 @@ describe('paperRecordDrafts', () => {
     expect(drafts).toHaveLength(2)
     expect(drafts.every((d) => d.value && 'attachment' in d.value)).toBe(true)
   })
+
+  it('carries each item mime through to its attachment value (mixed jpeg + pdf)', () => {
+    const mixed = [
+      { sha256: 'aa', mime: 'image/jpeg', size: 100 },
+      { sha256: 'cc', mime: 'application/pdf', size: 4096 },
+    ]
+    const drafts = paperRecordDrafts(mixed, '', AT)
+    expect(drafts).toHaveLength(2)
+    expect(drafts[0].value).toEqual({ attachment: { sha256: 'aa', mime: 'image/jpeg', size: 100 } })
+    expect(drafts[1].value).toEqual({ attachment: { sha256: 'cc', mime: 'application/pdf', size: 4096 } })
+  })
 })
 
 describe('moodDraft', () => {
