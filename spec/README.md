@@ -546,12 +546,12 @@ blob endpoints above; there is no separate auth scheme for sharing.
 
 | Method & path | Auth | Body | Success | Notes |
 |---|---|---|---|---|
-| `PUT /v0/grants/{grantee}` | yes | — | `204` | authorize `{grantee}` to read the caller's shared blobs; idempotent |
+| `PUT /v0/grants/{grantee}` | yes | optional scope JSON | `204` | authorize `{grantee}` to read the caller's shared blobs; idempotent upsert |
 | `DELETE /v0/grants/{grantee}` | yes | — | `204` / `404` | revoke |
 | `GET /v0/grants` | yes | — | `200 {"grantees":[hex...]}` | who the caller has granted |
 | `GET /v0/shared` | yes | — | `200 {"owners":[hex...]}` | who has granted the caller |
-| `GET /v0/shared/{owner}/blobs` | yes | — | `200 {"ids":[...]}` / `404` | list `{owner}`'s blob ids, gated on a live grant |
-| `GET /v0/shared/{owner}/blobs/{id}` | yes | — | `200` octets / `404` | fetch one of `{owner}`'s blobs, gated on a live grant |
+| `GET /v0/shared/{owner}/blobs` | yes | — | `200 {"ids":[...]}` / `404` | list `{owner}`'s blob ids the grant admits, gated on a live grant |
+| `GET /v0/shared/{owner}/blobs/{id}` | yes | — | `200` octets / `404` | fetch one of `{owner}`'s blobs, gated on a live grant that admits the id |
 
 `{grantee}`/`{owner}` are 64 lowercase hex chars (an Ed25519 public key) or
 `400`. **A missing grant and a missing blob both answer `404`.** If they
@@ -562,6 +562,57 @@ with you" and "nothing there" keeps that graph unobservable. There are no
 write routes under `/v0/shared/*`; a `PUT` or `DELETE` there is `405`.
 Revocation stops future reads only — it cannot retract anything the grantee
 already synced to their device; the client is responsible for saying so.
+
+**Grant scope (optional).** The `PUT` body may carry a small JSON object
+narrowing the grant; both fields are optional, and an **absent body** (the
+legacy request shape) is an unscoped, no-expiry grant — full read, forever,
+exactly as before. So a client that never sends a body and one that does coexist
+with no version bump, and no stored grant migrates. Because the auth preimage
+binds the body hash, the scope is covered by the caller's signature like any
+other body.
+
+```
+{ "prefixes": ["ev-", "att-"],   // blob-id prefix allowlist (optional)
+  "expires_at": 1798761600 }     // Unix seconds (optional)
+```
+
+- **`prefixes`** — a blob-id prefix allowlist. When present and non-empty, the
+  grantee's shared **listing** returns only ids matching one of these prefixes,
+  and a shared **fetch** of an id outside them answers `404` — the same code as a
+  missing blob, so an excluded namespace is indistinguishable from an empty one.
+  Absent or empty means no restriction. Blob-id prefixes are already the relay's
+  routing partition of client-chosen ids (`ev-`, `att-`, `doc-`, `cur-`; see
+  `docs/ARCHITECTURE.md`, "Sync and backup"), so filtering on them exposes
+  nothing the relay was not already routing on. The relay caps the allowlist at
+  16 prefixes of ≤ 128 chars each (a malformed or oversized body is `400`); this
+  only bounds the stored metadata and is not a security boundary.
+- **`expires_at`** — an optional expiry in Unix seconds, **unclamped** (unlike a
+  share's bearer-token expiry — a grantee is a keyed identity re-authenticating
+  every request, so there is no bearer secret whose lifetime needs bounding). At
+  or past it (`now >= expires_at`), the grant behaves **exactly as if it did not
+  exist**: listing, fetch, and the push-channel poke all follow the "no grant"
+  path, so the two-404 non-leak rule keeps holding — a probing caller cannot tell
+  an expired grant from a revoked one or one that never existed. Absent means the
+  grant lives until revoked; there is no default expiry.
+
+Since `PUT` is an idempotent **upsert**, re-issuing a grant for an existing
+grantee replaces its scope in place — the mechanism for re-scoping a live grant.
+
+**A within-`cur-` scoping limit.** A `cur-` blob id is a hash of its curation
+key (`cur-{sha256_hex(key)}`), so the relay cannot distinguish a `status:` record
+from a `tag:` one by prefix — the namespace is inside the hash. A grantee allowed
+`cur-` therefore receives **all** curation, not a chosen subset; enforcing
+status/name-only sharing stays a client-side convention, not a relay guarantee.
+True within-namespace scoping needs per-scope data keys (relay-blind), deferred
+to later work. `prefixes` scopes *across* the `ev-`/`att-`/`doc-`/`cur-`
+partition, never within one.
+
+This additive endpoint change does **not** move `CONTRACT_VERSION`: like the A1
+push channel and nonce guard, it adds optional relay behavior without changing
+any signed byte format (see "Versioning" — bumps within this wave are reserved
+for the B chain's contract changes). The scope semantics are pinned by the
+relay's integration tests, not by test vectors, since none of it alters the
+signed bytes.
 
 ### Mailbox
 

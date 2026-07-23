@@ -343,7 +343,19 @@ handshake" subsections.
 both still pure routing metadata: a grant store (owner authorizes grantee to
 read, queried in both directions so a device can list who it shares with and
 who shares with it) and a mailbox store (a store-and-forward drop box any
-authed identity may deposit into). The mailbox began as the way to hand a
+authed identity may deposit into). A grant may carry two **optional,
+relay-enforced** constraints — a blob-id **prefix allowlist** (the shared
+listing and shared fetches return only ids matching an allowed prefix, so tags
+and captured documents can be shared without curation, or vice versa) and an
+**expiry** (past it the grant behaves exactly as if absent, so the two-404
+non-leak rule still holds). Both are evaluated against metadata the relay
+already routes on — prefixes are the client's blob-id partition, an expiry is a
+plain timestamp — so enforcing them leaks nothing new; absent, they mean today's
+full-read, no-expiry grant, and legacy grants keep working unmigrated. The relay
+cannot scope *within* the `cur-` namespace (a `cur-` id is a hash of its curation
+key, so `status:` and `tag:` are indistinguishable by prefix), so a grantee
+allowed `cur-` receives all curation; true within-namespace scoping needs
+per-scope data keys and is later work. The mailbox began as the way to hand a
 grantee the wrapped vault key a grant alone doesn't carry; it now carries a
 **typed, versioned, end-to-end-encrypted message envelope** for everything the
 node/protocol wave adds — proposals, node administration, cited Q&A — with the

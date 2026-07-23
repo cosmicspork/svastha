@@ -317,6 +317,282 @@ async fn dual_direction_listing() {
     assert_eq!(owners, expected);
 }
 
+/// Store `ev-1`, `att-1`, and `cur-1` under Alice, and return an app plus the
+/// two identities — the fixture the scope tests share.
+async fn alice_with_three_blobs() -> (axum::Router, Identity, Identity) {
+    let app = router();
+    let alice = Identity::from_seed(b"alice");
+    let bob = Identity::from_seed(b"bob");
+    for (i, id) in ["ev-1", "att-1", "cur-1"].iter().enumerate() {
+        let put = app
+            .clone()
+            .oneshot(signed(
+                &alice,
+                "PUT",
+                &format!("/v0/blobs/{id}"),
+                b"sealed",
+                now() + i as u64,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(put.status(), StatusCode::NO_CONTENT);
+    }
+    (app, alice, bob)
+}
+
+async fn shared_ids(app: &axum::Router, caller: &Identity, owner: &str, ts: u64) -> Vec<String> {
+    let resp = app
+        .clone()
+        .oneshot(signed(
+            caller,
+            "GET",
+            &format!("/v0/shared/{owner}/blobs"),
+            b"",
+            ts,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    let mut ids: Vec<String> = json["ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    ids.sort();
+    ids
+}
+
+async fn shared_fetch_status(
+    app: &axum::Router,
+    caller: &Identity,
+    owner: &str,
+    id: &str,
+    ts: u64,
+) -> StatusCode {
+    app.clone()
+        .oneshot(signed(
+            caller,
+            "GET",
+            &format!("/v0/shared/{owner}/blobs/{id}"),
+            b"",
+            ts,
+        ))
+        .await
+        .unwrap()
+        .status()
+}
+
+#[tokio::test]
+async fn prefix_allowlist_scopes_listing_and_fetch() {
+    let (app, alice, bob) = alice_with_three_blobs().await;
+    let owner = hex_pk(&alice);
+
+    // Alice grants Bob a prefix-scoped grant: only ev- and att- are readable.
+    let grant = app
+        .clone()
+        .oneshot(signed(
+            &alice,
+            "PUT",
+            &format!("/v0/grants/{}", hex_pk(&bob)),
+            br#"{"prefixes":["ev-","att-"]}"#,
+            now(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(grant.status(), StatusCode::NO_CONTENT);
+
+    // The listing hides cur-1 entirely — Bob never learns it exists.
+    assert_eq!(
+        shared_ids(&app, &bob, &owner, now()).await,
+        vec!["att-1".to_string(), "ev-1".to_string()]
+    );
+
+    // Admitted prefixes fetch; the excluded one 404s exactly like a missing
+    // blob, so the excluded namespace is indistinguishable from an empty one.
+    assert_eq!(
+        shared_fetch_status(&app, &bob, &owner, "ev-1", now()).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        shared_fetch_status(&app, &bob, &owner, "att-1", now()).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        shared_fetch_status(&app, &bob, &owner, "cur-1", now()).await,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn expired_grant_behaves_as_no_grant() {
+    let (app, alice, bob) = alice_with_three_blobs().await;
+    let owner = hex_pk(&alice);
+    let base = now();
+
+    // A grant that expires one second before the request clock. Past expiry, it
+    // must be indistinguishable from no grant at all: listing and fetch 404.
+    let expired_body = format!(r#"{{"expires_at":{}}}"#, base - 1);
+    let grant = app
+        .clone()
+        .oneshot(signed(
+            &alice,
+            "PUT",
+            &format!("/v0/grants/{}", hex_pk(&bob)),
+            expired_body.as_bytes(),
+            base,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(grant.status(), StatusCode::NO_CONTENT);
+
+    let list = app
+        .clone()
+        .oneshot(signed(
+            &bob,
+            "GET",
+            &format!("/v0/shared/{owner}/blobs"),
+            b"",
+            base + 1,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        shared_fetch_status(&app, &bob, &owner, "ev-1", base + 1).await,
+        StatusCode::NOT_FOUND
+    );
+
+    // Re-issue with an expiry comfortably in the future (upsert): it now works.
+    let future_body = format!(r#"{{"expires_at":{}}}"#, base + 3600);
+    let regrant = app
+        .clone()
+        .oneshot(signed(
+            &alice,
+            "PUT",
+            &format!("/v0/grants/{}", hex_pk(&bob)),
+            future_body.as_bytes(),
+            base + 2,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(regrant.status(), StatusCode::NO_CONTENT);
+
+    // No prefix scope, so all three blobs are visible before the expiry.
+    assert_eq!(
+        shared_ids(&app, &bob, &owner, base + 3).await,
+        vec!["att-1".to_string(), "cur-1".to_string(), "ev-1".to_string()]
+    );
+    assert_eq!(
+        shared_fetch_status(&app, &bob, &owner, "ev-1", base + 3).await,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn legacy_unscoped_grant_reads_everything() {
+    // An empty-body PUT is the legacy (pre-scoping) request shape: full read, no
+    // expiry, unchanged behavior.
+    let (app, alice, bob) = alice_with_three_blobs().await;
+    let owner = hex_pk(&alice);
+
+    let grant = app
+        .clone()
+        .oneshot(signed(
+            &alice,
+            "PUT",
+            &format!("/v0/grants/{}", hex_pk(&bob)),
+            b"",
+            now(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(grant.status(), StatusCode::NO_CONTENT);
+
+    assert_eq!(
+        shared_ids(&app, &bob, &owner, now()).await,
+        vec!["att-1".to_string(), "cur-1".to_string(), "ev-1".to_string()]
+    );
+    for id in ["ev-1", "att-1", "cur-1"] {
+        assert_eq!(
+            shared_fetch_status(&app, &bob, &owner, id, now()).await,
+            StatusCode::OK,
+            "{id}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn upsert_rescopes_an_existing_grant() {
+    let (app, alice, bob) = alice_with_three_blobs().await;
+    let owner = hex_pk(&alice);
+    let base = now();
+
+    // Start with a full (unscoped) grant: att-1 is readable.
+    let full = app
+        .clone()
+        .oneshot(signed(
+            &alice,
+            "PUT",
+            &format!("/v0/grants/{}", hex_pk(&bob)),
+            b"",
+            base,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(full.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        shared_fetch_status(&app, &bob, &owner, "att-1", base + 1).await,
+        StatusCode::OK
+    );
+
+    // Re-PUT the same grantee with a narrower scope (ev- only). The upsert
+    // replaces the scope in place — att-1 is now invisible.
+    let rescope = app
+        .clone()
+        .oneshot(signed(
+            &alice,
+            "PUT",
+            &format!("/v0/grants/{}", hex_pk(&bob)),
+            br#"{"prefixes":["ev-"]}"#,
+            base + 2,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(rescope.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        shared_ids(&app, &bob, &owner, base + 3).await,
+        vec!["ev-1".to_string()]
+    );
+    assert_eq!(
+        shared_fetch_status(&app, &bob, &owner, "att-1", base + 3).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        shared_fetch_status(&app, &bob, &owner, "ev-1", base + 3).await,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn malformed_grant_body_is_bad_request() {
+    let app = router();
+    let alice = Identity::from_seed(b"alice");
+    let bob = Identity::from_seed(b"bob");
+    let resp = app
+        .oneshot(signed(
+            &alice,
+            "PUT",
+            &format!("/v0/grants/{}", hex_pk(&bob)),
+            b"not json",
+            now(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
 #[tokio::test]
 async fn fs_grant_store_persists_across_router_rebuild() {
     let dir = tempfile::tempdir().unwrap();
