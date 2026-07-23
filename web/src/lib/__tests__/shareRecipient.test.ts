@@ -173,6 +173,32 @@ describe('validateBundle', () => {
     ).toBeNull()
   })
 
+  it('defaults documents to empty when absent, and carries it through when present', () => {
+    const legacy = validateBundle(JSON.stringify({ v: 1, created_at: 'x', signer, events: [] }))
+    expect(legacy!.documents).toEqual({})
+
+    const json = JSON.stringify({
+      v: 1,
+      created_at: 'x',
+      signer,
+      events: [],
+      documents: { dd: { name: 'export.xml', bytes: 'AQID' } },
+    })
+    expect(validateBundle(json)!.documents).toEqual({ dd: { name: 'export.xml', bytes: 'AQID' } })
+  })
+
+  it('rejects a malformed documents field (not a flat {name, bytes} map)', () => {
+    expect(validateBundle(JSON.stringify({ v: 1, created_at: 'x', signer, events: [], documents: [] }))).toBeNull()
+    expect(
+      validateBundle(JSON.stringify({ v: 1, created_at: 'x', signer, events: [], documents: { dd: 'AQID' } })),
+    ).toBeNull()
+    expect(
+      validateBundle(
+        JSON.stringify({ v: 1, created_at: 'x', signer, events: [], documents: { dd: { name: 'x.xml' } } }),
+      ),
+    ).toBeNull()
+  })
+
   it('tolerates curation in both directions: absent → empty, present → carried through', () => {
     // An old bundle (field absent) opens identically, with an empty curation array.
     const legacy = validateBundle(JSON.stringify({ v: 1, created_at: 'x', signer, events: [] }))
@@ -301,6 +327,7 @@ describe('openShareBundle (round-trip through the mocked envelope)', () => {
       signer,
       events: [event('a', signerHex, 'ok'), event('b', signerHex, 'bad')],
       attachments: { deadbeef: 'AQID' },
+      documents: { feedface: { name: 'export.xml', bytes: 'AQID' } },
       curation: [good, foreign],
     })
     const opened = openShareBundle(bytes, TOKEN, KEY)
@@ -310,6 +337,7 @@ describe('openShareBundle (round-trip through the mocked envelope)', () => {
     expect(opened!.verified).toBe(1)
     expect(opened!.dropped).toBe(1)
     expect(opened!.attachments).toEqual({ deadbeef: 'AQID' })
+    expect(opened!.documents).toEqual({ feedface: { name: 'export.xml', bytes: 'AQID' } })
     expect(opened!.curation).toEqual([good])
     expect(opened!.droppedCuration).toBe(1)
   })

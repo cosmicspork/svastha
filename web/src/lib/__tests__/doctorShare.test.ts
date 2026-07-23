@@ -18,6 +18,7 @@ import {
   filterEventsForScope,
   generateShareToken,
   referencedAttachmentShas,
+  referencedDocumentShas,
   shareStatus,
   SHARE_TOKEN_LEN,
   type DoctorShareRecord,
@@ -156,6 +157,14 @@ describe('buildBundle', () => {
     const withCur = buildBundle(events, signerHex, '2026-07-14T12:00:00.000Z', {}, curation)
     expect(withCur.curation).toEqual(curation)
   })
+
+  it('omits documents when there are none, and inlines them (name + bytes) when given', () => {
+    expect(bundle.documents).toBeUndefined()
+    const withDocs = buildBundle(events, signerHex, '2026-07-14T12:00:00.000Z', {}, [], {
+      dd: { name: 'export.xml', bytes: 'AQID' },
+    })
+    expect(withDocs.documents).toEqual({ dd: { name: 'export.xml', bytes: 'AQID' } })
+  })
 })
 
 describe('referencedAttachmentShas', () => {
@@ -169,6 +178,27 @@ describe('referencedAttachmentShas', () => {
 
   it('is empty when no event carries an attachment', () => {
     expect(referencedAttachmentShas([ev('t', 'document', 'x', null, { text: 'note' })])).toEqual([])
+  })
+})
+
+describe('referencedDocumentShas', () => {
+  /** `ev` always stamps `source_doc: null`; this overrides it for these tests. */
+  function withSourceDoc(se: StoredEvent, sha: string | null): StoredEvent {
+    return { ...se, event: { ...se.event, provenance: { source: 'import', source_doc: sha } } }
+  }
+
+  it('collects distinct source-doc hashes in sha order', () => {
+    const events = [
+      withSourceDoc(ev('a', 'condition', '2026-01-01T00:00:00Z'), 'bb'),
+      withSourceDoc(ev('b', 'condition', '2026-01-01T00:00:00Z'), 'aa'),
+      withSourceDoc(ev('c', 'condition', '2026-01-01T00:00:00Z'), 'aa'),
+      ev('d', 'condition', '2026-01-01T00:00:00Z'), // source_doc: null (default)
+    ]
+    expect(referencedDocumentShas(events)).toEqual(['aa', 'bb'])
+  })
+
+  it('is empty when no event carries a source_doc', () => {
+    expect(referencedDocumentShas([ev('t', 'condition', '2026-01-01T00:00:00Z')])).toEqual([])
   })
 })
 

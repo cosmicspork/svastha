@@ -44,6 +44,11 @@ export interface OpenedBundle {
    * viewer to render paper records the events reference. Empty when the share
    * carried none. */
   attachments: Record<string, string>
+  /** Inlined imported-source-document bytes (sha256 → name + base64
+   * plaintext), for the viewer to render the original C-CDA/FHIR/PDF an
+   * event's `provenance.source_doc` points at. Empty when the share carried
+   * none. */
+  documents: Record<string, { name: string; bytes: string }>
   /** Only the `status:`/`name:` curation records whose signature verified
    * against `signerHex` — folded into the summary's Current/Past + Active/
    * Resolved grouping and name overrides, the same view the owner sees. Empty
@@ -115,17 +120,19 @@ export function parseShareFragment(hash: string): ParsedFragment | null {
  * unpadded 32-byte Ed25519 key. Returns null (→ "damaged link") on malformed
  * JSON, a version other than 1, or any missing/mistyped field. Does NOT verify
  * signatures — that is `verifyBundleEvents`/`verifyBundleCuration`, split out so
- * the pure-JSON shape check is testable without wasm. `attachments` and
- * `curation` are both optional: a bundle from before this field existed omits
- * them and must still validate identically (they default to empty), and a
- * present field is only shape-checked here — its records are verified-or-dropped
- * later.
+ * the pure-JSON shape check is testable without wasm. `attachments`,
+ * `documents`, and `curation` are all optional: a bundle from before a given
+ * field existed omits it and must still validate identically (each defaults to
+ * empty), and a present field is only shape-checked here — its records are
+ * verified-or-dropped later (curation) or trusted as part of the AEAD-sealed
+ * whole (attachments/documents — see `openShareBundle`).
  */
 export function validateBundle(json: string): {
   createdAt: string
   signerHex: string
   events: StoredEvent[]
   attachments: Record<string, string>
+  documents: Record<string, { name: string; bytes: string }>
   curation: SignedCurationRecord[]
 } | null {
   let parsed: unknown
@@ -161,6 +168,23 @@ export function validateBundle(json: string): {
     attachments = Object.fromEntries(entries) as Record<string, string>
   }
 
+  // `documents` is optional (older bundles and document-free scopes omit it).
+  // When present it must be a flat map to `{ name: string, bytes: string }` —
+  // a `doc-` blob carries no mime, unlike an attachment, so `name` rides along
+  // for the viewer to derive one (see provenance.ts's `mimeForDocName`).
+  let documents: Record<string, { name: string; bytes: string }> = {}
+  if (b.documents !== undefined) {
+    if (!b.documents || typeof b.documents !== 'object' || Array.isArray(b.documents)) return null
+    const entries = Object.entries(b.documents as Record<string, unknown>)
+    const valid = entries.every(([, v]) => {
+      if (!v || typeof v !== 'object' || Array.isArray(v)) return false
+      const doc = v as Record<string, unknown>
+      return typeof doc.name === 'string' && typeof doc.bytes === 'string'
+    })
+    if (!valid) return null
+    documents = Object.fromEntries(entries) as Record<string, { name: string; bytes: string }>
+  }
+
   // `curation` is optional (older bundles and curation-free scopes omit it).
   // When present it must be an array; the per-record shape and signature are
   // not checked here — `verifyBundleCuration` verifies-or-drops each, so a
@@ -172,7 +196,7 @@ export function validateBundle(json: string): {
     curation = b.curation as SignedCurationRecord[]
   }
 
-  return { createdAt: b.created_at, signerHex, events: b.events as StoredEvent[], attachments, curation }
+  return { createdAt: b.created_at, signerHex, events: b.events as StoredEvent[], attachments, documents, curation }
 }
 
 /**
@@ -261,6 +285,7 @@ export function openShareBundle(
     verified,
     dropped,
     attachments: validated.attachments,
+    documents: validated.documents,
     curation: curation.records,
     droppedCuration: curation.dropped,
   }

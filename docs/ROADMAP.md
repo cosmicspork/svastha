@@ -24,7 +24,6 @@ harvest a PR's "## Deferred" notes into the list.
 - Device list and revoke UI
 - QR seed handoff (auto-provision a new device); in-app QR scanning
 - Relay-less file share; cross-device doctor-share management
-- `doc-` blobs in doctor-share bundles
 - Share-history clearing after the tombstone sweep
 - Richer grant terms (family/caregiver beyond the household pair)
 
