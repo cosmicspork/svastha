@@ -423,4 +423,31 @@ describe('buildTimeline: paper records (attachment documents)', () => {
     expect(entry.hint).toBe('📷 1 page')
     expect(entry.attachments).toHaveLength(1)
   })
+
+  it('keeps a PDF attachment in the entry and switches the hint to 📎 items', () => {
+    const events = [
+      ev({
+        effective_at: at,
+        kind: 'document',
+        value: { attachment: { sha256: 'aa', mime: 'application/pdf', size: 4096 } },
+      }),
+    ]
+    const entry = buildTimeline(events, 'all')[0].entries[0]
+    expect(entry.hint).toBe('📎 1 item')
+    expect(entry.attachments).toEqual([{ sha256: 'aa', mime: 'application/pdf' }])
+  })
+
+  it('uses the neutral 📎 items hint when a capture mixes a photo and a PDF', () => {
+    const events = [
+      ev({ effective_at: at, kind: 'document', value: { attachment: { sha256: 'aa', mime: 'image/jpeg', size: 10 } } }),
+      ev({
+        effective_at: at,
+        kind: 'document',
+        value: { attachment: { sha256: 'bb', mime: 'application/pdf', size: 4096 } },
+      }),
+    ]
+    const entry = buildTimeline(events, 'all')[0].entries[0]
+    expect(entry.hint).toBe('📎 2 items')
+    expect(entry.attachments).toHaveLength(2)
+  })
 })

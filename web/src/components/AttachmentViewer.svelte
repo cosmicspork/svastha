@@ -2,6 +2,17 @@
   import { onDestroy, onMount } from 'svelte'
   import { formatDay, formatTime, dayKey } from '../lib/time'
   import type { AttachmentRef } from '../lib/timeline'
+  import PdfDoc from './PdfDoc.svelte'
+
+  /** How a page's bytes are shown: image/* inline, application/pdf via pdf.js,
+   * anything else as decoded text. Keying off the stored mime keeps both call
+   * sites (owner spine, share view) unchanged — dispatch lives entirely here. */
+  type RenderKind = 'image' | 'pdf' | 'text'
+  function renderKind(mime: string): RenderKind {
+    if (mime.startsWith('image/')) return 'image'
+    if (mime === 'application/pdf') return 'pdf'
+    return 'text'
+  }
 
   let {
     pages,
@@ -27,22 +38,31 @@
   let zoomed = $state(false)
   let loading = $state(true)
   let failed = $state(false)
-  // Object URLs by page index, minted on demand and all revoked on close.
+  // Image pages cache an object URL (the <img> src); pdf/text pages cache the
+  // decoded bytes instead (the renderer wants bytes, not a URL). Both are keyed
+  // by page index; URLs are revoked on close.
   const urls = new Map<number, string>()
+  const byteCache = new Map<number, Uint8Array>()
   let currentUrl = $state<string | null>(null)
+  let currentBytes = $state<Uint8Array | null>(null)
 
   let panel = $state<HTMLDivElement>()
   const previouslyFocused = document.activeElement as HTMLElement | null
 
   const total = $derived(pages.length)
+  const kind = $derived(renderKind(pages[index].mime))
+  const textBody = $derived(currentBytes ? new TextDecoder().decode(currentBytes) : '')
   const recordedDay = $derived(formatDay(dayKey(recordedIso)))
   const recordedTime = $derived(formatTime(recordedIso))
 
   async function show(i: number) {
     zoomed = false
-    const cached = urls.get(i)
-    if (cached) {
-      currentUrl = cached
+    const isImage = renderKind(pages[i].mime) === 'image'
+    const cachedUrl = urls.get(i)
+    const cachedBytes = byteCache.get(i)
+    if (isImage ? cachedUrl : cachedBytes) {
+      currentUrl = isImage ? cachedUrl! : null
+      currentBytes = isImage ? null : cachedBytes!
       loading = false
       failed = false
       return
@@ -50,13 +70,19 @@
     loading = true
     failed = false
     currentUrl = null
+    currentBytes = null
     try {
       const bytes = await loadBytes(pages[i].sha256)
       if (!bytes) throw new Error('missing bytes')
-      const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: pages[i].mime }))
-      urls.set(i, url)
-      // Guard against a race: only apply if the user hasn't paged away.
-      if (i === index) currentUrl = url
+      if (isImage) {
+        const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: pages[i].mime }))
+        urls.set(i, url)
+        // Guard against a race: only apply if the user hasn't paged away.
+        if (i === index) currentUrl = url
+      } else {
+        byteCache.set(i, bytes)
+        if (i === index) currentBytes = bytes
+      }
     } catch {
       if (i === index) failed = true
     } finally {
@@ -89,7 +115,7 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="viewer" role="dialog" aria-modal="true" aria-label="Paper record" tabindex="-1" bind:this={panel}>
+<div class="viewer" role="dialog" aria-modal="true" aria-label="Document" tabindex="-1" bind:this={panel}>
   <div class="bar top">
     <span class="counter" data-testid="viewer-counter">
       {#if total > 1}Page {index + 1} of {total}{:else}1 page{/if}
@@ -104,7 +130,7 @@
       <p class="muted state" data-testid="viewer-loading">Decrypting…</p>
     {:else if failed}
       <p class="state" data-testid="viewer-failed">This page isn't available on this device yet.</p>
-    {:else if currentUrl}
+    {:else if kind === 'image' && currentUrl}
       <div class="scroll" class:zoomed>
         <!-- Tap toggles fit/zoom; keyboard users pan via the scroll container's
              own arrow-key scrolling, and Escape/arrows are handled at the
@@ -118,6 +144,14 @@
           data-testid="viewer-image"
         />
       </div>
+    {:else if kind === 'pdf' && currentBytes}
+      <!-- Re-key on index so paging to another PDF remounts the renderer (it
+           opens the document and paints its canvases in onMount). -->
+      {#key index}
+        <PdfDoc bytes={currentBytes} label={caption || 'Document'} />
+      {/key}
+    {:else if kind === 'text' && currentBytes}
+      <pre class="text" data-testid="viewer-text">{textBody}</pre>
     {/if}
 
     {#if total > 1}
@@ -230,6 +264,20 @@
     max-height: none;
     width: auto;
     cursor: zoom-out;
+  }
+
+  .text {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: var(--space-4);
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+    font-family: var(--font-data);
+    font-size: var(--text-sm);
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
   }
 
   .state {

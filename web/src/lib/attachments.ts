@@ -82,7 +82,7 @@ export async function storeAttachment(
   mime = 'image/jpeg',
 ): Promise<CapturedPhoto> {
   if (bytes.length > MAX_ATTACHMENT_BYTES) {
-    throw new Error('That image is too large to store — try a smaller photo.')
+    throw new Error('That file is over 11 MB — too large to attach. Try a smaller version.')
   }
   const sha256 = await sha256Hex(bytes)
   const record: AttachmentRecord = {

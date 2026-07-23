@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { get as storeGet } from 'svelte/store'
-import { deleteDb, put, get as dbGet } from '../db'
+import { deleteDb, put, del, get as dbGet } from '../db'
 import {
   idsToPull,
   idsToPush,
@@ -219,6 +219,33 @@ describe('attachments codec (att-)', () => {
 
   it('idsToPull includes att- ids now that the codec is registered', () => {
     expect(idsToPull(['att-aaa', 'ev-bbb'], new Set())).toEqual(['att-aaa', 'ev-bbb'])
+  })
+
+  it('round-trips an application/pdf attachment — mime survives encode then decode', async () => {
+    const bytes = new Uint8Array([37, 80, 68, 70, 45, 49, 46, 55]) // "%PDF-1.7"
+    const sha = await sha256Hex(bytes)
+    const id = `att-${sha}`
+    await put('attachments', {
+      sha256: sha,
+      mime: 'application/pdf',
+      size: bytes.length,
+      bytes,
+      capturedAt: new Date().toISOString(),
+    })
+
+    // Seal the local row, drop it, then apply the sealed blob back: the mime is
+    // only carried inside the JSON envelope, so this proves it survives the codec.
+    const sealed = await sealLocalBlob(id, passthroughSealKey())
+    expect(sealed).not.toBeNull()
+    await del('attachments', sha)
+
+    const outcome = await applySealedBlob(id, sealed!, passthroughSealKey())
+    expect(outcome).toBe('new')
+    expect(await dbGet('attachments', sha)).toMatchObject({
+      sha256: sha,
+      mime: 'application/pdf',
+      size: bytes.length,
+    })
   })
 })
 
