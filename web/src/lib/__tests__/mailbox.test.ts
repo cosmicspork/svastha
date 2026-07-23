@@ -11,7 +11,7 @@ import {
   type MailboxIdentity,
   type Envelope,
 } from '../mailbox'
-import { pendingInvites } from '../shared'
+import { pendingInvites, type KeyHandoffInfo } from '../shared'
 import { getProposal, upsertProposal, putProposer, buildProposalRecord } from '../proposals'
 
 beforeEach(async () => {
@@ -230,6 +230,35 @@ describe('pullMailbox dispatch', () => {
 
     expect(result.invites).toHaveLength(1)
     expect(storeGet(pendingInvites)[0].mailboxId).toBe('vaultkey-x')
+  })
+
+  it('routes a re-keying handoff through the injected handler: merge deletes the item, no invite', async () => {
+    const env = keyHandoffEnvelope('kh-merge')
+    const client = fakeClient([{ id: 'item-m', from: NODE, env }])
+    // The handler (shared.ts's handleIncomingKeyHandoff, wasm-backed) is stubbed
+    // to return 'merged' — the post-rotation path that folds a new epoch into an
+    // existing share rather than surfacing a duplicate invite.
+    configureMailbox(client, fakeIdentity(), verifyOk, async () => 'merged')
+
+    const result = await pullMailbox()
+
+    expect(result.merged).toBe(1)
+    expect(result.invites).toEqual([])
+    expect(client.deleted).toContain('item-m')
+  })
+
+  it('routes a handoff through the injected handler: invite surfaces it, with parsed info', async () => {
+    const env = keyHandoffEnvelope('kh-inv')
+    const seen: KeyHandoffInfo[] = []
+    configureMailbox(fakeClient([{ id: 'item-i', from: NODE, env }]), fakeIdentity(), verifyOk, async (info) => {
+      seen.push(info)
+      return 'invite'
+    })
+
+    const result = await pullMailbox()
+
+    expect(result.invites).toHaveLength(1)
+    expect(seen[0]).toMatchObject({ fromEd: NODE, fromX: NODE_X, wrappedHex: 'ab', itemId: 'item-i' })
   })
 
   it('tolerates and ignores an unknown/other kind (chat_msg)', async () => {

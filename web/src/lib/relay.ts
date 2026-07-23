@@ -19,6 +19,16 @@ export interface MailboxItem {
   from: string
 }
 
+/** Optional, relay-enforced narrowing on a grant PUT (see `spec/README.md`,
+ * "Grants"). Both fields are optional; an absent (or empty) scope is an
+ * unscoped, no-expiry grant. */
+export interface GrantScope {
+  /** Blob-id prefix allowlist, e.g. `['ev-', 'att-']`. */
+  prefixes?: string[]
+  /** Expiry in Unix seconds; absent means the grant lives until revoked. */
+  expires_at?: number
+}
+
 /**
  * Version-negotiate with a relay before trusting it with anything: fetch its
  * unauthenticated `/v0/info` and compare `contract_version`. Throws a
@@ -87,9 +97,18 @@ export class RelayClient {
   // --- grants: relay-level read authorization for household sharing ---
 
   /** Authorize `granteeHex` (an Ed25519 public key, hex) to read this
-   * identity's shared blobs. Idempotent. */
-  async putGrant(granteeHex: string): Promise<void> {
-    const res = await this.fetch('PUT', `/v0/grants/${granteeHex}`)
+   * identity's shared blobs. Idempotent upsert. An optional `scope` narrows the
+   * grant with a blob-id prefix allowlist and/or an expiry (Unix seconds); an
+   * absent scope means today's full-read, no-expiry grant. The scope rides the
+   * request body, so it is covered by the auth signature like any other body (see
+   * `spec/README.md`, "Grants"). Re-issuing for an existing grantee replaces the
+   * stored scope in place. */
+  async putGrant(granteeHex: string, scope?: GrantScope): Promise<void> {
+    const body =
+      scope && (scope.prefixes?.length || scope.expires_at !== undefined)
+        ? new TextEncoder().encode(JSON.stringify(scope))
+        : undefined
+    const res = await this.fetch('PUT', `/v0/grants/${granteeHex}`, body)
     if (!res.ok) throw new Error(`putGrant ${granteeHex}: ${res.status}`)
   }
 
