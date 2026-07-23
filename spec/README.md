@@ -257,9 +257,11 @@ produce. Regenerate with `cargo run -p svastha-core --example curation_vectors`
 
 The relay is a zero-knowledge store-and-forward server: it holds no keys, stores
 only ciphertext and routing metadata, and authenticates every request by an
-Ed25519 signature. Authentication is **stateless and per-request** — no sessions,
-no server secrets, no nonce store — which keeps the relay a dumb, keyless single
-binary anyone can self-host.
+Ed25519 signature. Authentication is **per-request** — no sessions and no server
+secrets — which keeps the relay a dumb, keyless single binary anyone can
+self-host. The only server-side auth state is an **ephemeral replay guard** (a
+nonce store, see the Auth handshake below): it holds no secret and is cleared by
+a restart, so it does not compromise that keyless, self-hostable posture.
 
 ### Auth handshake
 
@@ -289,10 +291,33 @@ Transport: the client sends three hex headers alongside the request —
 
 The relay recomputes the preimage from the actual request and verifies the
 signature against `Svastha-Public-Key`. The signed `timestamp` bounds replay: the
-relay rejects requests outside a small freshness window (a server policy). Within
-that window a signed request can still be replayed; since v1 blobs are stored
-under the caller's own key, a replay only re-stores the caller's own ciphertext.
-A nonce store is a later hardening.
+relay rejects requests outside a small freshness window (a server policy).
+
+**Replay guard (nonce store).** Within that freshness window, the relay also
+remembers the `Svastha-Signature` of each **state-changing** request (any method
+other than `GET`/`HEAD`) and rejects a second request bearing the same signature
+as a replay (`401`). Because the preimage binds the method, path, body hash, and
+timestamp, and Ed25519 (RFC 8032) is deterministic, a captured request replays
+byte-for-byte with the *identical* signature — so the signature itself is the
+nonce, and no nonce field is added to the wire format. The signed bytes are
+unchanged; this is a server-side policy like the freshness window.
+
+Idempotent reads (`GET`/`HEAD`) are deliberately **not** guarded: replaying one
+has no effect — it returns data the caller already holds and reveals nothing new
+— and because the signed timestamp is only second-granular, guarding reads would
+falsely reject a client that legitimately repeats a listing within the same
+second (e.g. two pulls racing on unlock and tab-focus). The guarded surface is
+exactly the requests where a replay could ever matter.
+
+A signature is remembered only until its `timestamp` ages out of the window
+(after which the freshness check rejects it anyway), so the store holds at most
+one window of traffic. It is **in-memory only**: a restart clears it, briefly
+reopening replay for still-fresh signatures — accepted deliberately to keep the
+relay a keyless single binary with no durable auth state, since the residual
+exposure requires replaying a captured live request across the exact moment of a
+restart. A client always re-signs each attempt with the current time, so a
+genuine retry carries a fresh timestamp (and signature) and is never mistaken for
+a replay.
 
 Test vectors: [`vectors/relay-auth.json`](vectors/relay-auth.json). Each entry
 pins a `method` + `path` + `body` + `timestamp` + `signer_seed` → the `canon`
@@ -380,6 +405,47 @@ already-verified auth identity — not a claim the client makes about itself —
 which the receiving client then binds to whatever identity the payload itself
 claims to be from, so a mismatch is detectable.
 
+### Push channel
+
+The pull endpoints above (blob list, mailbox list) are the single source of
+truth for what a client holds. On top of them, one long-lived endpoint lets the
+relay **poke** a connected client to pull sooner, instead of waiting for its
+poll timer:
+
+| Method & path | Auth | Body | Success | Notes |
+|---|---|---|---|---|
+| `GET /v0/events` | yes | — | `200` `text/event-stream` | long-lived stream of payload-free pokes for the authed caller |
+
+The stream carries **payload-free pokes only** — Server-Sent Events whose
+`event:` field names *which* pull to run (`blobs` or `mailbox`), with a single
+non-informative `data:` byte. A poke never carries a blob id, count, owner, or
+any content, so the push channel reveals nothing the relay does not already
+route, and stays as zero-knowledge as every other endpoint. Authentication is
+the ordinary handshake above; because native `EventSource` cannot set request
+headers, a client opens the stream with fetch-streaming (a normal `GET` whose
+body it reads incrementally), so nothing endpoint-specific is added.
+
+The channel is **lossy by design and carries no delivery guarantee.** The pull
+path remains authoritative, so a dropped poke costs nothing — the client
+discovers the change on its next pull regardless (on unlock, on a timer, on tab
+focus). The relay buffers nothing for a disconnected client and never replays
+missed pokes; a poke reaches only a stream connected at the instant it fires.
+A client that has fallen behind may receive a generic `sync` poke (pull
+everything) in place of the specific ones it missed.
+
+The relay pokes an identity when something it can pull changes: a **`mailbox`**
+poke to a recipient when an item is deposited for it, and a **`blobs`** poke to a
+blob owner's own other streams *and* to every identity holding a live grant on
+that vault when a blob is written or deleted. Which identities can read a vault
+is grant metadata the relay already holds, so poking them leaks nothing new.
+
+A **heartbeat** comment (`:`), sent roughly every 30 seconds, keeps the idle
+connection alive across intermediaries that close a quiet stream (commonly after
+~60 seconds); it is a payload-free SSE comment, never content. An operator
+terminating TLS or load-balancing in front of the relay must set the proxy
+read/idle timeout above the heartbeat interval so the stream is not severed
+mid-life.
+
 ### Shares
 
 A **share** lets a record owner hand a subset of their history to a doctor (or
@@ -466,11 +532,15 @@ bearer hit the link, and when). It never learns the bundle's content, its scope
 recipient authenticates with nothing, and the decryption key never reaches the
 relay.
 
-The relay is stateless and keyless: it never decrypts, holds no user keys, and
-ships as a single static binary for self-hosting. All of the above — blobs,
-grants, mailbox, and shares — reuse the one auth handshake, except the share
-*read*, the system's only unauthenticated endpoint (its bearer token stands in
-for auth). Server-side semantics (the two-404 non-leak rule and the share read's
-deliberate `410`/`404` exception to it, the mailbox and share caps, the expiry
-clamp, method routing) are pinned by the relay's integration tests rather than by
-test vectors, since none of it changes the signed bytes.
+The relay is keyless and holds no durable server state beyond the blobs, grants,
+mailbox items, and shares themselves: it never decrypts, holds no user keys, and
+ships as a single static binary for self-hosting (the auth replay guard and the
+push-channel hub are ephemeral in-memory state, not secrets, cleared by a
+restart). All of the above — blobs, grants, mailbox, shares, and the event
+stream — reuse the one auth handshake, except the share *read*, the system's
+only unauthenticated endpoint (its bearer token stands in for auth). Server-side
+semantics (the two-404 non-leak rule and the share read's deliberate `410`/`404`
+exception to it, the mailbox and share caps, the expiry clamp, the replay-guard
+rejection, the payload-free/lossy push channel, method routing) are pinned by the
+relay's integration tests rather than by test vectors, since none of it changes
+the signed bytes.

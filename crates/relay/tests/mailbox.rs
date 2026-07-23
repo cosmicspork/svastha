@@ -95,13 +95,15 @@ async fn deposit_list_get_delete_round_trip() {
         .unwrap();
     assert_eq!(gone.status(), StatusCode::NOT_FOUND);
 
+    // Fresh timestamp so this repeat DELETE is a distinct request, not a
+    // byte-identical replay of `del` above (the auth nonce guard rejects those).
     let del_again = app
         .oneshot(signed(
             &bob,
             "DELETE",
             &format!("/v0/mailbox/{id}"),
             b"",
-            now(),
+            now() + 1,
         ))
         .await
         .unwrap();

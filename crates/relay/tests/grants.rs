@@ -26,8 +26,10 @@ async fn grant_lifecycle_and_idempotency() {
     let alice = Identity::from_seed(b"alice");
     let bob = Identity::from_seed(b"bob");
 
-    // Granting twice is a no-op success, not an error.
-    for _ in 0..2 {
+    // Granting twice is a no-op success, not an error. Distinct timestamps
+    // because the replay guard rejects a byte-identical re-send; a real client
+    // re-grants later with a fresh timestamp, which is what `now() + i` models.
+    for i in 0..2 {
         let put = app
             .clone()
             .oneshot(signed(
@@ -35,7 +37,7 @@ async fn grant_lifecycle_and_idempotency() {
                 "PUT",
                 &format!("/v0/grants/{}", hex_pk(&bob)),
                 b"",
-                now(),
+                now() + i,
             ))
             .await
             .unwrap();
@@ -63,14 +65,15 @@ async fn grant_lifecycle_and_idempotency() {
         .unwrap();
     assert_eq!(del.status(), StatusCode::NO_CONTENT);
 
-    // Revoking an already-revoked (or never-granted) pair is 404.
+    // Revoking an already-revoked (or never-granted) pair is 404. A fresh
+    // timestamp so it is a distinct request, not a replay of `del` above.
     let del_again = app
         .oneshot(signed(
             &alice,
             "DELETE",
             &format!("/v0/grants/{}", hex_pk(&bob)),
             b"",
-            now(),
+            now() + 1,
         ))
         .await
         .unwrap();

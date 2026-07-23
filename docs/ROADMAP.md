@@ -12,10 +12,8 @@ harvest a PR's "## Deferred" notes into the list.
 
 ## Sync & protocol
 
-- Relay push channel (clients poll today)
 - Key rotation for real revocation
 - Blob-list pagination and manifests; curation etags
-- Relay nonce store (auth replay hardening)
 - Multi-writer sync (needs new conflict machinery; ends the single-writer
   assumption — signed curation is the prerequisite, now in place)
 
