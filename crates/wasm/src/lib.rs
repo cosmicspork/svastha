@@ -14,6 +14,7 @@ use wasm_bindgen::prelude::*;
 use svastha_core::curation::{merge as merge_curation_records, SignedCurationRecord};
 use svastha_core::envelope::{wrap_key, DataKey, Sealed, WrappedKey};
 use svastha_core::event::{Code, Event, EventKind, EventValue, Proposed, Provenance, SignedEvent};
+use svastha_core::keyring::Keyring;
 use svastha_core::keys::Identity;
 use svastha_core::mailbox::{MailboxMessage, MessageKind};
 use svastha_core::relay::{sign_request as relay_sign_request, AuthRequest};
@@ -264,6 +265,137 @@ impl WasmDataKey {
             .map_err(|_| JsError::new("recipient public key must be 32 bytes"))?;
         let recipient = PublicKey::from(bytes);
         Ok(wrap_key(&recipient, &self.key).to_bytes())
+    }
+}
+
+/// A vault-key **keyring**: the epoch keys behind one vault (`vault.key`). Newer
+/// blobs seal under the newest epoch while every earlier epoch keeps opening its
+/// own — this is how revocation rotates for real without re-encrypting the log.
+/// See `docs/ARCHITECTURE.md`, "Vaults and grants" / "Sync and backup", and
+/// `spec/README.md`, "Key epochs (the vault keyring)".
+#[wasm_bindgen]
+pub struct WasmKeyring {
+    keyring: Keyring,
+}
+
+/// Parse a 32-byte X25519 public key from the JS boundary.
+fn x25519_from(bytes: &[u8]) -> Result<PublicKey, JsError> {
+    let bytes: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| JsError::new("public key must be 32 bytes"))?;
+    Ok(PublicKey::from(bytes))
+}
+
+#[wasm_bindgen]
+impl WasmKeyring {
+    /// Build a genesis (epoch-0) keyring wrapping `data_key` to the owner's 32-byte
+    /// X25519 public key — the `vault.key` a fresh vault publishes.
+    pub fn genesis(
+        data_key: &WasmDataKey,
+        owner_x25519_public: &[u8],
+    ) -> Result<WasmKeyring, JsError> {
+        let owner = x25519_from(owner_x25519_public)?;
+        Ok(WasmKeyring {
+            keyring: Keyring::genesis(&owner, &data_key.key),
+        })
+    }
+
+    /// Parse `vault.key` bytes: the keyring container, or a legacy single-key
+    /// `vault.key` (a bare wrapped key) read as an epoch-0 genesis keyring.
+    pub fn from_bytes(bytes: &[u8]) -> Result<WasmKeyring, JsError> {
+        Ok(WasmKeyring {
+            keyring: Keyring::from_bytes(bytes).map_err(to_js)?,
+        })
+    }
+
+    /// The canonical `vault.key` bytes to store at the relay.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.keyring.to_bytes()
+    }
+
+    /// The newest epoch id (hex) — the epoch new blobs seal under.
+    #[wasm_bindgen(getter)]
+    pub fn newest_epoch_id_hex(&self) -> String {
+        self.keyring.newest().id_hex()
+    }
+
+    /// Unwrap the newest epoch's data key with the owner's identity — the key new
+    /// blobs seal under. (`seal_blob` does this internally; expose it for callers
+    /// that seal in bulk.)
+    pub fn newest_key(&self, owner: &WasmIdentity) -> Result<WasmDataKey, JsError> {
+        Ok(WasmDataKey {
+            key: self.keyring.newest_key(&owner.identity).map_err(to_js)?,
+        })
+    }
+
+    /// Mint the next epoch (revoke-and-rotate / "rotate now"): a fresh key wrapped
+    /// to the owner's X25519 public key, marked `created_at` (Unix milliseconds,
+    /// `Date.now()`). Returns the extended keyring to re-store as `vault.key`; new
+    /// blobs then seal under `newest_key`.
+    pub fn rotate(
+        &self,
+        owner_x25519_public: &[u8],
+        created_at: f64,
+    ) -> Result<WasmKeyring, JsError> {
+        let owner = x25519_from(owner_x25519_public)?;
+        let (keyring, _new_key) = self.keyring.rotate(&owner, created_at as i64);
+        Ok(WasmKeyring { keyring })
+    }
+
+    /// Merge another keyring into this one by **union of epochs** (e.g. a
+    /// relay-held `vault.key` against the local one, or keyrings from independent
+    /// relays). Deterministic and commutative; every epoch key is retained.
+    pub fn merge(&self, other: &WasmKeyring) -> WasmKeyring {
+        WasmKeyring {
+            keyring: Keyring::merge(&self.keyring, &other.keyring),
+        }
+    }
+
+    /// Re-wrap every epoch from the owner to a grantee's X25519 public key — the
+    /// keyring a still-trusted grantee receives in a `key_handoff` on re-keying (it
+    /// can open every past and current epoch). A revoked identity is simply never
+    /// handed the result. Returns the wrapped keyring to hex-encode into the
+    /// `key_handoff` body's `wrapped_hex`.
+    pub fn wrap_for_grantee(
+        &self,
+        owner: &WasmIdentity,
+        grantee_x25519_public: &[u8],
+    ) -> Result<WasmKeyring, JsError> {
+        let grantee = x25519_from(grantee_x25519_public)?;
+        Ok(WasmKeyring {
+            keyring: self
+                .keyring
+                .wrap_for_grantee(&owner.identity, &grantee)
+                .map_err(to_js)?,
+        })
+    }
+
+    /// Seal a new blob for `blob_id` under the newest epoch, binding the epoch
+    /// marker into the AAD (the relay stays blind to rotation). Returns the sealed
+    /// wire bytes to store at `blob_id`.
+    pub fn seal_blob(
+        &self,
+        owner: &WasmIdentity,
+        blob_id: &str,
+        plaintext: &[u8],
+    ) -> Result<Vec<u8>, JsError> {
+        self.keyring
+            .seal_blob(&owner.identity, blob_id.as_bytes(), plaintext)
+            .map_err(to_js)
+    }
+
+    /// Open a blob sealed under *some* epoch of this ring: trial-decrypts across
+    /// epochs, so a pre-rotation blob (bare `blob_id` AAD) and a rotated blob
+    /// (marked AAD) both open. Fails only if no epoch's key and AAD authenticate.
+    pub fn open_blob(
+        &self,
+        owner: &WasmIdentity,
+        blob_id: &str,
+        sealed: &[u8],
+    ) -> Result<Vec<u8>, JsError> {
+        self.keyring
+            .open_blob(&owner.identity, blob_id.as_bytes(), sealed)
+            .map_err(to_js)
     }
 }
 
