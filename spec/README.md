@@ -791,6 +791,73 @@ terminating TLS or load-balancing in front of the relay must set the proxy
 read/idle timeout above the heartbeat interval so the stream is not severed
 mid-life.
 
+#### Web Push
+
+The SSE stream reaches a client only while a stream is open — no help to a phone
+whose PWA is closed. So the **same poke bus** has a second transport: for an
+identity that has registered a Web Push subscription, a poke also goes out as a
+VAPID-signed **Web Push** (RFC 8030 / 8291), waking a locked phone's service
+worker to show a generic "something is waiting" notification. It rides the SSE
+pokes' triggers exactly — a mailbox deposit, or a blob write visible under the
+identity's grant scope — and inherits their lossy-by-design contract: a dropped
+push costs nothing, since the next pull reconciles.
+
+Web Push is **optional relay behavior**, enabled only when the operator supplies
+a VAPID keypair. With none, the endpoints below answer `503` and every other
+endpoint is unaffected. Like the SSE channel and the nonce guard, it changes no
+signed byte format, so it does **not** move `CONTRACT_VERSION`.
+
+| Method & path | Auth | Body | Success | Notes |
+|---|---|---|---|---|
+| `GET /v0/push/key` | yes | — | `200 {"vapid_public_key":"<base64url>"}` / `503` | the VAPID public key the client subscribes with (`applicationServerKey`) |
+| `PUT /v0/push` | yes | subscription JSON | `204` / `503` | register (or replace) a subscription for the caller |
+| `DELETE /v0/push` | yes | subscription or empty | `204` / `503` | unregister one subscription, or **all** on an empty body |
+
+The `PUT`/`DELETE` body is the standard Web Push subscription object the browser
+produces:
+
+```
+{ "endpoint": "https://<push-service>/…",
+  "keys": { "p256dh": "<base64url>", "auth": "<base64url>" } }
+```
+
+- **Multiple per identity.** One identity may register several subscriptions,
+  one per device/browser; each is keyed on a hash of its `endpoint`, so
+  re-registering the same device replaces its entry rather than duplicating it.
+- **`DELETE` semantics.** A body naming a single `{ "endpoint": … }` removes just
+  that device; an **empty-body `DELETE` clears every subscription for the
+  identity** (a global "turn notifications off"). `DELETE` is idempotent — `204`
+  whether or not anything matched. Registration `PUT`/`DELETE` bodies are capped
+  at 4 KiB (`413` past it), a subscription being a tiny JSON object.
+- **Payload-free by construction.** The push carries **no content** — never a
+  blob id, count, kind, or owner — only a constant, information-free marker,
+  encrypted (aes128gcm) to the subscription's own keys. The push services
+  (Apple, Google, Mozilla) therefore learn only that a poke happened *and when*
+  — the same timing metadata a watcher of the SSE connection already sees — and
+  never anything the relay itself cannot read. The service worker shows a
+  generic notification and, by design, could not decrypt medical content even if
+  the push carried it (svastha seals its keys at rest while the vault is locked).
+- **Collapse window.** A sync burst is **one** push, not a dozen: the relay
+  debounces per identity (a few seconds), so a run of blob writes for one logical
+  change wakes the phone once. The **SSE** stream is unaffected — it stays
+  real-time; only Web Push, which costs a lock-screen interruption, is debounced.
+- **Foregrounded suppression.** An identity that currently holds a live SSE
+  stream is already poked in real time there, so the relay **skips** the
+  redundant Web Push to it. Best-effort — a stream dropping in the same instant
+  just means a missed push, which the next pull corrects.
+- **Pruning.** A subscription the push service reports permanently gone (`404`)
+  or invalid (`410`) is **removed** from the store, so the relay stops trying.
+  Transient failures are left in place and retried on the next poke. Sends are
+  spawned **off the write's hot path**, so a slow or unreachable push service
+  never blocks the blob/mailbox write that triggered the poke.
+
+**What the push services learn.** The subscription endpoint and its transport
+keys (needed to encrypt to the service) plus poke *timing* — never a blob id,
+count, owner, the record's content, or which vault changed. The subscription
+store is pure routing metadata, the same class as a grant edge; the relay holds
+no key that can read a notification. Server-side semantics here are pinned by the
+relay's integration tests, since none of it alters the signed bytes.
+
 ### Shares
 
 A **share** lets a record owner hand a subset of their history to a doctor (or
@@ -878,12 +945,14 @@ recipient authenticates with nothing, and the decryption key never reaches the
 relay.
 
 The relay is keyless and holds no durable server state beyond the blobs, grants,
-mailbox items, and shares themselves: it never decrypts, holds no user keys, and
-ships as a single static binary for self-hosting (the auth replay guard and the
-push-channel hub are ephemeral in-memory state, not secrets, cleared by a
-restart). All of the above — blobs, grants, mailbox, shares, and the event
-stream — reuse the one auth handshake, except the share *read*, the system's
-only unauthenticated endpoint (its bearer token stands in for auth). Server-side
+mailbox items, shares, and Web Push subscriptions themselves: it never decrypts,
+holds no *user* keys (the VAPID keypair authenticates only the relay to the push
+services and reads nothing), and ships as a single static binary for self-hosting
+(the auth replay guard, the SSE poke hub, and the per-identity collapse clock are
+ephemeral in-memory state, not secrets, cleared by a restart). All of the above —
+blobs, grants, mailbox, shares, the event stream, and push registration — reuse
+the one auth handshake, except the share *read*, the system's only
+unauthenticated endpoint (its bearer token stands in for auth). Server-side
 semantics (the two-404 non-leak rule and the share read's deliberate `410`/`404`
 exception to it, the mailbox and share caps, the expiry clamp, the replay-guard
 rejection, the payload-free/lossy push channel, method routing) are pinned by the

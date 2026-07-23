@@ -24,6 +24,7 @@ fn router(app_url: Option<String>) -> axum::Router {
         Arc::new(MemoryShareStore::new()),
         SKEW,
         app_url,
+        None,
     )
 }
 

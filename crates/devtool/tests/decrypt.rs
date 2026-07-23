@@ -42,6 +42,7 @@ fn spawn_relay() -> String {
                 Arc::new(MemoryShareStore::new()),
                 300,
                 None,
+                None,
             );
             axum::serve(listener, app).await.expect("serve relay");
         });

@@ -28,6 +28,11 @@ tempfile = "3"
 tower-http = { version = "0.6", features = ["cors"] }
 # Render the landing page's QR as inline SVG (no raster/image dep needed).
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+# Web Push fan-out: VAPID signing + RFC 8291 payload encryption to push services
+# (Apple/Google/Mozilla). `isahc` is its bundled async HTTP client.
+web-push = "0.11"
+# Hash a subscription endpoint into a stable per-device store key.
+sha2 = "0.10"
 
 [dev-dependencies]
 # ServiceExt::oneshot drives the router in-process, no port binding.

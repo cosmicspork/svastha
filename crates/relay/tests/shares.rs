@@ -30,6 +30,7 @@ fn router_with_shares(shares: Arc<dyn ShareStore>) -> axum::Router {
         shares,
         SKEW,
         None,
+        None,
     )
 }
 

@@ -251,6 +251,7 @@ async fn filesystem_store_persists_across_restart() {
         Arc::new(MemoryShareStore::new()),
         SKEW,
         None,
+        None,
     );
     let put = first
         .oneshot(signed(&alice, "PUT", "/v0/blobs/rec1", blob, now()))
@@ -265,6 +266,7 @@ async fn filesystem_store_persists_across_restart() {
         Arc::new(MemoryMailboxStore::new()),
         Arc::new(MemoryShareStore::new()),
         SKEW,
+        None,
         None,
     );
     let get = second

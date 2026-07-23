@@ -607,6 +607,7 @@ async fn fs_grant_store_persists_across_router_rebuild() {
             Arc::new(MemoryShareStore::new()),
             SKEW,
             None,
+            None,
         )
     };
 
