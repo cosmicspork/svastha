@@ -12,10 +12,9 @@ import {
   pullShared,
   pendingInvites,
   type SharingClient,
-  type OpenKey,
-  type UnwrapIdentity,
   type Share,
 } from '../shared'
+import type { WasmIdentity } from '../svastha'
 import { get as storeGet } from 'svelte/store'
 
 beforeEach(async () => {
@@ -38,15 +37,12 @@ function fakeShare(overrides: Partial<Share> = {}): Share {
   }
 }
 
-/** A pass-through open key: "opening" just returns the sealed bytes, so tests
- * can plant plaintext JSON directly as the "sealed" blob (same trick as
- * sync.test.ts's `passthroughSealKey`). */
-function passthroughOpenKey(): OpenKey {
-  return { open: (sealed) => sealed }
-}
-
-function fakeIdentity(): UnwrapIdentity {
-  return { unwrap_key: () => passthroughOpenKey() }
+/** A non-null stand-in identity. The pullShared branches these tests exercise
+ * (no-op-until-configured, and the 404-stale path) never build a keyring
+ * open-key, so the identity is only ever checked for presence — the real
+ * open/verify path needs wasm and is covered by e2e/share.spec.ts. */
+function fakeIdentity(): WasmIdentity {
+  return {} as unknown as WasmIdentity
 }
 
 function fakeSharingClient(overrides: Partial<SharingClient> = {}): SharingClient {

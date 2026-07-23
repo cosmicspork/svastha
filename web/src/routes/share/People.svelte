@@ -4,7 +4,7 @@
   import { navigate } from '../../lib/router.svelte'
   import { session } from '../../lib/session.svelte'
   import { RelayClient } from '../../lib/relay'
-  import { toHex, fromHex } from '../../lib/hex'
+  import type { WasmKeyring } from '../../lib/svastha'
   import {
     buildExchangeCode,
     parseExchangeCode,
@@ -15,6 +15,8 @@
     ExchangeCodeError,
   } from '../../lib/exchange'
   import { listShares, removeShare, type Share } from '../../lib/shared'
+  import { enrollGrantee, getGrantMeta, removeGrantMeta, granteesToReKey } from '../../lib/grants'
+  import { revokeAndRotate } from '../../lib/keyring'
   import QrScanner from '../../components/QrScanner.svelte'
 
   /** Local-only label for a grantee — display convenience, never sent to the
@@ -92,28 +94,30 @@
 
   async function confirmShare() {
     const parsed = parsedCode.code
-    if (!parsed || !relay || !session.identity || !session.vaultKey) return
+    if (!parsed || !relay || !session.identity) return
+    if (!session.keyring) {
+      shareError = 'Still connecting to the relay — try again in a moment.'
+      return
+    }
     shareBusy = true
     shareError = ''
     shareDone = false
     try {
-      await relay.putGrant(parsed.ed25519Hex)
-
-      const wrapped = session.vaultKey.wrap_to(fromHex(parsed.x25519Hex))
-      const myEd8 = session.identity.ed25519_public_hex.slice(0, 8)
-      const payload = {
-        v: 1,
-        from_ed: session.identity.ed25519_public_hex,
-        from_x25519: session.identity.x25519_public_hex,
-        label: displayName,
-        wrapped_hex: toHex(wrapped),
-      }
-      await relay.putMailbox(
-        parsed.ed25519Hex,
-        `vaultkey-${myEd8}`,
-        new TextEncoder().encode(JSON.stringify(payload)),
-      )
-
+      // A household share: a scoped grant (record + captured documents) plus the
+      // vault keyring re-wrapped to them in a signed key_handoff, so a later
+      // rotation can re-key them (see lib/grants.ts).
+      await enrollGrantee({
+        relay,
+        identity: session.identity,
+        keyring: session.keyring,
+        ownerLabel: displayName,
+        grantee: {
+          ed: parsed.ed25519Hex,
+          x25519: parsed.x25519Hex,
+          label: parsed.label,
+          kind: 'household',
+        },
+      })
       await rememberPeer(parsed.ed25519Hex, parsed.label)
       pasteInput = ''
       shareDone = true
@@ -146,9 +150,23 @@
     peers = await loadPeers()
   }
 
+  // Revoke is always revoke-and-rotate (a revoke without rotation is dishonest):
+  // delete the grant edge, mint a new epoch, and re-key every still-trusted
+  // grantee. The revoked identity keeps what it already synced and old-epoch
+  // material — see the caveat copy below — but everything sealed after is beyond
+  // it. The full confirmation flow lives on the Devices & grants screen.
   async function revoke(edHex: string): Promise<void> {
-    if (!relay) return
-    await relay.deleteGrant(edHex)
+    if (!relay || !session.identity || !session.keyring) return
+    const meta = await getGrantMeta()
+    const rotated = await revokeAndRotate({
+      relay,
+      identity: session.identity,
+      keyring: session.keyring,
+      grantees: granteesToReKey(meta, edHex),
+      revoke: edHex,
+    })
+    session.keyring = rotated as unknown as WasmKeyring
+    await removeGrantMeta(edHex)
     await refreshGrants()
   }
 
@@ -258,8 +276,8 @@
         {/each}
       </ul>
       <p class="muted">
-        They keep anything already synced to their device. Full lock-out needs key rotation — not
-        built yet.
+        Revoking rotates your vault key and re-keys everyone still trusted. The revoked person
+        keeps only what they already synced; everything from now on is beyond them.
       </p>
     </section>
   {/if}
