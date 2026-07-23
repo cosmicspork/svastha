@@ -59,3 +59,31 @@ test('imports an XDM package and a FHIR bundle, dedupes across formats, and re-i
   // (see sync.ts's provenance codec) -- the outbox drains to empty either way.
   await waitForPushed(page)
 })
+
+test('opens an imported source document from the entry detail panel', async ({ page }) => {
+  await onboardViaUI(page)
+  await connectRelayViaUI(page)
+  await goToImport(page)
+
+  await page.getByTestId('import-file-input').setInputFiles([XDM_ZIP, FHIR_BUNDLE])
+  await page.getByTestId('import-commit').click()
+  await expect(page.getByTestId('import-done')).toContainText('22')
+  await page.getByTestId('import-view-timeline').click()
+
+  // "Temperature" (LOINC 8310-5) is only in the FHIR bundle, not the C-CDA
+  // fixture, so its source document is unambiguously bundle-minimal.json.
+  const trigger = page.getByTestId('spine-entry-trigger').filter({ hasText: 'Temperature' })
+  await trigger.click()
+
+  // The detail panel (`.stub-wrap`) is a DOM sibling of the row, not a
+  // descendant of it (SpineEntry.svelte renders both as root elements), and
+  // it's always present (even collapsed) so aria-controls resolves — scope
+  // through that same id rather than `spine-entry`'s subtree.
+  const stubId = await trigger.getAttribute('aria-controls')
+  const sourceDocButton = page.locator(`#${stubId}`).getByTestId('spine-entry-source-doc')
+  await sourceDocButton.click()
+
+  await expect(page.getByTestId('viewer-text')).toContainText('Body temperature')
+  await page.getByTestId('viewer-close').click()
+  await expect(sourceDocButton).toBeFocused()
+})

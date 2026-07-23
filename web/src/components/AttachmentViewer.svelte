@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte'
   import { formatDay, formatTime, dayKey } from '../lib/time'
   import type { AttachmentRef } from '../lib/timeline'
+  import { prettyTextForDoc } from '../lib/provenance'
   import PdfDoc from './PdfDoc.svelte'
 
   /** How a page's bytes are shown: image/* inline, application/pdf via pdf.js,
@@ -51,7 +52,7 @@
 
   const total = $derived(pages.length)
   const kind = $derived(renderKind(pages[index].mime))
-  const textBody = $derived(currentBytes ? new TextDecoder().decode(currentBytes) : '')
+  const pretty = $derived(currentBytes ? prettyTextForDoc(currentBytes, pages[index].mime) : null)
   const recordedDay = $derived(formatDay(dayKey(recordedIso)))
   const recordedTime = $derived(formatTime(recordedIso))
 
@@ -150,8 +151,15 @@
       {#key index}
         <PdfDoc bytes={currentBytes} label={caption || 'Document'} />
       {/key}
-    {:else if kind === 'text' && currentBytes}
-      <pre class="text" data-testid="viewer-text">{textBody}</pre>
+    {:else if kind === 'text' && pretty}
+      <div class="text-wrap">
+        {#if pretty.truncated}
+          <p class="truncated-notice" data-testid="viewer-truncated">
+            Showing the first part of this large document.
+          </p>
+        {/if}
+        <pre class="text" data-testid="viewer-text">{pretty.text}</pre>
+      </div>
     {/if}
 
     {#if total > 1}
@@ -266,9 +274,30 @@
     cursor: zoom-out;
   }
 
-  .text {
+  .text-wrap {
     width: 100%;
     height: 100%;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  /* Hardcoded, not a --flare token: the viewer's chrome (.viewer above) is
+     always dark regardless of the app theme, so this stays legible against
+     the fixed black stage instead of tracking light-dark(). */
+  .truncated-notice {
+    flex: none;
+    margin: 0;
+    padding: var(--space-2) var(--space-4);
+    font-size: var(--text-xs);
+    color: #e0a84a;
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .text {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
     margin: 0;
     padding: var(--space-4);
     overflow: auto;

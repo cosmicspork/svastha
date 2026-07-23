@@ -7,7 +7,8 @@
   import { CATEGORIES, CATEGORY_META, type Category } from '../lib/category'
   import { allCurationByPrefix, allTags, setHidden } from '../lib/curation'
   import { attachmentBytes } from '../lib/attachments'
-  import type { TimelineEntry } from '../lib/timeline'
+  import { getProvenance, provenanceBytes, mimeForDocName } from '../lib/provenance'
+  import type { AttachmentRef, TimelineEntry } from '../lib/timeline'
   import SpineEntry from './SpineEntry.svelte'
   import AttachmentViewer from './AttachmentViewer.svelte'
   import TagChips from './TagChips.svelte'
@@ -39,6 +40,28 @@
   // and the read-only (household) spine load bytes from the local `attachments`
   // store — the household pull mirrors att- blobs into it too (see shared.ts).
   let viewerEntry = $state<TimelineEntry | null>(null)
+
+  // The imported source document whose viewer is open, or null. Distinct from
+  // `viewerEntry` (a paper-record capture): this reads the local `provenance`
+  // store, not `attachments`, and its caption/recordedIso come from the
+  // provenance record rather than the entry.
+  interface SourceDocViewer {
+    page: AttachmentRef
+    caption: string
+    recordedIso: string
+  }
+  let sourceDocViewer = $state<SourceDocViewer | null>(null)
+
+  async function openSourceDoc(entry: TimelineEntry): Promise<void> {
+    const sha256 = entry.detail.sourceDoc
+    if (!sha256) return
+    const record = await getProvenance(sha256)
+    sourceDocViewer = {
+      page: { sha256, mime: record ? mimeForDocName(record.name) : 'text/plain' },
+      caption: record?.name ?? 'Source document',
+      recordedIso: record?.importedAt ?? entry.effective_at,
+    }
+  }
 
   let tagsByEvent = $state<Map<string, string[]>>(new Map())
   let hiddenEvents = $state<Set<string>>(new Set())
@@ -210,6 +233,7 @@
               onTagsChanged={handleTagsChanged}
               onToggleHidden={handleToggleHidden}
               onOpenViewer={(e) => (viewerEntry = e)}
+              onOpenSourceDoc={() => openSourceDoc(entry)}
             />
           {/each}
         </section>
@@ -235,6 +259,16 @@
       source={viewerEntry.detail.source}
       loadBytes={attachmentBytes}
       onclose={() => (viewerEntry = null)}
+    />
+  {/if}
+
+  {#if sourceDocViewer}
+    <AttachmentViewer
+      pages={[sourceDocViewer.page]}
+      caption={sourceDocViewer.caption}
+      recordedIso={sourceDocViewer.recordedIso}
+      loadBytes={provenanceBytes}
+      onclose={() => (sourceDocViewer = null)}
     />
   {/if}
 {/if}

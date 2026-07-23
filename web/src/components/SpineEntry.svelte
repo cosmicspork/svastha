@@ -16,6 +16,7 @@
     onTagsChanged,
     onToggleHidden,
     onOpenViewer,
+    onOpenSourceDoc,
   }: {
     entry: TimelineEntry
     /** Entrance animation runs only on the spine's first render. */
@@ -33,6 +34,11 @@
     /** Open the full-screen viewer for a captured paper record. Supplied by
      * both the owner spine and the read-only share view. */
     onOpenViewer?: (entry: TimelineEntry) => void
+    /** Open the viewer on this entry's imported source document (the `doc-`
+     * provenance blob its facts were mapped from). Undefined on callers that
+     * don't offer it (e.g. ShareView, which never bundles `doc-` blobs), in
+     * which case the Document row stays today's plain sha256 text. */
+    onOpenSourceDoc?: () => void
   } = $props()
 
   const meta = $derived(CATEGORY_META[entry.category])
@@ -59,6 +65,11 @@
   // content: multi-paragraph prose, or a long single run.
   function isLongNote(text: string): boolean {
     return text.split('\n').length > 3 || text.length > 200
+  }
+  // First 8 + last 4 hex chars: enough to eyeball-match against another
+  // device without printing the full 64-char sha256 inline.
+  function shortenSha(sha: string): string {
+    return sha.length <= 14 ? sha : `${sha.slice(0, 8)}…${sha.slice(-4)}`
   }
   const stubId = $derived(`stub-${primaryEventId}`)
   const detail = $derived(entry.detail)
@@ -206,7 +217,21 @@
         {#if detail.sourceDoc}
           <div class="stub-row">
             <dt>Document</dt>
-            <dd class="doc data">{detail.sourceDoc}</dd>
+            {#if onOpenSourceDoc}
+              <dd class="doc-cell">
+                <button
+                  type="button"
+                  class="source-doc tonal"
+                  onclick={onOpenSourceDoc}
+                  data-testid="spine-entry-source-doc"
+                >
+                  View source document
+                </button>
+                <span class="doc data muted">{shortenSha(detail.sourceDoc)}</span>
+              </dd>
+            {:else}
+              <dd class="doc data">{detail.sourceDoc}</dd>
+            {/if}
           </div>
         {/if}
         {#each entry.notes as note, i (note.eventIds[0])}
@@ -423,6 +448,21 @@
     margin: 0;
     min-width: 0;
     overflow-wrap: anywhere;
+  }
+
+  .doc-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-1);
+  }
+
+  .source-doc {
+    min-height: auto;
+    min-width: auto;
+    padding: var(--space-1) var(--space-3);
+    color: var(--action);
+    font-size: var(--text-sm);
   }
 
   .stub .data {
