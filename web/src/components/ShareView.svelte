@@ -10,7 +10,8 @@
   import { statusMapFrom, nameMapFrom } from '../lib/curation'
   import { fingerprint } from '../lib/exchange'
   import { base64ToBytes } from '../lib/base64'
-  import { buildTimeline, type TimelineEntry } from '../lib/timeline'
+  import { buildTimeline, type TimelineEntry, type AttachmentRef } from '../lib/timeline'
+  import { mimeForDocName } from '../lib/provenance'
   import ClinicianSummary from './ClinicianSummary.svelte'
   import AttachmentViewer from './AttachmentViewer.svelte'
 
@@ -30,6 +31,45 @@
       .filter((e) => e.attachments && e.attachments.length > 0)
   })
 
+  // The imported source documents (`doc-`) the shared events point at, distinct
+  // by sha256 (several events commonly share one imported source document).
+  // Mirrors Spine.svelte's own `sourceDocViewer`, over the bundle's inlined
+  // `documents` map instead of the local `provenance` store.
+  interface SourceDocEntry {
+    sha256: string
+    name: string
+    recordedIso: string
+  }
+  interface SourceDocViewer {
+    page: AttachmentRef
+    caption: string
+    recordedIso: string
+  }
+  let sourceDocViewer = $state<SourceDocViewer | null>(null)
+
+  const sourceDocEntries = $derived.by<SourceDocEntry[]>(() => {
+    if (result?.status !== 'ok') return []
+    const { events, documents } = result.bundle
+    const seen = new Map<string, string>() // sha256 -> a representative effective_at
+    for (const se of events) {
+      const sha = se.event.provenance.source_doc
+      if (!sha || !documents[sha] || seen.has(sha)) continue
+      seen.set(sha, se.event.effective_at ?? result.bundle.createdAt)
+    }
+    return [...seen.entries()]
+      .map(([sha256, recordedIso]) => ({ sha256, name: documents[sha256].name, recordedIso }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  })
+
+  function openSourceDoc(entry: SourceDocEntry): void {
+    const doc = result?.status === 'ok' ? result.bundle.documents[entry.sha256] : undefined
+    sourceDocViewer = {
+      page: { sha256: entry.sha256, mime: doc ? mimeForDocName(doc.name) : 'text/plain' },
+      caption: entry.name,
+      recordedIso: entry.recordedIso,
+    }
+  }
+
   // The verified `status:`/`name:` overlay the share carried, folded into the
   // concept maps the summary renders from — so a recipient sees the owner's
   // real Current/Past split and name overrides, not a flat all-active list.
@@ -38,6 +78,11 @@
 
   function loadSharedBytes(sha256: string): Promise<Uint8Array | null> {
     const b64 = result?.status === 'ok' ? result.bundle.attachments[sha256] : undefined
+    return Promise.resolve(b64 ? base64ToBytes(b64) : null)
+  }
+
+  function loadSharedDocBytes(sha256: string): Promise<Uint8Array | null> {
+    const b64 = result?.status === 'ok' ? result.bundle.documents[sha256]?.bytes : undefined
     return Promise.resolve(b64 ? base64ToBytes(b64) : null)
   }
 
@@ -127,6 +172,27 @@
         </ul>
       </section>
     {/if}
+
+    {#if sourceDocEntries.length > 0}
+      <section class="documents" data-testid="share-source-docs">
+        <h2 class="doc-head">Source documents</h2>
+        <ul class="doc-list">
+          {#each sourceDocEntries as entry (entry.sha256)}
+            <li>
+              <button
+                type="button"
+                class="doc-row"
+                onclick={() => openSourceDoc(entry)}
+                data-testid="share-source-doc-row"
+              >
+                <span class="doc-glyph" aria-hidden="true">📄</span>
+                <span class="doc-label">{entry.name}</span>
+              </button>
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
   {/if}
 </div>
 
@@ -138,6 +204,16 @@
     source={viewerEntry.detail.source}
     loadBytes={loadSharedBytes}
     onclose={() => (viewerEntry = null)}
+  />
+{/if}
+
+{#if sourceDocViewer}
+  <AttachmentViewer
+    pages={[sourceDocViewer.page]}
+    caption={sourceDocViewer.caption}
+    recordedIso={sourceDocViewer.recordedIso}
+    loadBytes={loadSharedDocBytes}
+    onclose={() => (sourceDocViewer = null)}
   />
 {/if}
 

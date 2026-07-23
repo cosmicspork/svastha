@@ -3,6 +3,10 @@ import { onboardViaUI, connectRelayViaUI, logBP, logFood, PASSPHRASE, RELAY } fr
 
 const RXNORM = 'http://www.nlm.nih.gov/research/umls/rxnorm'
 
+// Relative to the cwd Playwright runs from (`web/`), same fixture import.spec.ts
+// uses.
+const FHIR_BUNDLE = '../fixtures/fhir/bundle-minimal.json'
+
 // Owner-side doctor share, end to end against the live relay: log an event,
 // mint a share through the real UI, then confirm the relay serves the sealed
 // bundle by its bearer token and that it opens under the link's key with the
@@ -348,6 +352,52 @@ test('doctor share carries verified curation: current-only by default, past on o
   await pastDoc.context().close()
 
   await ownerContext.close()
+})
+
+// The imported source document (a `doc-` blob) rides along in a doctor share
+// the same way a captured paper record (`att-`) already does: the recipient
+// gets a "Source documents" row and can open the same in-app viewer over the
+// bundle's inlined bytes, with no vault key or relay access of their own.
+test('doctor share carries the imported source document, openable by a cold recipient', async ({
+  page,
+  browser,
+}) => {
+  await onboardViaUI(page)
+  await connectRelayViaUI(page)
+
+  await page.evaluate(() => {
+    window.location.hash = '#/import'
+  })
+  await page.getByTestId('import-file-input').setInputFiles([FHIR_BUNDLE])
+  await page.getByTestId('import-commit').click()
+  await expect(page.getByTestId('import-done')).toBeVisible()
+
+  await page.evaluate(() => {
+    window.location.hash = '#/share/doctor'
+  })
+  await page.getByTestId('new-doctor-link').click()
+
+  // The source document rides along by default (no category/date narrowing
+  // excludes it), and the create screen counts it honestly alongside the
+  // entry count.
+  await expect(page.getByTestId('share-documents')).toContainText('1 document')
+
+  await page.getByTestId('share-create').click()
+  await expect(page.getByTestId('share-link')).toBeVisible()
+  const link = (await page.getByTestId('share-link').innerText()).trim()
+
+  const doctorPage = await openAsRecipient(browser, link)
+  const docRow = doctorPage.getByTestId('share-source-doc-row')
+  await expect(docRow).toContainText('bundle-minimal.json')
+  await docRow.click()
+
+  // Rendered as text (application/json, pretty-printed) — the same viewer the
+  // owner's own Spine uses, over the bundle's inlined bytes rather than the
+  // local `provenance` store.
+  await expect(doctorPage.getByTestId('viewer-text')).toContainText('Body temperature')
+  await doctorPage.getByTestId('viewer-close').click()
+
+  await doctorPage.context().close()
 })
 
 async function unlock(page: Page): Promise<void> {
