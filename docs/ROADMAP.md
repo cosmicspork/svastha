@@ -1,29 +1,16 @@
 # Roadmap
 
-Forward-looking plans only. What shipped is CHANGELOG.md's job; how the system
-works today is docs/ARCHITECTURE.md's. Feature PRs keep this current the way
-they keep ARCHITECTURE.md current: pull work into **Now** when it starts, drop
-it on merge (the changelog records it), and harvest a PR's "## Deferred" notes
-into the sections below.
+Pending work only, grouped by area — not sequenced. What shipped is
+CHANGELOG.md's job; how the system works today is docs/ARCHITECTURE.md's.
+Feature PRs keep this current: remove an item in the PR that ships it, and
+harvest a PR's "## Deferred" notes into the list.
 
-## Now
-
-- **Full LOINC Top-2000 dictionary** — build pipeline now fetches LOINC
-  automatically via the Download API given a maintainer's account credentials
-  (`LOINC_USERNAME`/`LOINC_PASSWORD` in `web/.env`), with a manual-CSV fallback
-  (`LOINC_TOP2000_CSV=…`/`--loinc-csv=…`); ships the required license text
-  (`LOINC_LICENSE.txt`) and release version alongside the data. `loinc.json`
-  still ships as the starter dictionary until the maintainer runs the build
-  with real credentials or a manual file (an agent/CI cannot supply either).
-
-## Next
+## Capture & documents
 
 - **OCR for captured documents** — native OS OCR via the wrapper, or the
   processing node; human-in-the-loop for handwriting.
 
-## Later
-
-**Sync & protocol**
+## Sync & protocol
 
 - Relay push channel (clients poll today)
 - Key rotation for real revocation
@@ -32,7 +19,7 @@ into the sections below.
 - Multi-writer sync (needs new conflict machinery; ends the single-writer
   assumption — signed curation is the prerequisite, now in place)
 
-**Sharing**
+## Sharing
 
 - Device list and revoke UI
 - QR seed handoff (auto-provision a new device); in-app QR scanning
@@ -41,21 +28,21 @@ into the sections below.
 - Share-history clearing after the tombstone sweep
 - Richer grant terms (family/caregiver beyond the household pair)
 
-**Import**
+## Import
 
 - Deeper NOTE sections (H&P, ED, Consult, Nursing, OR, Discharge)
 - Goals, Care Teams, Functional Status, Medical Devices, Patient Instructions
 - FHIR DiagnosticReport / DocumentReference / CarePlan
 - RxNorm coding for manually logged medications
 
-**Web**
+## Web
 
 - Web Worker for large-document parse (if UI jank appears)
 - Per-item curation on grouped spine entries
 - Long-press bloom shortcut
 - Friendly provenance source names
 
-**Native (arrives with the wrapper)**
+## Native (arrives with the wrapper)
 
 - OS keystore custody for the seed
 - Bluetooth medical devices; Apple HealthKit; Android Health Connect
