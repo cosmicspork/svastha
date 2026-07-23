@@ -19,6 +19,7 @@ const KNOWN_PATTERNS = [
   '/settings/appearance',
   '/settings/security',
   '/settings/sync',
+  '/settings/devices',
   '/settings/data',
   '/settings/about',
   '/share',

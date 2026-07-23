@@ -22,7 +22,12 @@
 // what keeps the classification and dispatch unit-testable under node vitest
 // with fakes, no wasm and no browser.
 import { fromHex } from './hex'
-import { pendingInvites, type PendingInvite } from './shared'
+import {
+  pendingInvites,
+  type PendingInvite,
+  type KeyHandoffInfo,
+  type KeyHandoffOutcome,
+} from './shared'
 import {
   buildProposalRecord,
   upsertProposal,
@@ -66,26 +71,37 @@ export interface MailboxIdentity {
  * checks the signature against `from`). Injected so tests supply a fake. */
 export type VerifyMessage = (envelopeJson: string) => boolean
 
+/** Decides what an incoming, already-verified key handoff (or legacy bare-key
+ * deposit) is: a fresh share to surface as an invite, a re-keying to merge into an
+ * existing share, or nothing for us. Injected from vault.ts (see shared.ts's
+ * `handleIncomingKeyHandoff`); absent, the layer falls back to today's
+ * unwrap-and-invite behavior — which is all the unit tests exercise. */
+export type KeyHandoffHandler = (info: KeyHandoffInfo) => Promise<KeyHandoffOutcome>
+
 // --- wiring ---
 
 let client: MailboxClient | null = null
 let identity: MailboxIdentity | null = null
 let verifyMessage: VerifyMessage | null = null
+let keyHandoffHandler: KeyHandoffHandler | null = null
 
 export function configureMailbox(
   c: MailboxClient,
   id: MailboxIdentity,
   verify: VerifyMessage,
+  keyHandoff?: KeyHandoffHandler,
 ): void {
   client = c
   identity = id
   verifyMessage = verify
+  keyHandoffHandler = keyHandoff ?? null
 }
 
 export function teardownMailbox(): void {
   client = null
   identity = null
   verifyMessage = null
+  keyHandoffHandler = null
 }
 
 // --- pure classification (unit-tested directly) ---
@@ -210,6 +226,9 @@ export interface MailboxPullResult {
   invites: PendingInvite[]
   /** New proposal messages stored (deduped by message id). */
   proposalsAdded: number
+  /** Re-keying handoffs merged into an existing share (post-rotation), rather
+   * than surfaced as a fresh invite. */
+  merged: number
   /** Items dropped: a tampered/failed-verification envelope, a from-mismatch,
    * a body that would not open, or unparseable bytes — counted and logged the
    * way the share viewer counts dropped events. */
@@ -235,6 +254,7 @@ export async function pullMailbox(): Promise<MailboxPullResult> {
   const result: MailboxPullResult = {
     invites: [],
     proposalsAdded: 0,
+    merged: 0,
     dropped: 0,
     chatAnswers: 0,
     adminReplies: 0,
@@ -257,9 +277,16 @@ export async function pullMailbox(): Promise<MailboxPullResult> {
     }
 
     if (classified.type === 'legacy') {
-      const invite = legacyInvite(classified.deposit, fetched.from, itemId)
-      if (invite) result.invites.push(invite)
-      else result.dropped++
+      const d = classified.deposit
+      if (fetched.from !== d.from_ed) {
+        console.warn(`mailbox item ${itemId}: svastha-from does not match the legacy payload, ignoring`)
+        result.dropped++
+        continue
+      }
+      await routeKeyHandoff(
+        { fromEd: d.from_ed, fromX: d.from_x25519, label: d.label, wrappedHex: d.wrapped_hex, itemId },
+        result,
+      )
       continue
     }
 
@@ -293,8 +320,8 @@ export async function pullMailbox(): Promise<MailboxPullResult> {
 
     switch (env.kind) {
       case 'key_handoff': {
-        const invite = keyHandoffInvite(body, env.from, itemId)
-        if (invite) result.invites.push(invite)
+        const info = keyHandoffInfo(body, env.from, itemId)
+        if (info) await routeKeyHandoff(info, result)
         else result.dropped++
         break
       }
@@ -329,35 +356,51 @@ export async function pullMailbox(): Promise<MailboxPullResult> {
   return result
 }
 
-/** Validate a legacy deposit into a `PendingInvite` (same checks the previous
- * invite scanner made): the relay's attested depositor must match the payload's
- * `from_ed`, and the wrapped key must actually unwrap to us. */
-function legacyInvite(
-  deposit: LegacyDeposit,
-  relayFrom: string,
-  itemId: string,
-): PendingInvite | null {
-  if (relayFrom !== deposit.from_ed) {
-    console.warn(`mailbox item ${itemId}: svastha-from does not match the legacy payload, ignoring`)
-    return null
+/**
+ * Route one incoming key handoff (a re-keyed keyring, or a grandfathered bare
+ * wrapped key) through the injected decision handler: `invite` surfaces a fresh
+ * share invite, `merged` folds a re-keying into an existing share (the item is
+ * consumed and deleted), `drop` is nothing for us. Absent a handler (the unit-test
+ * path), fall back to today's unwrap-and-invite behavior.
+ */
+async function routeKeyHandoff(info: KeyHandoffInfo, result: MailboxPullResult): Promise<void> {
+  if (!keyHandoffHandler) {
+    if (unwrapsToUs(info.wrappedHex)) {
+      result.invites.push({
+        mailboxId: info.itemId,
+        fromEd: info.fromEd,
+        fromX: info.fromX,
+        label: info.label,
+        wrappedKeyHex: info.wrappedHex,
+      })
+    } else {
+      console.warn(`mailbox item ${info.itemId}: wrapped key does not unwrap, ignoring`)
+      result.dropped++
+    }
+    return
   }
-  if (!unwrapsToUs(deposit.wrapped_hex)) {
-    console.warn(`mailbox item ${itemId}: legacy wrapped key does not unwrap, ignoring`)
-    return null
-  }
-  return {
-    mailboxId: itemId,
-    fromEd: deposit.from_ed,
-    fromX: deposit.from_x25519,
-    label: deposit.label,
-    wrappedKeyHex: deposit.wrapped_hex,
+
+  const outcome = await keyHandoffHandler(info)
+  if (outcome === 'invite') {
+    result.invites.push({
+      mailboxId: info.itemId,
+      fromEd: info.fromEd,
+      fromX: info.fromX,
+      label: info.label,
+      wrappedKeyHex: info.wrappedHex,
+    })
+  } else if (outcome === 'merged') {
+    // The re-keying is now folded into the existing share; consume the item.
+    await client?.deleteMailbox(info.itemId)
+    result.merged++
+  } else {
+    result.dropped++
   }
 }
 
-/** A verified `key_handoff` envelope's body into a `PendingInvite` — equivalent
- * to the legacy deposit, just carried inside the typed, signed envelope. The
+/** Parse a verified `key_handoff` envelope's body into a `KeyHandoffInfo`. The
  * envelope `from` is already verified; bind the body's `from_ed` to it too. */
-function keyHandoffInvite(body: Uint8Array, envelopeFrom: string, itemId: string): PendingInvite | null {
+function keyHandoffInfo(body: Uint8Array, envelopeFrom: string, itemId: string): KeyHandoffInfo | null {
   let parsed: KeyHandoffBody
   try {
     parsed = JSON.parse(new TextDecoder().decode(body)) as KeyHandoffBody
@@ -369,16 +412,12 @@ function keyHandoffInvite(body: Uint8Array, envelopeFrom: string, itemId: string
     console.warn(`mailbox item ${itemId}: key_handoff body from_ed does not match envelope from, dropping`)
     return null
   }
-  if (!unwrapsToUs(parsed.wrapped_hex)) {
-    console.warn(`mailbox item ${itemId}: key_handoff wrapped key does not unwrap, dropping`)
-    return null
-  }
   return {
-    mailboxId: itemId,
     fromEd: parsed.from_ed,
     fromX: parsed.from_x25519,
     label: parsed.label,
-    wrappedKeyHex: parsed.wrapped_hex,
+    wrappedHex: parsed.wrapped_hex,
+    itemId,
   }
 }
 

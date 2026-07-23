@@ -33,6 +33,7 @@ export type NotificationKind =
   | 'doctor-share-expiring'
   | 'dictionary-update'
   | 'app-update'
+  | 'scopes-notice'
 
 export interface Notification {
   /** Caller-supplied, stable per real-world fact so re-derivation is idempotent

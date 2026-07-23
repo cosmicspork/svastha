@@ -1180,7 +1180,23 @@ dependencies = [
 name = "svastha-node"
 version = "0.10.0"
 dependencies = [
+ "anyhow",
+ "axum",
+ "base64",
+ "hex",
+ "qrcode",
+ "rand_core",
+ "serde",
+ "serde_json",
+ "sha2",
  "svastha-core",
+ "svastha-relay",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "ureq",
 ]
 
 [[package]]

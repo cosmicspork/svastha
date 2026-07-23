@@ -13,6 +13,7 @@ import init, {
   event_id,
   WasmIdentity,
   WasmDataKey,
+  WasmKeyring,
 } from '../wasm/svastha'
 
 let ready: Promise<void> | null = null
@@ -32,4 +33,5 @@ export {
   event_id,
   WasmIdentity,
   WasmDataKey,
+  WasmKeyring,
 }

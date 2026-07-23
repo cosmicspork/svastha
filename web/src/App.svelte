@@ -18,6 +18,7 @@
   import SettingsAppearance from './routes/settings/Appearance.svelte'
   import SettingsSecurity from './routes/settings/Security.svelte'
   import SettingsSync from './routes/settings/Sync.svelte'
+  import SettingsDevices from './routes/settings/Devices.svelte'
   import SettingsData from './routes/settings/Data.svelte'
   import SettingsAbout from './routes/settings/About.svelte'
   import Share from './routes/Share.svelte'
@@ -133,6 +134,8 @@
       <SettingsSecurity />
     {:else if route.path === '/settings/sync'}
       <SettingsSync />
+    {:else if route.path === '/settings/devices'}
+      <SettingsDevices />
     {:else if route.path === '/settings/data'}
       <SettingsData />
     {:else if route.path === '/settings/about'}
