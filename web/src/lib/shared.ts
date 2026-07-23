@@ -137,64 +137,12 @@ export interface PendingInvite {
 
 export const pendingInvites = writable<PendingInvite[]>([])
 
-/** The JSON payload deposited at a `vaultkey-*` mailbox id (see
- * `web/src/routes/Share.svelte`'s "Share my vault" section). */
-interface VaultKeyPayload {
-  v: 1
-  from_ed: string
-  from_x25519: string
-  label: string
-  wrapped_hex: string
-}
-
-/** Scan the mailbox for share invites, verifying each before surfacing it.
- * Called both from the sync engine's pull cycle and from the Share screen's
- * mount — idempotent and safe to call from either or both; it only replaces
- * the in-memory `pendingInvites` list; already-pending ids are just re-found. */
-export async function checkMailboxForInvites(): Promise<void> {
-  if (!sharingClient || !unwrapIdentity) return
-  const items = await sharingClient.listMailbox()
-  const invites: PendingInvite[] = []
-
-  for (const { id } of items.filter((i) => i.id.startsWith('vaultkey-'))) {
-    const fetched = await sharingClient.getMailbox(id)
-    if (!fetched) continue
-
-    let payload: VaultKeyPayload
-    try {
-      payload = JSON.parse(new TextDecoder().decode(fetched.blob)) as VaultKeyPayload
-    } catch {
-      console.warn(`mailbox item ${id}: not valid JSON, ignoring`)
-      continue
-    }
-
-    // The relay attests the depositor's already-verified auth identity via
-    // this header — not a claim the payload makes about itself. Binding the
-    // two means a MITM would need both the relay AND the out-of-band
-    // exchange-code channel compromised.
-    if (fetched.from !== payload.from_ed) {
-      console.warn(`mailbox item ${id}: svastha-from does not match the payload, ignoring`)
-      continue
-    }
-
-    try {
-      unwrapIdentity.unwrap_key(fromHex(payload.wrapped_hex))
-    } catch {
-      console.warn(`mailbox item ${id}: wrapped key does not unwrap, ignoring`)
-      continue
-    }
-
-    invites.push({
-      mailboxId: id,
-      fromEd: payload.from_ed,
-      fromX: payload.from_x25519,
-      label: payload.label,
-      wrappedKeyHex: payload.wrapped_hex,
-    })
-  }
-
-  pendingInvites.set(invites)
-}
+// The mailbox scan that surfaces these invites lives in mailbox.ts (the one
+// mailbox-consumption layer): it verifies each item, routes a key_handoff or a
+// grandfathered bare wrapped-key deposit to an invite, and sets `pendingInvites`
+// wholesale. This module keeps only the invite *state* and the accept/decline
+// actions, since a household share has its own trust boundary and lifecycle
+// (`putShare`, `pullShared`) distinct from the envelope plumbing.
 
 /** Accept: store the share, forget the mailbox item, and pull their vault. */
 export async function acceptInvite(invite: PendingInvite, hue: 'a' | 'b'): Promise<void> {

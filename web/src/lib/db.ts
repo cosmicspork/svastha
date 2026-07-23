@@ -73,6 +73,20 @@ export const MIGRATIONS: ((db: IDBDatabase, tx: IDBTransaction) => void)[] = [
     const notifications = db.createObjectStore('notifications', { keyPath: 'id' })
     notifications.createIndex('createdAt', 'createdAt')
   },
+  // v8: the proposal inbox (see lib/proposals.ts) — device-local, never synced.
+  // `proposals` holds one row per received proposal *message*, keyed by the
+  // envelope message id (the spec's dedupe identity), so a re-pull of the same
+  // mailbox item never re-processes it; `from` indexes the proposer for the
+  // grouped inbox. `proposers` is the small identity directory the inbox
+  // resolves a proposer's label and X25519 reply key from (populated by node
+  // enrollment; read here to seal the proposal_result back to the proposer).
+  (db) => {
+    const proposals = db.createObjectStore('proposals', { keyPath: 'id' })
+    proposals.createIndex('from', 'fromEd')
+    proposals.createIndex('receivedAt', 'receivedAt')
+
+    db.createObjectStore('proposers', { keyPath: 'ed' })
+  },
 ]
 
 function requestToPromise<T>(req: IDBRequest<T>): Promise<T> {

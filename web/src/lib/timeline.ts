@@ -506,6 +506,21 @@ export function buildTimeline(
   return [...days.values()].sort((a, b) => b.day.localeCompare(a.day))
 }
 
+/** A one-event summary — label, measurement value, and the muted hint — using
+ * the exact formatting the spine gives that event, but without the timeline's
+ * day/group machinery (and without requiring an `effective_at`, which
+ * `buildTimeline` needs but a proposal draft may lack). The proposal inbox
+ * renders each draft's extracted fact through this so a pending proposal reads
+ * the same way the approved event will once it lands on the spine. */
+export function describeEvent(
+  event: Ev,
+  dictionary: Map<string, string> = new Map(),
+): { label: string; value: string; hint?: string } {
+  const nameIndex = buildCodeNameIndex([{ event } as StoredEvent])
+  const { label, value, hint } = formatGroup(categorize(event), [event], nameIndex, dictionary)
+  return { label, value, hint }
+}
+
 /** Which categories have any data — drives the filter chip row. */
 export function categoriesPresent(events: StoredEvent[]): Category[] {
   const present = new Set<Category>()

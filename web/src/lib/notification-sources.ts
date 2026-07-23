@@ -7,9 +7,11 @@
 import {
   addNotification,
   deriveInviteNotifications,
+  deriveProposalNotifications,
   deriveExpiringShareNotifications,
 } from './notifications'
 import { pendingInvites } from './shared'
+import { pendingProposals, refreshPendingProposals } from './proposals'
 import { listDoctorShares } from './doctorShare'
 import { isEnabled, checkForUpdate } from './dictionary'
 
@@ -20,6 +22,17 @@ import { isEnabled, checkForUpdate } from './dictionary'
 export function startInviteNotifications(): () => void {
   return pendingInvites.subscribe((invites) => {
     for (const n of deriveInviteNotifications(invites)) void addNotification(n)
+  })
+}
+
+/** Fan pending proposals into the inbox and keep them current as drafts are
+ * worked through. Hydrates the store from IndexedDB first (proposals persist
+ * across reloads, unlike the in-memory invite list), then keeps it subscribed.
+ * Idempotent by id (see deriveProposalNotifications). Returns the unsubscribe. */
+export function startProposalNotifications(): () => void {
+  void refreshPendingProposals()
+  return pendingProposals.subscribe((records) => {
+    for (const n of deriveProposalNotifications(records)) void addNotification(n)
   })
 }
 

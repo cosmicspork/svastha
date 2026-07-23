@@ -7,12 +7,12 @@
   import { fingerprint } from '../lib/exchange'
   import {
     listShares,
-    checkMailboxForInvites,
     acceptInvite,
     declineInvite,
     pendingInvites,
     type PendingInvite,
   } from '../lib/shared'
+  import { pullMailbox } from '../lib/mailbox'
   import { listDoctorShares, shareStatus } from '../lib/doctorShare'
 
   let relayUrl = $state('')
@@ -59,7 +59,7 @@
     if (relayUrl && session.identity) {
       const relay = new RelayClient(relayUrl, session.identity)
       grantCount = (await relay.listGrants()).length
-      await checkMailboxForInvites()
+      await pullMailbox()
     }
   })
 </script>
