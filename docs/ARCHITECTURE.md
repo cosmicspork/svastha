@@ -320,10 +320,24 @@ fall through to the earlier layers.
 
 A zero-knowledge store-and-forward server (axum + tokio). It stores and
 forwards encrypted blobs it cannot read, holds no keys, and only verifies client
-auth signatures (Ed25519). It is connection-heavy (clients want a "new data"
-push), which suits an async Rust server and ships as a single static binary for
-trivial self-hosting. It depends on `core` only for the signature-verify
-primitives, not the envelope.
+auth signatures (Ed25519). It is connection-heavy — clients hold open a "new
+data" push stream — which suits an async Rust server and ships as a single
+static binary for trivial self-hosting. It depends on `core` only for the
+signature-verify primitives, not the envelope.
+
+**Push channel.** Pull stays the source of truth, but a long-lived
+authenticated `GET /v0/events` (Server-Sent Events) lets the relay *poke* a
+connected client to pull sooner. Pokes are payload-free — an event naming which
+pull to run (`blobs`/`mailbox`), never a blob id, count, owner, or content — so
+the channel stays zero-knowledge, and it is lossy by design: a missed poke costs
+nothing because the next pull reconciles anyway. The relay pokes a mailbox
+recipient on deposit, and a vault's owner and grantees on a blob write. The
+replay window is also hardened: an ephemeral in-memory nonce store rejects a
+re-sent signature of a state-changing request within the auth freshness window
+(idempotent reads are exempt; a restart clears it — a deliberate trade-off for
+keeping the relay a keyless single binary). Both are runtime state only —
+nothing durable, no secrets. See `spec/README.md`'s "Push channel" and "Auth
+handshake" subsections.
 
 **Grants and mailbox.** Household sharing adds two more stores alongside blobs,
 both still pure routing metadata: a grant store (owner authorizes grantee to

@@ -4,22 +4,36 @@
 //! or mailbox items except where a grant explicitly says otherwise (the
 //! `/v0/shared/*` handlers).
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::convert::Infallible;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{
     body::Bytes,
     extract::{Path, State},
     http::{header, HeaderMap, HeaderName, StatusCode},
-    response::{Html, IntoResponse, Response},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        Html, IntoResponse, Response,
+    },
     Extension, Json,
 };
 use qrcode::{render::svg, QrCode};
 use serde::Serialize;
 use svastha_core::CONTRACT_VERSION;
+use tokio_stream::{wrappers::BroadcastStream, Stream, StreamExt};
 
 use crate::auth::Owner;
+use crate::pokes::Poke;
 use crate::share::{ShareState, TombstoneReason};
 use crate::AppState;
+
+/// SSE heartbeat interval. A comment line every this often keeps the long-lived
+/// stream from being idled out by an intermediary — load balancers and reverse
+/// proxies commonly close a connection after ~60s of silence, so a keepalive
+/// comfortably inside that closes the gap. Operators terminating TLS in front of
+/// the relay should set the proxy read/idle timeout above this interval (see the
+/// relay README). Heartbeats are payload-free comments, never content.
+const SSE_HEARTBEAT: Duration = Duration::from_secs(30);
 
 /// Maximum mailbox item size: it carries one wrapped vault key plus a small
 /// JSON envelope, never anything larger, so a low cap keeps the mailbox from
@@ -69,6 +83,51 @@ pub async fn info() -> Json<Info> {
     Json(Info {
         contract_version: CONTRACT_VERSION,
     })
+}
+
+// --- push channel: payload-free SSE pokes (authenticated) ---
+
+/// Long-lived `text/event-stream` of payload-free pokes for the authenticated
+/// caller. Each poke is a "go pull" hint — an SSE `event:` naming which pull to
+/// run (`blobs` or `mailbox`), never a blob id, count, owner, or any content.
+/// The pull path stays the single source of truth, so this channel is lossy by
+/// design: a client that misses a poke (disconnected, or lagging past the
+/// buffer) simply finds the change on its next pull, at no correctness cost.
+///
+/// Subscription happens here, before the response is returned, so a poke that
+/// races the connection handshake is delivered rather than lost between them.
+pub async fn events(
+    State(state): State<AppState>,
+    Extension(owner): Extension<Owner>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let stream = BroadcastStream::new(state.pokes.subscribe(&owner.0)).map(|result| {
+        let event = match result {
+            Ok(poke) => Event::default().event(poke.event_name()),
+            // The stream fell behind and dropped pokes (past the channel
+            // buffer). Lossy by design: emit one generic "pull everything" hint
+            // rather than name a class, and the full pull reconciles regardless.
+            Err(_) => Event::default().event("sync"),
+        };
+        // A single non-informative data byte so the event dispatches in a strict
+        // SSE parser (an event with an empty data buffer is not dispatched); the
+        // routing hint rides the event name, never the data.
+        Ok(event.data("1"))
+    });
+    Sse::new(stream).keep_alive(KeepAlive::new().interval(SSE_HEARTBEAT))
+}
+
+/// Poke everyone who can read `owner`'s vault that its blobs changed: the
+/// owner's own other devices, plus every identity the owner has granted read
+/// access to. Best-effort and never fails the write — a missed poke is
+/// corrected by the next pull. Grant lookup errors are swallowed for the same
+/// reason (the push channel is an optimization, not a source of truth).
+fn poke_vault_readers(state: &AppState, owner: &[u8; 32]) {
+    state.pokes.poke(owner, Poke::Blobs);
+    if let Ok(grantees) = state.grants.grantees_of(owner) {
+        for grantee in grantees {
+            state.pokes.poke(&grantee, Poke::Blobs);
+        }
+    }
 }
 
 // --- landing page: relay → device QR linking (unauthenticated) ---
@@ -170,6 +229,9 @@ pub async fn put_blob(
         .store
         .put(&owner.0, &id, body.to_vec())
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // Blobs changed: poke the owner's other devices and any grantees so a
+    // connected client pulls promptly instead of waiting for its timer.
+    poke_vault_readers(&state, &owner.0);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -218,7 +280,11 @@ pub async fn delete_blob(
         return StatusCode::BAD_REQUEST;
     }
     match state.store.delete(&owner.0, &id) {
-        Ok(true) => StatusCode::NO_CONTENT,
+        Ok(true) => {
+            // The blob set changed; poke readers the same as on a write.
+            poke_vault_readers(&state, &owner.0);
+            StatusCode::NO_CONTENT
+        }
         Ok(false) => StatusCode::NOT_FOUND,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
@@ -405,6 +471,8 @@ pub async fn put_mailbox(
         .mailbox
         .put(&recipient, &id, from.0, body.to_vec())
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // A deposit landed: poke the recipient's open streams to pull the mailbox.
+    state.pokes.poke(&recipient, Poke::Mailbox);
     Ok(StatusCode::NO_CONTENT)
 }
 

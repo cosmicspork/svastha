@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::{
     body::{to_bytes, Body},
     extract::{Request, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, Method, StatusCode},
     middleware::Next,
     response::Response,
 };
@@ -66,6 +66,29 @@ pub async fn require_auth(
     let auth = AuthRequest::new(method, path, &bytes, timestamp);
     if !verify_request(&public_key, &signature, &auth) {
         return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    // Replay guard, for state-changing requests only. A captured request is
+    // byte-identical to its original, so its signature is too — reject a
+    // signature already seen within the freshness window. Idempotent reads
+    // (GET/HEAD) are exempt: replaying one has no effect (it returns data the
+    // caller already holds), and because the signed timestamp is only
+    // second-granular, guarding reads would falsely reject a client that
+    // legitimately repeats a listing within the same second. Checked only after
+    // `verify_request`, so a forged signature can never pollute the store.
+    // `timestamp + max_skew_secs` is the latest instant this timestamp still
+    // passes the window above, so the entry is prunable after it.
+    // (`spec/README.md`, "Auth handshake"; `nonce.rs` for the in-memory /
+    // restart-clears trade-off.)
+    let mutates = !matches!(parts.method, Method::GET | Method::HEAD);
+    if mutates {
+        let expires_at = timestamp.saturating_add(state.max_skew_secs);
+        if !state
+            .nonces
+            .check_and_remember(&signature, expires_at, now_unix())
+        {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
     }
 
     parts.extensions.insert(Owner(public_key));

@@ -124,9 +124,10 @@ async fn revoke_makes_fetch_gone() {
     let get = app.clone().oneshot(unauth_get(TOKEN)).await.unwrap();
     assert_eq!(get.status(), StatusCode::GONE);
 
-    // Revoking again is idempotent for the owner.
+    // Revoking again is idempotent for the owner. Fresh timestamp so it is a
+    // distinct request, not a replay of `del` above (rejected by the nonce guard).
     let del_again = app
-        .oneshot(signed(&alice, "DELETE", &share_path(TOKEN), b"", now()))
+        .oneshot(signed(&alice, "DELETE", &share_path(TOKEN), b"", now() + 1))
         .await
         .unwrap();
     assert_eq!(del_again.status(), StatusCode::NO_CONTENT);

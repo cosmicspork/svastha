@@ -12,7 +12,9 @@ categories = ["network-programming", "cryptography"]
 [dependencies]
 svastha-core = { path = "../core", version = "0.10.0" } # x-release-please-version
 axum = "0.8"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync"] }
+# Adapt a per-identity broadcast channel into the SSE poke stream (BroadcastStream).
+tokio-stream = { version = "0.1", features = ["sync"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }

@@ -17,6 +17,13 @@
 //! everything else — the per-share key rides the link's URL fragment and never
 //! reaches the relay. `GET /v0/share/{token}` is the one unauthenticated read.
 //!
+//! Two more pieces are runtime-only (no stored state): [`pokes::PokeHub`], the
+//! payload-free SSE push channel that tells a connected client when to pull
+//! (`GET /v0/events`), and [`nonce::NonceStore`], the auth replay guard. Both
+//! are constructed inside [`app`] rather than passed in, because neither has a
+//! durable backend — a poke is meaningless to a closed connection, and the
+//! nonce window is deliberately cleared by a restart (see [`nonce`]).
+//!
 //! [`app`] builds the router for a given set of stores; the binary
 //! ([`main`](../main.rs)) wires it to in-memory (or filesystem) stores and
 //! `axum::serve`.
@@ -24,6 +31,8 @@
 pub mod auth;
 pub mod grants;
 pub mod mailbox;
+pub mod nonce;
+pub mod pokes;
 pub mod routes;
 pub mod share;
 pub mod store;
@@ -40,10 +49,13 @@ use tower_http::cors::CorsLayer;
 
 use grants::GrantStore;
 use mailbox::MailboxStore;
+use nonce::NonceStore;
+use pokes::PokeHub;
 use share::ShareStore;
 use store::BlobStore;
 
-/// Shared handler state: the stores and the auth freshness window.
+/// Shared handler state: the stores, the auth freshness window, the replay
+/// guard, and the push-channel hub.
 #[derive(Clone)]
 pub struct AppState {
     pub store: Arc<dyn BlobStore>,
@@ -51,6 +63,12 @@ pub struct AppState {
     pub mailbox: Arc<dyn MailboxStore>,
     pub shares: Arc<dyn ShareStore>,
     pub max_skew_secs: u64,
+    /// Auth replay guard: remembers recently-seen request signatures within the
+    /// freshness window and rejects a repeat. In-memory only (see [`nonce`]).
+    pub nonces: Arc<NonceStore>,
+    /// Push-channel fan-out: payload-free pokes to an identity's open SSE
+    /// streams (`GET /v0/events`). Lossy by design (see [`pokes`]).
+    pub pokes: Arc<PokeHub>,
     /// The web app's own origin (e.g. `https://app.example.com`), if this
     /// relay is paired with a known app deployment. When set, the landing
     /// page's QR (`routes::landing`) encodes a device-link onboarding URL
@@ -77,6 +95,10 @@ pub fn app(
         mailbox,
         shares,
         max_skew_secs,
+        // Runtime-only state: no backend to pass in, constructed fresh here
+        // (see the module docs on why neither is persisted).
+        nonces: Arc::new(NonceStore::new()),
+        pokes: Arc::new(PokeHub::new()),
         app_url,
     };
 
@@ -108,6 +130,11 @@ pub fn app(
             get(routes::get_mailbox).delete(routes::delete_mailbox),
         )
         .route("/v0/mailbox/{recipient}/{id}", put(routes::put_mailbox))
+        // Long-lived authenticated SSE stream of payload-free pokes. Uses the
+        // same per-request Ed25519 auth as every other row — clients open it
+        // with fetch-streaming (not native EventSource, which cannot set the
+        // auth headers), so nothing special is needed here.
+        .route("/v0/events", get(routes::events))
         // Uploading and revoking a share are owner-authenticated; the read
         // (`GET`, below) is not, so it lives on the public router instead.
         .route(
