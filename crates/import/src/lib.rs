@@ -22,8 +22,10 @@ pub mod fhir;
 
 /// Terminology system URIs shared by both mappers (also mirrored in
 /// `web/src/lib/codes.ts` — keep the strings identical so a fact mapped from
-/// either format uses the same system URI).
-pub(crate) mod systems {
+/// either format uses the same system URI). Public so a third mapper — the
+/// node's OCR extractor (`crates/node`) — codes against the identical URIs
+/// rather than inventing a parallel set.
+pub mod systems {
     pub const LOINC: &str = "http://loinc.org";
     pub const SNOMED: &str = "http://snomed.info/sct";
     pub const UCUM: &str = "http://unitsofmeasure.org";

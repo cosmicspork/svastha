@@ -1190,6 +1190,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "svastha-core",
+ "svastha-import",
  "svastha-relay",
  "tempfile",
  "thiserror",
@@ -1197,6 +1198,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ureq",
+ "x25519-dalek",
 ]
 
 [[package]]

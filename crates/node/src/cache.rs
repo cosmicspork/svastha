@@ -37,6 +37,23 @@ impl Cache {
         self.write(owner_hex, "documents", sha256, bytes)
     }
 
+    /// Read a captured document's decrypted bytes back for OCR (D2). `Ok(None)`
+    /// if the file is absent — the cache is ephemeral, so a page the index knows
+    /// about may not be on disk after a partial resync; the caller treats that as
+    /// "not ready yet", never an error.
+    pub fn read_attachment(&self, owner_hex: &str, sha256: &str) -> Result<Option<Vec<u8>>> {
+        let path = self
+            .root
+            .join(owner_hex)
+            .join("attachments")
+            .join(sanitize(sha256));
+        match fs::read(&path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e).with_context(|| format!("read cache file {}", path.display())),
+        }
+    }
+
     fn write(&self, owner_hex: &str, kind: &str, name: &str, bytes: &[u8]) -> Result<()> {
         let dir = self.root.join(owner_hex).join(kind);
         fs::create_dir_all(&dir).with_context(|| format!("create cache dir {}", dir.display()))?;

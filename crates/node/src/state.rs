@@ -19,14 +19,34 @@ pub struct OwnerState {
     /// The owner's Ed25519 key — the signer every event and curation record in
     /// this vault must verify against.
     pub owner_key: [u8; 32],
+    /// The owner's X25519 public key, as declared in their `key_handoff`. The
+    /// node seals `proposal` envelopes **to** this key (D2), so it must be
+    /// captured at enrolment; it is not derivable from the Ed25519 key.
+    pub owner_x25519: [u8; 32],
     pub keyring: Keyring,
     pub index: VaultIndex,
+}
+
+/// OCR job-status counters (D2), surfaced so the later C3 admin surface's
+/// `job_status` command can read them over the mailbox. Content-free by
+/// construction — three integers, never a blob id or any extracted text.
+///
+/// - `queued` is a **gauge**: sources eligible for OCR but not yet processed at
+///   the end of the last run (a persistently-failing page backing off is not
+///   counted here — it is in `failed`).
+/// - `processed` and `failed` are **cumulative counts** across the node's life.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct JobStatus {
+    pub queued: usize,
+    pub processed: u64,
+    pub failed: u64,
 }
 
 /// Every vault the node has enrolled, keyed by owner Ed25519 hex.
 #[derive(Default)]
 pub struct NodeState {
     owners: BTreeMap<String, OwnerState>,
+    jobs: JobStatus,
 }
 
 impl NodeState {
@@ -43,6 +63,7 @@ impl NodeState {
         &mut self,
         owner_hex: String,
         owner_key: [u8; 32],
+        owner_x25519: [u8; 32],
         keyring: Keyring,
     ) -> bool {
         match self.owners.get_mut(&owner_hex) {
@@ -56,6 +77,7 @@ impl NodeState {
                     OwnerState {
                         owner_hex,
                         owner_key,
+                        owner_x25519,
                         keyring,
                         index: VaultIndex::new(owner_key),
                     },
@@ -83,6 +105,19 @@ impl NodeState {
     pub fn enrolled_count(&self) -> usize {
         self.owners.len()
     }
+
+    /// The current OCR job-status counters.
+    pub fn job_status(&self) -> JobStatus {
+        self.jobs
+    }
+
+    /// Record the outcome of one OCR run: set the `queued` gauge and add to the
+    /// cumulative `processed`/`failed` totals.
+    pub fn record_ocr_run(&mut self, queued: usize, processed: u64, failed: u64) {
+        self.jobs.queued = queued;
+        self.jobs.processed += processed;
+        self.jobs.failed += failed;
+    }
 }
 
 #[cfg(test)]
@@ -100,12 +135,13 @@ mod tests {
 
         // Genesis keyring wrapped to the node.
         let data_key = DataKey::generate();
+        let owner_x = owner.x25519_public().to_bytes();
         let genesis = Keyring::genesis(&owner.x25519_public(), &data_key)
             .wrap_for_grantee(&owner, &node.x25519_public())
             .unwrap();
 
         let mut state = NodeState::new();
-        assert!(state.enroll_or_merge(owner_hex.clone(), owner_key, genesis.clone()));
+        assert!(state.enroll_or_merge(owner_hex.clone(), owner_key, owner_x, genesis.clone()));
         assert_eq!(state.enrolled_count(), 1);
 
         // A rotation, re-delivered to the node.
@@ -115,7 +151,7 @@ mod tests {
             .wrap_for_grantee(&owner, &node.x25519_public())
             .unwrap();
         // Re-delivery merges, not a new enrolment.
-        assert!(!state.enroll_or_merge(owner_hex.clone(), owner_key, rotated));
+        assert!(!state.enroll_or_merge(owner_hex.clone(), owner_key, owner_x, rotated));
         assert_eq!(state.enrolled_count(), 1);
         // Union: genesis + rotation = 2 epochs.
         assert_eq!(state.owner(&owner_hex).unwrap().keyring.entries().len(), 2);

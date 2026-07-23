@@ -5,11 +5,6 @@ CHANGELOG.md's job; how the system works today is docs/ARCHITECTURE.md's.
 Feature PRs keep this current: remove an item in the PR that ships it, and
 harvest a PR's "## Deferred" notes into the list.
 
-## Capture & documents
-
-- **OCR for captured documents** — via the processing node (proposals the
-  owner approves); human-in-the-loop for handwriting.
-
 ## Sync & protocol
 
 - Blob-list pagination and manifests; curation etags
@@ -51,7 +46,7 @@ harvest a PR's "## Deferred" notes into the list.
 
 ## Processing node
 
-- OCR, extraction, de-identification, local RAG (`crates/node`) — delegates
+- extraction, de-identification, local RAG (`crates/node`) — delegates
   inference to a user-supplied OpenAI-compatible endpoint; not tied to the
   native wrapper
 - Narrative-notes extraction — mine imported `doc-` prose for coded-event

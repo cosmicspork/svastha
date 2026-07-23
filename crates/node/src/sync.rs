@@ -35,8 +35,10 @@ use crate::client::RelayClient;
 use crate::index::{AttachmentMeta, CurationOutcome, DocMeta};
 use crate::state::NodeState;
 
-/// A resolved enrolment: `(owner_hex, owner_ed_key, keyring_wrapped_to_node)`.
-type Enrollment = (String, [u8; 32], Keyring);
+/// A resolved enrolment: `(owner_hex, owner_ed_key, owner_x25519, keyring)`.
+/// The X25519 key is carried so the node can later seal `proposal` envelopes to
+/// the owner (D2); it is not derivable from the Ed25519 key.
+type Enrollment = (String, [u8; 32], [u8; 32], Keyring);
 
 /// What one mailbox drain enrolled.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -118,8 +120,9 @@ pub fn consume_mailbox(client: &RelayClient, state: &Mutex<NodeState>) -> Result
                 }
                 match msg.kind {
                     MessageKind::KeyHandoff => handle_key_handoff(client.identity(), &msg),
-                    // Proposals, admin, chat: not handled by the substrate. Left in
-                    // the mailbox for the later PR that consumes them.
+                    // Proposals, admin, chat, proposal_result: not enrolment. Left in
+                    // the mailbox for the PRs that consume them (D2 reads
+                    // proposal_result for OCR idempotence; it does not delete them).
                     _ => {
                         report.ignored += 1;
                         continue;
@@ -130,13 +133,14 @@ pub fn consume_mailbox(client: &RelayClient, state: &Mutex<NodeState>) -> Result
                 client.identity(),
                 &dep.wrapped_hex,
                 &dep.from_ed,
+                &dep.from_x25519,
                 &from_relay,
             ),
         };
         match enrolled {
-            Some((owner_hex, owner_key, keyring)) => {
+            Some((owner_hex, owner_key, owner_x25519, keyring)) => {
                 let mut guard = state.lock().expect("node state mutex");
-                if guard.enroll_or_merge(owner_hex, owner_key, keyring) {
+                if guard.enroll_or_merge(owner_hex, owner_key, owner_x25519, keyring) {
                     report.newly_enrolled += 1;
                 } else {
                     report.keyrings_merged += 1;
@@ -154,22 +158,33 @@ pub fn consume_mailbox(client: &RelayClient, state: &Mutex<NodeState>) -> Result
 fn handle_key_handoff(node: &Identity, msg: &MailboxMessage) -> Option<Enrollment> {
     let body = msg.open(node).ok()?;
     let body: KeyHandoffBody = serde_json::from_slice(&body).ok()?;
-    handle_key_material(node, &body.wrapped_hex, &body.from_ed, &msg.from_hex())
+    handle_key_material(
+        node,
+        &body.wrapped_hex,
+        &body.from_ed,
+        &body.from_x25519,
+        &msg.from_hex(),
+    )
 }
 
 /// Turn a wrapped keyring (or grandfathered bare wrapped key) into an enrolment.
 /// Binds the payload's self-claimed owner to the attested owner, decodes the
 /// keyring, and proves it is sealed to this node by unwrapping the newest epoch.
+/// The declared X25519 key is captured as the seal target for future proposals;
+/// a wrong one only makes a proposal unopenable by the owner (no misrouting — the
+/// deposit is addressed by the Ed25519 identity), so it needs no separate attest.
 fn handle_key_material(
     node: &Identity,
     wrapped_hex: &str,
     claimed_owner_hex: &str,
+    claimed_x25519_hex: &str,
     attested_owner_hex: &str,
 ) -> Option<Enrollment> {
     if claimed_owner_hex != attested_owner_hex {
         return None;
     }
     let owner_key = hex32(attested_owner_hex)?;
+    let owner_x25519 = hex32(claimed_x25519_hex)?;
     let bytes = hex::decode(wrapped_hex).ok()?;
     // `from_bytes` reads either the `svkr` keyring container or a legacy bare
     // wrapped key (as a one-epoch genesis keyring) — grandfathering within the
@@ -177,7 +192,12 @@ fn handle_key_material(
     let keyring = Keyring::from_bytes(&bytes).ok()?;
     // Prove the ring is wrapped to us before enrolling on it.
     keyring.newest_key(node).ok()?;
-    Some((attested_owner_hex.to_string(), owner_key, keyring))
+    Some((
+        attested_owner_hex.to_string(),
+        owner_key,
+        owner_x25519,
+        keyring,
+    ))
 }
 
 /// Sync one enrolled owner's vault into its index. A `404` listing means the grant

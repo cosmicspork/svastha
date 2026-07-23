@@ -29,7 +29,7 @@
 use std::collections::BTreeMap;
 
 use svastha_core::curation::{merge, SignedCurationRecord};
-use svastha_core::event::{Event, EventKind, SignedEvent};
+use svastha_core::event::{Event, EventKind, EventValue, SignedEvent};
 
 /// A captured document's metadata (bytes live in the cache dir). Keyed by the
 /// plaintext content hash the event's `attachment` value carries.
@@ -189,6 +189,34 @@ impl VaultIndex {
     /// proposal citing the source page it was extracted from.
     pub fn attachment(&self, sha256: &str) -> Option<&AttachmentMeta> {
         self.attachments.get(sha256)
+    }
+
+    /// The content hashes of every captured **image** attachment, in id order.
+    /// This is D2's OCR work queue: `image/*` pages only — a PDF `att-` (or a
+    /// structured `doc-` source) is not a page a vision model reads, so it is
+    /// deliberately excluded here (see the node README's D2 scope note).
+    pub fn image_attachment_shas(&self) -> Vec<String> {
+        self.attachments
+            .iter()
+            .filter(|(_, meta)| meta.mime.starts_with("image/"))
+            .map(|(sha, _)| sha.clone())
+            .collect()
+    }
+
+    /// The capture time of an attachment: the `effective_at` of the `document`
+    /// event whose `attachment` value addresses these bytes (the paper-record
+    /// capture convention — see `docs/ARCHITECTURE.md`). OCR uses this as the
+    /// draft `effective_at` fallback when the extracted fact carries no date of
+    /// its own. `None` if no such event is indexed or it has no `effective_at`.
+    pub fn attachment_capture_time(&self, sha256: &str) -> Option<String> {
+        self.events
+            .values()
+            .find_map(|signed| match &signed.event.value {
+                Some(EventValue::Attachment { sha256: s, .. }) if s == sha256 => {
+                    signed.event.effective_at.clone()
+                }
+                _ => None,
+            })
     }
 
     /// Source-document metadata by content hash.

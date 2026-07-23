@@ -6,8 +6,9 @@
 //!   `svastha-node/data`).
 //! - `SVASTHA_NODE_CACHE_DIR` — ephemeral decrypted-plaintext dir (default
 //!   `svastha-node/cache`).
-//! - `SVASTHA_NODE_INFERENCE_ENDPOINT` / `SVASTHA_NODE_INFERENCE_API_KEY` —
-//!   validated if present, unused until D2/D3.
+//! - `SVASTHA_NODE_INFERENCE_ENDPOINT` — OpenAI-compatible chat-completions base;
+//!   setting it enables OCR (D2). `SVASTHA_NODE_INFERENCE_MODEL` is then required;
+//!   `SVASTHA_NODE_INFERENCE_API_KEY` is optional (a bearer token, never logged).
 //! - `SVASTHA_NODE_BOOTSTRAP_ADDR` — loopback-only bootstrap page (default
 //!   `127.0.0.1:7071`).
 //! - `SVASTHA_NODE_POLL_INTERVAL_SECS` — SSE-down fallback cadence (default 60).
