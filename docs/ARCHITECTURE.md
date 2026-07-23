@@ -474,11 +474,12 @@ Two roles with different trust properties:
 
 - **Relay.** Keyless and dumb. Anyone can run the binary and point a client at it.
   A compromised relay leaks nothing but ciphertext and metadata.
-- **Processing node.** A trusted device in the key circle (it holds keys and sees
-  plaintext), for running local LLMs on your own hardware, for example a Mac mini.
-  It reuses the device-enrollment primitive. Reach it over a private mesh
-  (Tailscale, WireGuard), not public port-forwarding. A compromised node leaks
-  plaintext, so it must be secured accordingly.
+- **Processing node.** A trusted client in the key circle (it holds keys and
+  sees plaintext), running the processing pipeline on infrastructure you trust.
+  Wherever it runs — a machine at home, a VPS, a cluster — its host sits inside
+  the trust boundary: a compromised node leaks plaintext, so the host must be
+  secured accordingly. The node needs no inbound connections (it reaches the
+  relay outbound), so a deployment stays secure regardless of network topology.
 
 Keep these separate so the hosted relay stays truthfully zero-knowledge while
 power users can run everything locally, from the same codebase.

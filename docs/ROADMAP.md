@@ -7,8 +7,8 @@ harvest a PR's "## Deferred" notes into the list.
 
 ## Capture & documents
 
-- **OCR for captured documents** — native OS OCR via the wrapper, or the
-  processing node; human-in-the-loop for handwriting.
+- **OCR for captured documents** — via the processing node (proposals the
+  owner approves); human-in-the-loop for handwriting.
 
 ## Sync & protocol
 
@@ -16,17 +16,22 @@ harvest a PR's "## Deferred" notes into the list.
 - Key rotation for real revocation
 - Blob-list pagination and manifests; curation etags
 - Relay nonce store (auth replay hardening)
-- Multi-writer sync (needs new conflict machinery; ends the single-writer
-  assumption — signed curation is the prerequisite, now in place)
+- Multi-relay replication — client-driven; relays stay dumb replicas, no
+  inter-relay protocol (contract enablers — envelope message ids, mergeable
+  epoch ids — land with the protocol wave)
 
 ## Sharing
 
 - Device list and revoke UI
-- QR seed handoff (auto-provision a new device); in-app QR scanning
+- QR seed handoff (auto-provision a new device)
 - Relay-less file share; cross-device doctor-share management
 - `doc-` blobs in doctor-share bundles
 - Share-history clearing after the tombstone sweep
 - Richer grant terms (family/caregiver beyond the household pair)
+- Caregiver proposals — a granted identity suggests events, the owner
+  approves and signs (rides the proposer-agnostic proposal mechanism)
+- Cryptographic grant scoping (per-scope data keys) — relay-blind namespace
+  enforcement; the true-ZK version of prefix-scoped grants
 
 ## Import
 
@@ -48,12 +53,25 @@ harvest a PR's "## Deferred" notes into the list.
 - Bluetooth medical devices; Apple HealthKit; Android Health Connect
 - ABDM boundary adapter (consent-federated — a different trust model)
 - Research marketplace (the grant primitive at different settings)
-- Processing node (`crates/node`): OCR, extraction, de-identification,
-  local RAG — delegating inference to a user-supplied OpenAI-compatible
-  endpoint
+
+## Processing node
+
+- OCR, extraction, de-identification, local RAG (`crates/node`) — delegates
+  inference to a user-supplied OpenAI-compatible endpoint; not tied to the
+  native wrapper
+- Narrative-notes extraction — mine imported `doc-` prose for coded-event
+  proposals (follow-up to OCR proposals)
+- Sender-sealed push notification hints — richer lock-screen text needs a
+  service-worker-accessible key custody decision first
 
 ## Intentionally not doing
 
+- **Multi-writer vaults** — capable-of-owning and capable-of-approving are
+  the same threshold: a capable owner approves proposals from granted
+  identities; below that threshold the record has honestly changed hands
+  (custody transfer via the social-recovery seed). One custodian identity
+  per vault; seeds are never co-held between adults (a seed co-holder is
+  unrevocable forever). Caregivers are revocable grantee-proposers.
 - **Ordered-prescriptions import** — ordered is not taken; importing orders
   would fabricate a medication history. Test-locked exclusion.
 - **SNOMED CT / CPT names in the offline dictionary** — licensing; those
