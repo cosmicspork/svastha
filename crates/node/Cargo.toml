@@ -1,6 +1,6 @@
 [package]
 name = "svastha-node"
-version = "0.10.0" # x-release-please-version
+version = "0.11.0" # x-release-please-version
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -10,11 +10,11 @@ keywords = ["health", "encryption", "inference", "rag", "svastha"]
 categories = ["cryptography"]
 
 [dependencies]
-svastha-core = { path = "../core", version = "0.10.0" } # x-release-please-version
+svastha-core = { path = "../core", version = "0.11.0" } # x-release-please-version
 # The OCR extractor is a third mapper alongside import's C-CDA/FHIR mappers: it
 # reuses import's `EventDraft` and the canonical terminology URIs (`systems`)
 # rather than inventing a parallel coding vocabulary.
-svastha-import = { path = "../import", version = "0.10.0" } # x-release-please-version
+svastha-import = { path = "../import", version = "0.11.0" } # x-release-please-version
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Content-hash checks on att-/doc-/cur- blob ids, and hex identity codes.
