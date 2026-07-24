@@ -37,6 +37,15 @@ export interface GrantScope {
   expires_at?: number
 }
 
+/** One entry in a `GET /v0/shares` listing: a live share's token and timing,
+ * Unix seconds. Never the bundle bytes or anything content-derived — see
+ * `spec/README.md`, "Cross-device listing". */
+export interface RelayShareInfo {
+  token: string
+  created_at: number
+  expires_at: number
+}
+
 /**
  * Version-negotiate with a relay before trusting it with anything: fetch its
  * unauthenticated `/v0/info` and compare `contract_version`. Throws a
@@ -245,6 +254,19 @@ export class RelayClient {
     if (res.status === 404) return false
     if (!res.ok) throw new Error(`deleteShare ${token}: ${res.status}`)
     return true
+  }
+
+  /** This identity's own **live** shares (token + created/expiry timing only,
+   * never the bundle bytes) — what lets a share made on another device be seen
+   * and revoked from this one (see `spec/README.md`, "Cross-device listing").
+   * Throws on a network or server error so the caller can degrade to a
+   * local-only view rather than silently showing an empty cross-device
+   * section. */
+  async listShares(): Promise<RelayShareInfo[]> {
+    const res = await this.fetch('GET', '/v0/shares')
+    if (!res.ok) throw new Error(`listShares: ${res.status}`)
+    const body = (await res.json()) as { shares: RelayShareInfo[] }
+    return body.shares
   }
 
   // --- push channel: a long-lived poke stream the relay writes to ---

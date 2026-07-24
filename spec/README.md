@@ -1021,6 +1021,7 @@ the trust contract.
 | `PUT /v0/share/{token}` | yes | sealed bundle | `204` / `413` | create or replace; expiry via the `Svastha-Share-Expires` header, clamped |
 | `GET /v0/share/{token}` | — | — | `200` octets / `410` / `404` | **unauthenticated** fetch by bearer token |
 | `DELETE /v0/share/{token}` | yes | — | `204` / `404` | revoke; the caller must be the stored owner |
+| `GET /v0/shares` | yes | — | `200 {"shares":[{"token":...,"created_at":...,"expires_at":...}...]}` | the caller's own **live** shares only |
 
 `{token}` reuses the blob `{id}` charset rule (`[A-Za-z0-9._-]`, never `.` or
 `..`) and must **additionally be ≥ 22 chars** — about 128 bits of entropy over
@@ -1067,6 +1068,26 @@ bearer hit the link, and when). It never learns the bundle's content, its scope
 (which events the owner chose to include), or the recipient's identity — the
 recipient authenticates with nothing, and the decryption key never reaches the
 relay.
+
+#### Cross-device listing
+
+`GET /v0/shares` answers `200 {"shares":[{"token":...,"created_at":...,
+"expires_at":...}...]}` with the caller's own **live** shares — never a
+tombstoned or lazily-expired one, and never the bundle bytes or anything
+content-derived. This is the same routing metadata the relay already holds
+because every `PUT /v0/share/{token}` is itself owner-authenticated (it must
+be, to make `DELETE`'s ownership check possible at all) — so the owner has
+always been stored per token, and this endpoint exposes nothing new, only a
+new way to ask for it. It is what lets a share made on one device be seen and
+revoked from another, **without syncing share records through the vault**: a
+share token's routing metadata (who owns it, when it was made, when it lapses)
+is operational state, not a medical fact, and does not belong in an
+append-only clinical log; a new synced namespace would also be a contract
+change for no payoff over asking the relay what it already knows.
+
+This is additive relay behavior — no stored byte format changes, and every
+share ever created already carried its owner — so it does **not** move
+`CONTRACT_VERSION`, the same posture as the A-chain relay hardening above.
 
 The relay is keyless and holds no durable server state beyond the blobs, grants,
 mailbox items, shares, and Web Push subscriptions themselves: it never decrypts,

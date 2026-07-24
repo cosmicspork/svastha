@@ -14,8 +14,6 @@ harvest a PR's "## Deferred" notes into the list.
 ## Sharing
 
 - QR seed handoff (auto-provision a new device)
-- Cross-device doctor-share management
-- Share-history clearing after the tombstone sweep
 - Caregiver proposals — a granted identity suggests events, the owner
   approves and signs (rides the proposer-agnostic proposal mechanism)
 - Cryptographic grant scoping (per-scope data keys) — relay-blind namespace

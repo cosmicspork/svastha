@@ -16,6 +16,9 @@
 //! relay-clamped expiry and revocation. The bundle is opaque ciphertext like
 //! everything else — the per-share key rides the link's URL fragment and never
 //! reaches the relay. `GET /v0/share/{token}` is the one unauthenticated read.
+//! `GET /v0/shares` (owner-authed) lists the caller's own live tokens with
+//! timing only, so a share made on one device can be managed from another
+//! without ever syncing share records through the vault.
 //!
 //! Two more pieces are runtime-only (no stored state): [`pokes::PokeHub`], the
 //! payload-free SSE push channel that tells a connected client when to pull
@@ -166,6 +169,9 @@ pub fn app(
             "/v0/share/{token}",
             put(routes::put_share).delete(routes::delete_share),
         )
+        // The caller's own live shares (token + timing only) — cross-device share
+        // management asks the relay for what it already knows.
+        .route("/v0/shares", get(routes::list_shares))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,
