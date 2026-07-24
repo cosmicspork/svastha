@@ -80,7 +80,7 @@ unrecoverable loss is a problem.
   because the sharing graph is mostly people who physically meet.
 
 The first shipped slice of this model is deliberately narrow: **whole-vault,
-ongoing, read-only sharing between two people in one household.** Each vault
+ongoing, read-only sharing between two people.** Each vault
 keeps a single writer — the owner logs, the other person reads — so no
 multi-writer merge machinery is needed yet. The relay learns only the grant edge
 (routing metadata, consistent with zero-knowledge); the wrapped vault key travels
@@ -251,9 +251,10 @@ pull and the node's shared-vault pull both send back the etag from their last
 fetch, so unchanged curation costs a round trip, not a re-open-and-merge (see
 `spec/README.md`, "Curation etags").
 
-**Owner-only in v1.** Shared (read-only household) pulls fetch only `ev-*` and
+**Owner-only in v1.** Shared read-only pulls fetch only `ev-*` and
 `att-*` blobs (the record and the captured documents its events point at) — a
-household grant never touches `cur-*`. The owner's tags, hides, and notes are
+household grant (the code's name for a person-kind grant) never touches
+`cur-*`. The owner's tags, hides, and notes are
 their own working state, not something to project onto someone reading their
 shared record. The one exception is the *doctor share*, which bundles the
 owner's `status:`/`name:` records for the shared concepts inside the sealed
@@ -402,7 +403,7 @@ leaks the sharing graph. See `spec/README.md`'s "Mailbox message envelope",
 A trusted processing client — software in the key circle, never a service with
 its own authority. The node is a **keyed grantee**: it generates its own
 `svastha1:` identity, each owner grants it whole-vault read from their app
-(household-share primitive, software as the grantee), and the keyring reaches it
+(the person-share primitive, with software as the grantee), and the keyring reaches it
 as a `key_handoff` through the mailbox. It holds no seed and cannot sign as any
 owner: a compromised node can leak plaintext (bounded by key epochs, revocable
 by rotation) but can never forge history. Its writes are **proposals** the owner
