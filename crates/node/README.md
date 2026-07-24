@@ -1,9 +1,9 @@
 # svastha-node
 
 The [Svastha](https://github.com/cosmicspork/svastha) node: a trusted processing
-client that holds keys, syncs a vault's plaintext locally, and runs OCR (with
-extraction and retrieval in later releases) by delegating inference to a
-user-supplied OpenAI-compatible endpoint. It ships no models.
+client that holds keys, syncs a vault's plaintext locally, and runs OCR and cited
+Q&A by delegating inference to a user-supplied OpenAI-compatible endpoint. It ships
+no models.
 
 The node is a **keyed grantee**, not a service: each owner grants it whole-vault
 read access from their app and hands off the keys through the relay's mailbox. It
@@ -78,12 +78,47 @@ inbox. It never signs anything as the owner — it proposes; the owner signs.
   rejected page is never re-proposed, and a re-shared page stays processed.
   Extraction and deposit failures back off per page so one bad page never wedges
   the queue. Job-status counters (queued / processed / failed) are exposed for
-  the later admin surface.
+  the admin surface below.
+
+## What runs today (D3 — cited Q&A + admin)
+
+The node side of the PWA's ask screen and node-admin surface. Both ride the typed
+mailbox envelope; both accept traffic **only from an enrolled owner** (envelope
+verify + the relay's `svastha-from` attestation + an enrolled-owner check),
+mirroring the web's posture.
+
+- **Cited Q&A.** A `chat_msg` question is answered by retrieving over **that
+  owner's** curation-aware index and asking the configured endpoint to answer from
+  the retrieved context. Retrieval is honest and personal-scale — keyword overlap
+  with light recency and kind/intent signals, no embedding store — and
+  **curation-aware**: the `name:` override supplies the shown name, and the
+  `status:` current-vs-past distinction both shows to the model and re-ranks (a
+  "what am I *currently* taking" question demotes resolved concepts). **Read-only**
+  — no proposal loop.
+- **Grounding is the contract.** Every answer carries the event content ids it
+  actually drew from; a citation is always a subset of the context supplied to the
+  model (they come from the context list itself), so an answer can never cite an
+  event the model invented. If nothing retrieves, or the model returns malformed
+  output or no usable citation, the node replies **honestly that it couldn't
+  answer** rather than forwarding uncited prose.
+- **Tenancy isolation is structural.** Retrieval is handed exactly one owner's
+  index, so a question from owner A can only ever be answered from — and cite —
+  A's vault, by construction rather than by discipline.
+- **Admin commands.** An `admin_cmd` from an enrolled owner administers the node's
+  work on *their* vault (design §2): `job_status` (this owner's index sizes, the
+  global OCR counters, and the last reconcile time — all content-free),
+  `log_tail` (recent lines of the node's own content-free logs), and
+  `set_inference_endpoint` (updates the runtime endpoint, persisted so it survives
+  a restart — the override takes precedence over the env boot default; still
+  subject to the boot-time validation, so a Batch-API path answers `ok: false`
+  with the reason). Node-global operations (restart, upgrade) are the host
+  operator's, never commands. Each command gets a sealed `admin_reply`.
+- **Idempotence.** Handled question/command message ids are recorded in the same
+  content-free journal, so a restart never re-answers a question or re-runs a
+  command, and the handled item is deleted from the node's mailbox.
 
 ## What later releases add
 
-- **D3 — cited Q&A.** Retrieval over the decrypted, curation-aware index; every
-  answer cites the event ids it drew from. Read-only, no approval loop.
 - **D4 — packaging.** Deployment images and manifests, plus relay-list pagination.
 
 ## Configuration (env)
@@ -93,8 +128,8 @@ inbox. It never signs anything as the owner — it proposes; the owner signs.
 | `SVASTHA_RELAY_URL` | **yes** | Relay base URL. Never assumed — the node reaches it outbound. |
 | `SVASTHA_NODE_DATA_DIR` | no | Durable dir for the node identity (default `svastha-node/data`). |
 | `SVASTHA_NODE_CACHE_DIR` | no | Ephemeral decrypted-plaintext dir (default `svastha-node/cache`). |
-| `SVASTHA_NODE_INFERENCE_ENDPOINT` | no | OpenAI-compatible chat-completions endpoint. Setting it **enables OCR**. Must be synchronous — a Batch-API path is rejected (batch outputs are retained server-side). |
-| `SVASTHA_NODE_INFERENCE_MODEL` | when endpoint set | Chat-completions model id (e.g. a vision model) sent in every request. |
+| `SVASTHA_NODE_INFERENCE_ENDPOINT` | no | OpenAI-compatible chat-completions endpoint (the **boot default** — a `set_inference_endpoint` admin command overrides it at runtime, persisted). Setting it **enables OCR and cited Q&A**. Must be synchronous — a Batch-API path is rejected (batch outputs are retained server-side). |
+| `SVASTHA_NODE_INFERENCE_MODEL` | when endpoint set | Chat-completions model id (a vision model for OCR) sent in every request. |
 | `SVASTHA_NODE_INFERENCE_API_KEY` | no | Inference API key; sent as a bearer token, never logged. |
 | `SVASTHA_NODE_BOOTSTRAP_ADDR` | no | Bootstrap-page bind address, **loopback only** (default `127.0.0.1:7071`). |
 | `SVASTHA_NODE_POLL_INTERVAL_SECS` | no | Fallback pull cadence when the SSE stream is down (default 60). |

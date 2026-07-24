@@ -45,7 +45,7 @@ harvest a PR's "## Deferred" notes into the list.
 
 ## Processing node
 
-- extraction, de-identification, local RAG (`crates/node`) — delegates
+- extraction, de-identification (`crates/node`) — delegates
   inference to a user-supplied OpenAI-compatible endpoint; not tied to the
   native wrapper
 - Narrative-notes extraction — mine imported `doc-` prose for coded-event

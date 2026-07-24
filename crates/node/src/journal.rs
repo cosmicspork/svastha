@@ -38,7 +38,7 @@
 //! idempotence degrades gracefully to re-propose-and-dedup: approved events are
 //! content-addressed, so a duplicate proposal collapses to the same event id.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -96,6 +96,13 @@ struct OwnerJournal {
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct JournalData {
     owners: BTreeMap<String, OwnerJournal>,
+    /// Message ids of one-shot owner→node requests already answered (a `chat_msg`
+    /// question, an `admin_cmd`). Mailbox **envelope ids** — the same
+    /// relay-visible metadata the OCR entries hold, never plaintext — so a handled
+    /// request is not answered twice across a restart (D3). A `#[serde(default)]`
+    /// so a pre-D3 journal on disk loads unchanged.
+    #[serde(default)]
+    handled_requests: BTreeSet<String>,
 }
 
 /// The durable OCR journal. Loaded once at boot; every mutation flushes
@@ -209,6 +216,23 @@ impl Journal {
             .flat_map(|o| o.sources.values())
             .filter(|e| matches!(e.status_kind, Some(SourceStatus::Failed { .. })))
             .count()
+    }
+
+    /// Whether a one-shot request envelope (a `chat_msg` question or an
+    /// `admin_cmd`) has already been answered. The message id is a hash of the
+    /// envelope's canonical bytes, so it is stable across restarts and unique per
+    /// request — the dedupe key the chat/admin drains key on.
+    pub fn request_handled(&self, msg_id: &str) -> bool {
+        self.data.handled_requests.contains(msg_id)
+    }
+
+    /// Mark a one-shot request answered (after its reply is deposited), so a
+    /// restart never re-answers it. Persists.
+    pub fn mark_request_handled(&mut self, msg_id: &str) -> Result<()> {
+        if self.data.handled_requests.insert(msg_id.to_string()) {
+            self.flush()?;
+        }
+        Ok(())
     }
 
     fn entry(&mut self, owner_hex: &str, source: &str) -> &mut SourceEntry {
@@ -325,6 +349,23 @@ mod tests {
         // A fresh load (a simulated restart) sees the deposited source.
         let j = Journal::load(dir.path());
         assert!(!j.eligible("owner", "att-a", 0));
+    }
+
+    #[test]
+    fn handled_requests_survive_a_reload_and_dedupe() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let mut j = Journal::load(dir.path());
+            assert!(!j.request_handled("msg-1"));
+            j.mark_request_handled("msg-1").unwrap();
+            assert!(j.request_handled("msg-1"));
+            // Idempotent: marking again is a no-op (no error, still handled).
+            j.mark_request_handled("msg-1").unwrap();
+        }
+        // A simulated restart still sees the answered request — never re-answered.
+        let j = Journal::load(dir.path());
+        assert!(j.request_handled("msg-1"));
+        assert!(!j.request_handled("msg-2"));
     }
 
     #[test]

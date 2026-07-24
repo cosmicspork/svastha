@@ -17,15 +17,24 @@
 
 use std::process::ExitCode;
 
+use svastha_node::logtail::{LogBuffer, LogTee};
 use svastha_node::{run, Config};
 use tracing_subscriber::EnvFilter;
 
 fn main() -> ExitCode {
+    // Tee tracing to stderr and a bounded in-memory ring buffer, so the `log_tail`
+    // admin command can return recent lines with no log file and no inbound port.
+    // The node's logs are content-free by construction (see `logtail`), so a tail
+    // of them leaks nothing.
+    let logs = LogBuffer::new();
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| EnvFilter::new("svastha_node=info")),
         )
+        // No ANSI escapes, so the buffered lines are clean text for the reply.
+        .with_ansi(false)
+        .with_writer(LogTee::new(logs.clone()))
         .init();
 
     let config = match Config::from_env() {
@@ -37,7 +46,7 @@ fn main() -> ExitCode {
         }
     };
 
-    if let Err(e) = run(config) {
+    if let Err(e) = run(config, logs) {
         tracing::error!(error = format!("{e:#}"), "node exited");
         return ExitCode::FAILURE;
     }
