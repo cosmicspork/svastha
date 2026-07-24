@@ -272,7 +272,18 @@ export function openShareBundle(
   } catch {
     return null
   }
+  return openBundlePlaintext(plaintext)
+}
 
+/**
+ * The post-decryption half of the recipient pipeline: validate the plaintext's
+ * shape and verify-or-drop its events and curation. Split from
+ * {@link openShareBundle} so the relay-less file path (`fileShare.ts`) — which
+ * decrypts under a different AAD and key source — runs the *identical* validate
+ * → verify-or-drop steps rather than a parallel copy. Returns null (→ "damaged")
+ * on any shape failure.
+ */
+export function openBundlePlaintext(plaintext: Uint8Array): OpenedBundle | null {
   const validated = validateBundle(new TextDecoder().decode(plaintext))
   if (!validated) return null
 

@@ -42,11 +42,12 @@
   let ready = $state(false)
   let vaultExists = $state(false)
 
-  // A share link (`#/s/…`) is a cold, account-less entry point: it must NOT
-  // touch the vault at all — no `hasVault` read, no onboarding, no unlock, no
-  // sync — so the normal boot is gated behind this. ShareView keeps everything
-  // in memory for the tab's life. Read once at mount: a share is a fresh tab.
-  const isShare = route.path === '/s/:frag'
+  // A share link (`#/s/…`) or a file-open entry (`#/s`) is a cold, account-less
+  // entry point: it must NOT touch the vault at all — no `hasVault` read, no
+  // onboarding, no unlock, no sync — so the normal boot is gated behind this.
+  // ShareView keeps everything in memory for the tab's life. Read once at mount:
+  // a share is a fresh tab.
+  const isShare = route.path === '/s/:frag' || route.path === '/s'
 
   onMount(async () => {
     applyTheme(await loadTheme())

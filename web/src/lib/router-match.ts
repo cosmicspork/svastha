@@ -29,7 +29,10 @@ const KNOWN_PATTERNS = [
   '/ask',
   // A doctor-share cold-load link. The single `:frag` segment is
   // `{token}.{key}.{relay}`; the fragment is parsed in shareRecipient.ts, not
-  // here (this router only needs to route to the share view).
+  // here (this router only needs to route to the share view). The bare `/s` (no
+  // fragment) is the relay-less file-open entry — the same cold ShareView, in
+  // "open a share file" mode (see fileShare.ts).
+  '/s',
   '/s/:frag',
   '/person/:ed',
   '/import',

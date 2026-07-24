@@ -245,6 +245,43 @@ export function buildBundle(
   return bundle
 }
 
+/** Gather a bundle's inlined bytes and build its plaintext — the one place the
+ * "what a share contains" contract lives, shared by the relay-link path
+ * ({@link createDoctorShare}) and the relay-less file path (`fileShare.ts`), so
+ * the two can never drift on scope, curation carriage, or inlined blobs. Reads
+ * the local `attachments` and `provenance` stores for the bytes of any captured
+ * paper record (`att-`) and imported source document (`doc-`) the scoped events
+ * reference; a blob this device never received is silently omitted, mirroring
+ * the per-loop behavior documented below. `events` must already be
+ * scope-filtered; `curation` already narrowed to the in-scope concepts. */
+export async function assembleShareBundle(
+  events: StoredEvent[],
+  signerEd25519Hex: string,
+  curation: SignedCurationRecord[],
+  createdAtIso: string,
+): Promise<ShareBundle> {
+  // Inline the bytes of any captured paper record in scope, so the recipient
+  // (no vault key, no relay auth) can open them from the bundle itself.
+  const attachments: Record<string, string> = {}
+  for (const sha256 of referencedAttachmentShas(events)) {
+    const bytes = await attachmentBytes(sha256)
+    if (bytes) attachments[sha256] = bytesToBase64(bytes)
+  }
+  // Same treatment for the imported source documents these events point at.
+  // Reads the local `provenance` store regardless of that blob's own sync
+  // status — a doc- blob too large for the relay's body cap still lives on the
+  // importing device (see import.ts's `tooLargeToSync`), so a share created
+  // from that device can still carry it even though a relay pull couldn't. A
+  // device that never received the blob (synced from elsewhere) silently omits
+  // it here, mirroring the attachment loop above.
+  const documents: Record<string, { name: string; bytes: string }> = {}
+  for (const sha256 of referencedDocumentShas(events)) {
+    const doc = await getProvenance(sha256)
+    if (doc) documents[sha256] = { name: doc.name, bytes: bytesToBase64(doc.bytes) }
+  }
+  return buildBundle(events, signerEd25519Hex, createdAtIso, attachments, curation, documents)
+}
+
 /** Assemble the doctor-facing link: `{appOrigin}/#/s/{token}.{key}.{relay}`.
  * `key` is base64url of the 32 per-share key bytes and `relay` is base64url of
  * the relay origin string. Both ride the URL *fragment* (`#…`), which browsers
@@ -318,26 +355,7 @@ export async function createDoctorShare(params: {
   const shareKey = WasmDataKey.from_bytes(keyBytes)
 
   const createdAtIso = new Date().toISOString()
-  // Inline the bytes of any captured paper record in scope, so the recipient
-  // (no vault key, no relay auth) can open them from the bundle itself.
-  const attachments: Record<string, string> = {}
-  for (const sha256 of referencedAttachmentShas(events)) {
-    const bytes = await attachmentBytes(sha256)
-    if (bytes) attachments[sha256] = bytesToBase64(bytes)
-  }
-  // Same treatment for the imported source documents these events point at.
-  // Reads the local `provenance` store regardless of that blob's own sync
-  // status — a doc- blob too large for the relay's body cap still lives on the
-  // importing device (see import.ts's `tooLargeToSync`), so a share created
-  // from that device can still carry it even though a relay pull couldn't. A
-  // device that never received the blob (synced from elsewhere) silently omits
-  // it here, mirroring the attachment loop above.
-  const documents: Record<string, { name: string; bytes: string }> = {}
-  for (const sha256 of referencedDocumentShas(events)) {
-    const doc = await getProvenance(sha256)
-    if (doc) documents[sha256] = { name: doc.name, bytes: bytesToBase64(doc.bytes) }
-  }
-  const bundle = buildBundle(events, identity.ed25519_public_hex, createdAtIso, attachments, curation, documents)
+  const bundle = await assembleShareBundle(events, identity.ed25519_public_hex, curation, createdAtIso)
   const plaintext = new TextEncoder().encode(JSON.stringify(bundle))
   // A share is capped tighter than a blob (relay's 8 MiB share ceiling). Catch
   // it here with an honest message rather than letting the PUT 413 — attachments

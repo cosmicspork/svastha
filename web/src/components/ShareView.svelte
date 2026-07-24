@@ -7,6 +7,7 @@
   import { onMount } from 'svelte'
   import { initSvastha } from '../lib/svastha'
   import { loadShare, type ShareLoadResult } from '../lib/shareRecipient'
+  import { inspectFileShare, openWithPassphrase } from '../lib/fileShare'
   import { statusMapFrom, nameMapFrom } from '../lib/curation'
   import { fingerprint } from '../lib/exchange'
   import { base64ToBytes } from '../lib/base64'
@@ -16,8 +17,84 @@
   import AttachmentViewer from './AttachmentViewer.svelte'
 
   // null = still loading; the pipeline is wasm-gated, so nothing is shown until
-  // initSvastha resolves.
+  // initSvastha resolves. A successfully-opened file share is folded into the
+  // same `{ status: 'ok', bundle }` shape, so the whole viewer below renders it
+  // identically to a link — the format only changes how the bytes and key arrive.
   let result = $state<ShareLoadResult | null>(null)
+
+  // Two entry shapes share this cold view: a link (`#/s/{token}.{key}.{relay}`,
+  // a real fetch-and-open) and the relay-less file path (`#/s`, no fragment — a
+  // file the recipient was handed out of band). A present-but-malformed fragment
+  // stays a link attempt (→ the invalid-link error), so only a truly fragment-
+  // less hash opens the file picker.
+  function isLinkAttempt(hash: string): boolean {
+    const s = hash.replace(/^#/, '')
+    return s.startsWith('/s/') && s.slice(3).length > 0
+  }
+  const linkMode = isLinkAttempt(window.location.hash)
+
+  // File-open state (file mode only): a damaged-file flag, drag styling, and —
+  // for a passphrase-protected file — the retained sealed body + KDF params so a
+  // wrong phrase can be retried without re-reading the file.
+  let fileDamaged = $state(false)
+  let dragOver = $state(false)
+  let phrasePrompt = $state<{ body: Uint8Array; salt: Uint8Array; iterations: number } | null>(null)
+  let phraseInput = $state('')
+  let phraseError = $state(false)
+  let phraseBusy = $state(false)
+
+  async function openFile(file: File): Promise<void> {
+    fileDamaged = false
+    phraseError = false
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    const inspection = inspectFileShare(bytes)
+    if (inspection.status === 'ok') {
+      result = { status: 'ok', bundle: inspection.bundle }
+    } else if (inspection.status === 'passphrase') {
+      phrasePrompt = { body: inspection.body, salt: inspection.salt, iterations: inspection.iterations }
+    } else {
+      fileDamaged = true
+    }
+  }
+
+  function onFileInput(e: Event): void {
+    const file = (e.currentTarget as HTMLInputElement).files?.[0]
+    if (file) void openFile(file)
+  }
+
+  function onDrop(e: DragEvent): void {
+    e.preventDefault()
+    dragOver = false
+    const file = e.dataTransfer?.files?.[0]
+    if (file) void openFile(file)
+  }
+
+  async function submitPhrase(): Promise<void> {
+    if (!phrasePrompt || phraseBusy) return
+    phraseBusy = true
+    phraseError = false
+    const bundle = await openWithPassphrase(
+      phrasePrompt.body,
+      phrasePrompt.salt,
+      phrasePrompt.iterations,
+      phraseInput,
+    )
+    phraseBusy = false
+    if (bundle) {
+      result = { status: 'ok', bundle }
+      phrasePrompt = null
+      phraseInput = ''
+    } else {
+      phraseError = true
+    }
+  }
+
+  function resetFile(): void {
+    phrasePrompt = null
+    phraseInput = ''
+    phraseError = false
+    fileDamaged = false
+  }
 
   // The paper records the shared events reference, and the open viewer entry.
   // The loader reads the bundle's own in-memory attachments map (base64 → bytes)
@@ -89,7 +166,9 @@
   async function load() {
     result = null
     await initSvastha()
-    result = await loadShare(window.location.hash)
+    // Link mode fetches and opens; file mode leaves `result` null so the picker
+    // renders (initSvastha still had to run — inspecting a file needs wasm).
+    if (linkMode) result = await loadShare(window.location.hash)
   }
 
   onMount(load)
@@ -110,7 +189,67 @@
 </script>
 
 <div class="share">
-  {#if result === null}
+  {#if result === null && !linkMode}
+    <!-- Relay-less file path: no fragment in the URL, so offer to open a share
+         file the recipient was handed out of band. -->
+    <div class="state file-open" data-testid="share-file-open">
+      <h1>Open a shared record</h1>
+      {#if phrasePrompt}
+        <p class="lede">
+          This file is protected by a passphrase. Enter the words the sender gave you separately.
+        </p>
+        <div class="phrase-row">
+          <input
+            type="text"
+            autocomplete="off"
+            autocapitalize="none"
+            spellcheck="false"
+            placeholder="seven words"
+            bind:value={phraseInput}
+            onkeydown={(e) => e.key === 'Enter' && submitPhrase()}
+            data-testid="file-passphrase-input"
+          />
+          <button
+            class="primary"
+            onclick={submitPhrase}
+            disabled={phraseBusy || phraseInput.trim().length === 0}
+            data-testid="file-passphrase-submit"
+          >
+            Open
+          </button>
+        </div>
+        {#if phraseError}
+          <p class="error-msg" data-testid="file-passphrase-error">
+            That passphrase didn’t open the file. Check the words and try again.
+          </p>
+        {/if}
+        <button class="link" onclick={resetFile} data-testid="file-choose-another">
+          Choose a different file
+        </button>
+      {:else}
+        <p class="lede">Choose the share file the sender gave you, or drop it here.</p>
+        <label
+          class="dropzone"
+          class:over={dragOver}
+          ondragover={(e) => {
+            e.preventDefault()
+            dragOver = true
+          }}
+          ondragleave={() => (dragOver = false)}
+          ondrop={onDrop}
+          data-testid="file-share-dropzone"
+        >
+          <input type="file" accept=".svashare" onchange={onFileInput} data-testid="file-share-input" />
+          <span>Choose a file or drop it here</span>
+        </label>
+        {#if fileDamaged}
+          <p class="error-msg" data-testid="file-share-damaged">
+            This file isn’t a valid Svastha share, or it’s damaged. Ask the sender to resend it.
+          </p>
+        {/if}
+      {/if}
+    </div>
+  {:else if result === null}
     <p class="muted" data-testid="share-loading">Opening shared record…</p>
   {:else if result.status === 'error'}
     <div class="state" data-testid="share-error" data-error={result.error}>
@@ -310,5 +449,63 @@
   .error-msg {
     font-size: var(--text-base);
     margin-bottom: var(--space-4);
+  }
+
+  .file-open .lede {
+    color: var(--muted);
+    margin-bottom: var(--space-4);
+  }
+
+  /* A labelled file input styled as a drop target: the native input sits inside
+     the label so a click anywhere opens the picker, and the label is also the
+     drag-and-drop surface. */
+  .dropzone {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 8rem;
+    padding: var(--space-5);
+    border: 2px dashed var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    color: var(--muted);
+    text-align: center;
+    cursor: pointer;
+  }
+
+  .dropzone.over {
+    border-color: var(--action);
+    color: var(--text);
+  }
+
+  .dropzone input[type='file'] {
+    /* Keep the native input reachable (Playwright, keyboard) but out of the
+       layout — the whole label is the visible target. */
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .phrase-row {
+    display: flex;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+  }
+
+  .phrase-row input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .link {
+    display: inline;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--action);
+    text-decoration: underline;
+    font: inherit;
   }
 </style>

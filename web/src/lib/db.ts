@@ -103,6 +103,14 @@ export const MIGRATIONS: ((db: IDBDatabase, tx: IDBTransaction) => void)[] = [
     const adminLog = db.createObjectStore('admin_log', { keyPath: 'id' })
     adminLog.createIndex('sentAt', 'sentAt')
   },
+  // v10: relay-less file shares (see lib/fileShare.ts) — device-local history of
+  // shares exported as a handed-over file, keyed by a synthetic id. Distinct
+  // from `doctor_shares` on purpose: a file share holds no bearer token, no key
+  // material, and no expiry, is unrevocable by construction, and so must never
+  // be swept by the relay-link tombstone purge. Never synced.
+  (db) => {
+    db.createObjectStore('file_shares', { keyPath: 'id' })
+  },
 ]
 
 function requestToPromise<T>(req: IDBRequest<T>): Promise<T> {

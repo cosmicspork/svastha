@@ -27,18 +27,23 @@
     type DoctorShareRecord,
     type ShareScope,
   } from '../lib/doctorShare'
+  import { createFileShare, recordFileShare, type FileShareExport } from '../lib/fileShare'
+  import { downloadBlob } from '../lib/export'
   import { conceptKey } from '../lib/summary'
 
   // Management (the list of existing links, revoke, re-show) lives on the
   // Doctor screen now — this sheet is creation only. `oncreated` lets that
   // screen refresh its list the moment a new link is minted.
+  // `relay` is null when no relay is connected: the link path needs one, but a
+  // file share does not (that is the whole point), so the sheet still opens and
+  // locks itself to file delivery.
   let {
     relay,
     relayUrl,
     onclose,
     oncreated,
   }: {
-    relay: RelayClient
+    relay: RelayClient | null
     relayUrl: string
     onclose: () => void
     oncreated?: () => void
@@ -50,6 +55,12 @@
     "Revoking stops anyone from opening this link again. It can't take back what " +
     "they've already seen, saved, or printed. For anything highly sensitive, share " +
     'it in person.'
+
+  // A file share is unrevocable and never expires by construction — there is no
+  // relay to withdraw it from. Say so plainly wherever a file is offered.
+  const FILE_HONEST_COPY =
+    'A share file never expires and cannot be revoked — once you hand it over it is a copy, ' +
+    'like a paper folder. Only save one for someone you trust to hold it.'
 
   const relayOrigin = normalizeRelayUrl(relayUrl)
   const appOrigin = window.location.origin
@@ -178,14 +189,62 @@
     return prefix + (sensitiveOn.has(cat) ? 'Included in this share.' : 'Left out unless you turn it on.')
   }
 
+  // --- delivery: a relay link (the shipped path) or a handed-over file ---
+  // Default 'link' keeps the existing flow untouched; 'file' is the relay-less
+  // export. The passphrase toggle is ON by default (the owner's decision): a
+  // file at rest stays ciphertext unless the owner deliberately embeds the key.
+  let delivery = $state<'link' | 'file'>(relay ? 'link' : 'file')
+  let usePassphrase = $state(true)
+
   // --- create / result ---
   let busy = $state(false)
   let error = $state('')
   let result = $state<{ link: string; record: DoctorShareRecord } | null>(null)
   let copied = $state(false)
 
-  async function create() {
+  // File-share result: the exported file plus its once-shown passphrase.
+  let fileResult = $state<FileShareExport | null>(null)
+  let passphraseCopied = $state(false)
+
+  async function createFile() {
     if (!session.identity) return
+    busy = true
+    error = ''
+    try {
+      const exported = await createFileShare({
+        identity: session.identity,
+        events: scopedEvents,
+        curation: carriedCuration,
+        mode: usePassphrase ? 'passphrase' : 'embedded',
+      })
+      // Hand the file to the browser's download flow (no relay, no network).
+      downloadBlob(
+        exported.filename,
+        new Blob([exported.bytes as BlobPart], { type: 'application/octet-stream' }),
+      )
+      // History only — no key material, no passphrase (see recordFileShare).
+      await recordFileShare({
+        mode: exported.mode,
+        scopeDescription,
+        createdAt: new Date().toISOString(),
+      })
+      fileResult = exported
+      oncreated?.()
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Could not create the share file.'
+    } finally {
+      busy = false
+    }
+  }
+
+  async function copyPassphrase(phrase: string) {
+    await navigator.clipboard.writeText(phrase)
+    passphraseCopied = true
+    setTimeout(() => (passphraseCopied = false), 2000)
+  }
+
+  async function create() {
+    if (!session.identity || !relay) return
     busy = true
     error = ''
     try {
@@ -216,6 +275,7 @@
 
   function reset() {
     result = null
+    fileResult = null
     showPreview = false
     error = ''
   }
@@ -255,12 +315,92 @@
       <button class="ghost" onclick={reset} data-testid="share-another">Share something else</button>
       <button onclick={onclose} data-testid="share-done">Done</button>
     </div>
+  {:else if fileResult}
+    <!-- File-share result: the file has downloaded; if it is passphrase-
+         protected, show the phrase ONCE for the owner to convey separately. -->
+    <h2>File saved</h2>
+    <p class="muted">{scopeDescription}</p>
+    <p class="filename data" data-testid="file-share-name">{fileResult.filename}</p>
+
+    {#if fileResult.large}
+      <p class="hint warn" data-testid="file-share-large">
+        This file is large ({Math.round(fileResult.sizeBytes / (1024 * 1024))} MB) — some channels
+        may balk. It still saved fine.
+      </p>
+    {/if}
+
+    {#if fileResult.passphrase}
+      <div class="passphrase-box" data-testid="file-share-passphrase-box">
+        <p class="passphrase-label">Passphrase — shown once</p>
+        <p class="passphrase data" data-testid="file-share-passphrase">{fileResult.passphrase}</p>
+        <button
+          class="primary"
+          onclick={() => copyPassphrase(fileResult!.passphrase!)}
+          data-testid="copy-file-passphrase"
+        >
+          {passphraseCopied ? 'Copied' : 'Copy passphrase'}
+        </button>
+      </div>
+      <p class="honest" data-testid="file-passphrase-instructions">
+        Give this passphrase to the recipient separately — say it aloud, or send it through a
+        different channel than the file. It is shown once and never saved; the file stays scrambled
+        without it.
+      </p>
+    {:else}
+      <p class="honest" data-testid="file-embedded-note">
+        This file carries its own key — anyone who receives it can open it, like handing over an
+        unlocked folder. No passphrase to convey.
+      </p>
+    {/if}
+
+    <p class="honest" data-testid="file-open-instructions">
+      The recipient opens it at <span class="data">{appOrigin}/#/s</span> and chooses the file — no
+      account needed.
+    </p>
+    <p class="honest" data-testid="file-share-honest">{FILE_HONEST_COPY}</p>
+
+    <div class="row">
+      <button class="ghost" onclick={reset} data-testid="share-another">Share something else</button>
+      <button onclick={onclose} data-testid="share-done">Done</button>
+    </div>
   {:else}
     <h2>Share with a doctor</h2>
     <p class="muted">
-      Package part of your record under a fresh key and hand over a link (or QR) that only opens
-      what you picked. No account needed on their end.
+      Package part of your record under a fresh key. Send a link (or QR) through the relay, or save
+      a file to hand over yourself — either way it only opens what you picked, no account needed on
+      their end.
     </p>
+
+    <section class="stack">
+      <h3>How to share</h3>
+      <div class="seg" style:max-width="22rem">
+        <button
+          type="button"
+          aria-pressed={delivery === 'link'}
+          disabled={!relay}
+          onclick={() => relay && (delivery = 'link')}
+          data-testid="delivery-link"
+        >
+          Share link
+        </button>
+        <button
+          type="button"
+          aria-pressed={delivery === 'file'}
+          onclick={() => (delivery = 'file')}
+          data-testid="delivery-file"
+        >
+          Save as file
+        </button>
+      </div>
+      <p class="hint muted">
+        {#if delivery === 'link'}
+          Uploaded to your relay under a one-off key; expires on its own and can be revoked.
+        {:else}
+          A file you hand over out of band (AirDrop, a USB stick, a portal upload). No relay, no
+          expiry, and it cannot be revoked once handed over.
+        {/if}
+      </p>
+    </section>
 
     <section class="stack">
       <h3>What to include</h3>
@@ -363,21 +503,51 @@
       {/if}
     </section>
 
-    <section class="stack">
-      <h3>Link expires</h3>
-      <div class="seg" style:max-width="18rem">
-        {#each EXPIRY_CHOICES as choice (choice.days)}
+    {#if delivery === 'link'}
+      <section class="stack">
+        <h3>Link expires</h3>
+        <div class="seg" style:max-width="18rem">
+          {#each EXPIRY_CHOICES as choice (choice.days)}
+            <button
+              type="button"
+              aria-pressed={expiryDays === choice.days}
+              onclick={() => (expiryDays = choice.days)}
+              data-testid="share-expiry-{choice.days}"
+            >
+              {choice.label}
+            </button>
+          {/each}
+        </div>
+      </section>
+    {:else}
+      <section class="stack">
+        <h3>Protection</h3>
+        <div class="optin" role="group" aria-label="Passphrase">
           <button
             type="button"
-            aria-pressed={expiryDays === choice.days}
-            onclick={() => (expiryDays = choice.days)}
-            data-testid="share-expiry-{choice.days}"
+            role="switch"
+            class="optin-row"
+            aria-checked={usePassphrase}
+            onclick={() => (usePassphrase = !usePassphrase)}
+            data-testid="file-passphrase-toggle"
           >
-            {choice.label}
+            <span class="optin-text">
+              <span class="optin-name">Protect with a passphrase</span>
+              <span class="optin-sub muted">
+                {#if usePassphrase}
+                  The file stays scrambled. We generate a short passphrase, shown once — you convey
+                  it to the recipient separately.
+                {:else}
+                  The key travels inside the file: anyone who gets the file can open it, like handing
+                  over an unlocked folder.
+                {/if}
+              </span>
+            </span>
+            <span class="switch" aria-hidden="true"><span class="knob"></span></span>
           </button>
-        {/each}
-      </div>
-    </section>
+        </div>
+      </section>
+    {/if}
 
     <section class="stack">
       <p class="count" data-testid="share-count">
@@ -414,17 +584,30 @@
     {/if}
 
     <div class="row">
-      <button
-        class="primary"
-        disabled={busy || scopedEvents.length === 0}
-        onclick={create}
-        data-testid="share-create"
-      >
-        Create share
-      </button>
+      {#if delivery === 'link'}
+        <button
+          class="primary"
+          disabled={busy || scopedEvents.length === 0}
+          onclick={create}
+          data-testid="share-create"
+        >
+          Create share
+        </button>
+      {:else}
+        <button
+          class="primary"
+          disabled={busy || scopedEvents.length === 0}
+          onclick={createFile}
+          data-testid="share-save-file"
+        >
+          Save file
+        </button>
+      {/if}
       <button class="ghost" onclick={onclose}>Cancel</button>
     </div>
-    <p class="honest" data-testid="share-honest-create">{HONEST_COPY}</p>
+    <p class="honest" data-testid="share-honest-create">
+      {delivery === 'link' ? HONEST_COPY : FILE_HONEST_COPY}
+    </p>
   {/if}
 </Sheet>
 
@@ -633,6 +816,39 @@
     line-height: 1.5;
     color: var(--muted);
     margin: var(--space-4) 0 0;
+  }
+
+  .filename {
+    font-size: var(--text-sm);
+    background: var(--surface);
+    padding: var(--space-2);
+    border-radius: var(--radius-sm);
+    overflow-wrap: anywhere;
+  }
+
+  /* The once-shown passphrase gets a bordered, prominent box — it is the one
+     piece of state the owner must capture before leaving this screen. */
+  .passphrase-box {
+    margin-top: var(--space-4);
+    border: 1px solid var(--action);
+    border-radius: var(--radius-sm);
+    padding: var(--space-3);
+    text-align: center;
+  }
+
+  .passphrase-label {
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    margin: 0 0 var(--space-2);
+  }
+
+  .passphrase {
+    font-size: var(--text-lg);
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+    margin: 0 0 var(--space-3);
   }
 
   .row {
