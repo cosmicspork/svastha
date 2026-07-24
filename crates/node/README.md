@@ -13,7 +13,7 @@ and signs.
 
 > Pre-1.0 and unstable.
 
-## What runs today (D1 — substrate)
+## Enrollment & sync
 
 This crate is the foundation the processing features sit on:
 
@@ -46,7 +46,7 @@ This crate is the foundation the processing features sit on:
 The node holds no inbound ports beyond the bootstrap page; it reaches the relay
 outbound only.
 
-## What runs today (D2 — OCR → proposals)
+## OCR → proposals
 
 Enabled when an inference endpoint is configured (see the config table). On each
 reconcile the node OCRs newly-synced captured pages and deposits the results as
@@ -80,7 +80,7 @@ inbox. It never signs anything as the owner — it proposes; the owner signs.
   the queue. Job-status counters (queued / processed / failed) are exposed for
   the admin surface below.
 
-## What runs today (D3 — cited Q&A + admin)
+## Cited Q&A and owner administration
 
 The node side of the PWA's ask screen and node-admin surface. Both ride the typed
 mailbox envelope; both accept traffic **only from an enrolled owner** (envelope
@@ -117,7 +117,7 @@ mirroring the web's posture.
   content-free journal, so a restart never re-answers a question or re-runs a
   command, and the handled item is deleted from the node's mailbox.
 
-## What runs today (D4 — packaging)
+## Packaging
 
 A container image and a compose profile for self-hosters. No Kubernetes
 manifests live in this repo; deploy configs elsewhere watch the same GHCR

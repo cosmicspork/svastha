@@ -397,14 +397,32 @@ answers `404` identically for "no such blob" and "no grant," so probing never
 leaks the sharing graph. See `spec/README.md`'s "Mailbox message envelope",
 "Grants", and "Mailbox" sections for the contract.
 
-## Node (`crates/node`, later release)
+## Node (`crates/node`)
 
-A trusted processing client: it holds keys, syncs plaintext locally, and runs the
-OCR, extraction, de-identification, and RAG pipeline. It ships no models. Instead
-it delegates inference to a user-supplied OpenAI-compatible endpoint (Ollama, LM
-Studio, vLLM, or a cloud endpoint the user explicitly chooses). Running inference
-inside the user's own trust boundary is how AI features stay compatible with
-zero-knowledge.
+A trusted processing client — software in the key circle, never a service with
+its own authority. The node is a **keyed grantee**: it generates its own
+`svastha1:` identity, each owner grants it whole-vault read from their app
+(household-share primitive, software as the grantee), and the keyring reaches it
+as a `key_handoff` through the mailbox. It holds no seed and cannot sign as any
+owner: a compromised node can leak plaintext (bounded by key epochs, revocable
+by rotation) but can never forge history. Its writes are **proposals** the owner
+reviews and signs in the app; its administration is owner-signed `admin_cmd`
+messages over the same mailbox. One node serves several owners — each grant
+enrolls another vault, and tenants are structurally isolated.
+
+What it runs: OCR of captured pages into draft coded events (each proposal
+carrying source-blob, method, and model provenance), and cited Q&A over the
+owner's own record (every answer cites the event ids it drew from; an answer
+that cannot be grounded is an honest "couldn't answer"). It ships no models —
+inference delegates to a user-supplied OpenAI-compatible endpoint (Ollama, LM
+Studio, vLLM, or a cloud endpoint the user explicitly chooses), which is how AI
+features stay compatible with a zero-knowledge relay: the trust decision about
+who sees plaintext belongs to the owner, explicitly, in one place.
+
+Its state mirrors its trust position: the only durable state is a disposable
+identity keypair (lose it, re-enroll via a fresh grant); decrypted plaintext
+lives in an ephemeral cache and re-syncs from the relay on restart. It makes no
+inbound connections — see "Self-hosting".
 
 ## Web (`web`)
 
@@ -582,7 +600,12 @@ power users can run everything locally, from the same codebase.
 Since v0.1.0 the vault has grown passkey unlock, the doctor share and its
 clinician summary view, narrative-notes import, paper-record capture with
 encrypted attachment blobs and an in-app viewer, and render-time code display
-names with the opt-in offline dictionary.
+names with the opt-in offline dictionary. The node/protocol wave then opened
+and closed the contract once (typed mailbox envelope; key epochs) and shipped
+the relay's push channel (SSE + Web Push), scoped grants, pagination and
+curation etags, the proposal inbox, devices & grants with revoke-and-rotate,
+cited Q&A, the processing node itself, relay-less file shares, and cross-device
+share management.
 
 Forward-looking plans live in `docs/ROADMAP.md`.
 

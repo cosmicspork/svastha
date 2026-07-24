@@ -2,167 +2,215 @@
 
 [![ci](https://github.com/cosmicspork/svastha/actions/workflows/ci.yml/badge.svg)](https://github.com/cosmicspork/svastha/actions/workflows/ci.yml)
 
-Self-custodial, end-to-end-encrypted, local-first personal medical records. Your
-health history lives encrypted on your devices, syncs through a relay that cannot
-read it, and is yours to keep, carry, and share on your terms.
+Self-custodial, end-to-end-encrypted, local-first personal medical records.
+Your health history lives encrypted on your devices, syncs through a relay that
+cannot read it, and is yours to keep, carry, and share on your terms.
 
-## About the name
+Patients are often the only ones holding a complete picture of their own care —
+records get handed over on paper, or scattered across portals that each see one
+slice. Svastha is a place to gather that picture and own it outright: encrypted
+with keys derived from a seed phrase only you hold, so whoever runs the sync
+infrastructure holds nothing readable.
 
-**Svastha** comes from the Sanskrit स्वस्थ (*sva-stha*): *sva*, "self," and
-*stha*, "abiding" or "standing." It means being established in oneself, and it is
-Ayurveda's word for health. Self plus health is the whole idea: your records,
-held by you.
+## What it does
 
-## Why
+- **Import your records.** Client-side C-CDA and FHIR import (the formats US
+  patient-access exports actually produce) maps documents into typed, coded
+  events — allergies, medications, labs, immunizations, problems, procedures,
+  narrative notes — deduplicated by content, with the source document kept.
+- **Capture paper.** Photograph or attach paper records (including PDFs); pages
+  are encrypted as attachment blobs with an in-app viewer.
+- **One timeline.** Imported facts and self-tracked data (symptoms, vitals,
+  meds, food, exercise, cycle tracking that records and never predicts) live on
+  a single chronological spine, with curation — current-vs-past status, display
+  names, tags — layered on without ever rewriting history. Sensitive categories
+  are sensitive by default, everywhere they surface.
+- **Share with a doctor.** A scoped share (date range, categories; sensitive
+  categories stay out unless named) travels as a link + QR the clinician opens
+  cold in any browser, or as an encrypted file handed over with no relay
+  involved (optional passphrase). Shares are revocable where that's honest and
+  labeled unrevocable where it isn't.
+- **Share within a household.** Grant another person ongoing read access to
+  your record, scoped to what a partner actually needs; revoking a grant
+  really rotates keys.
+- **Multi-device.** Restore any device from your seed phrase; devices converge
+  through the relay. A devices & grants screen shows both directions of the
+  sharing graph, with revoke-and-rotate as one action.
+- **Ask your record.** With an optional self-hosted processing node: OCR turns
+  captured pages into *draft* events you review and approve — nothing enters
+  your record unsigned — and a chat screen answers questions from your own
+  record with citations that link back to the underlying events. Inference
+  runs against an endpoint *you* choose (local Ollama/vLLM or a cloud endpoint
+  you explicitly trust). Clearly labeled retrieval, not medical advice.
+- **Know when something's waiting.** Real-time sync pokes over SSE, plus Web
+  Push to a locked phone — notifications are deliberately generic, because
+  medical content never belongs on a lock screen.
+- **Offline-first PWA.** The app is a static bundle + IndexedDB; the network is
+  a sync optimization, not a requirement.
 
-Patients are often the only ones holding a complete picture of their own care,
-whether because records are handed to them on paper or because they are scattered
-across portals that each see one slice. Svastha is a place to gather that picture
-and own it outright, encrypted with keys derived from a seed phrase only you hold,
-so whoever runs the sync infrastructure (including a hosted Svastha) knows nothing
-and holds nothing.
+## Who can read what
 
-## Stack
-
-- **Rust spine**: a shared `core` crate (the crypto envelope and event schema)
-  compiled to native and WASM, a zero-knowledge `relay`, and a trusted `node`.
-- **Svelte 5 PWA** (bun + Vite), local-first, consuming `core` over WASM.
-- **AGPL-3.0**.
-
-## Layout
-
-| Path | What |
+| Party | Sees |
 |---|---|
-| `crates/core` | Trust contract: encryption envelope and event schema. Native and WASM. |
-| `crates/import` | Client-side C-CDA/FHIR mapping into the internal event model, compiled to WASM alongside `core`. |
-| `crates/svastha` | Umbrella crate re-exporting `core` under the bare `svastha` name. |
-| `crates/wasm` | WASM bindings exposing `core` to the web app (published to npm as `@svastha/core`). |
-| `crates/relay` | Zero-knowledge store-and-forward server for encrypted blobs. |
-| `crates/node` | Trusted processing client; delegates inference to an OpenAI-compatible endpoint. Later release. |
-| `web` | Svelte 5 PWA, local-first, consumes `core` via WASM. |
-| `spec` | Versioned wire contract and test vectors. |
-| `fixtures` | Synthetic, PHI-free test data. |
-| `docs/ARCHITECTURE.md` | Source of truth for the design. |
+| You (seed phrase) | Everything. Keys derive from a mnemonic only you hold; unlock via passphrase or passkey. |
+| The relay | Ciphertext and routing metadata only. It stores sealed blobs it cannot open — zero-knowledge by construction, verified by a written contract and test vectors. |
+| A household grantee | The namespaces you granted (relay-enforced), until you revoke — and revoking rotates keys, so it means something. |
+| A doctor with a share link | Only the sealed bundle behind that link's key, scoped to what you selected. |
+| Your processing node (optional) | Plaintext of vaults that enrolled it — it's *trusted* infrastructure you run, inside your boundary. It holds no seed and cannot forge history: its writes are proposals you sign. |
 
-## Getting started
+The design is honest about limits rather than quiet about them: a revoked
+reader keeps what it already decrypted (rotation protects everything after), a
+handed-over file is a copy like paper, and the relay necessarily sees traffic
+timing and blob-id prefixes. `docs/ARCHITECTURE.md` states each caveat next to
+the mechanism it belongs to.
 
-Web:
+## Run it yourself
 
-```bash
-cd web
-bun install
-bun run dev
-```
+Everything self-hosts from this repo: a static PWA, a relay image, and an
+optional node image.
 
-Rust (via rustup):
+**Relay** — keyless; anyone can run it:
 
 ```bash
-brew install rustup && rustup default stable
-cargo build --workspace
+docker compose up -d          # relay on :8080, data in a named volume
 ```
 
-## Common tasks
-
-Recipes live in the [`justfile`](justfile):
-
-```bash
-just            # list recipes
-just web-dev    # run the web app
-just check      # fmt-check + clippy + svelte-check
-just test       # cargo test
-just all        # everything CI runs
-just e2e        # PWA <-> relay browser smoke (needs cargo + wasm-pack; also runs in CI)
-```
-
-## Releasing
-
-Releases are automated with
-[release-please](https://github.com/googleapis/release-please).
-[Conventional Commits](https://www.conventionalcommits.org) on `main` accumulate
-into a release PR; merging it tags the version (`v0.1.x`), cuts the GitHub
-release, and publishes the six crates to crates.io and the wasm SDK to npm as
-[`@svastha/core`](https://www.npmjs.com/package/@svastha/core). Pre-1.0, `feat`
-commits bump the minor and `fix` commits bump the patch.
-
-Publishing, the relay image, and the PWA deploy run as separate jobs in that
-same workflow. Each is also safe to re-dispatch by hand
-(`workflow_dispatch`) if one fails: crate publishing skips versions already
-uploaded to crates.io, and a PWA redeploy just rebuilds and republishes
-current `main`.
-
-## Released artifacts
-
-- **Crates** (crates.io): [`svastha-core`](https://crates.io/crates/svastha-core),
-  [`svastha-import`](https://crates.io/crates/svastha-import),
-  [`svastha`](https://crates.io/crates/svastha),
-  [`svastha-wasm`](https://crates.io/crates/svastha-wasm),
-  [`svastha-relay`](https://crates.io/crates/svastha-relay), and
-  [`svastha-node`](https://crates.io/crates/svastha-node).
-- **Wasm SDK** (npm): [`@svastha/core`](https://www.npmjs.com/package/@svastha/core).
-- **Relay image**: `ghcr.io/cosmicspork/svastha-relay`, built from this
-  repo's [`Dockerfile`](Dockerfile).
-
-  ```bash
-  docker run -d -p 8080:8080 -v svastha-relay-data:/data \
-    ghcr.io/cosmicspork/svastha-relay:latest
-  ```
-
-  Publishes the relay's port and mounts a volume at `/data` so records survive
-  container replacement (the image always writes to `/data`; without a named
-  volume the data lives only in the container's own filesystem layer).
-
-- **Node image**: `ghcr.io/cosmicspork/svastha-node`, built from this repo's
-  [`Dockerfile.node`](Dockerfile.node). See "Self-hosting with compose" below
-  and [`crates/node/README.md`](crates/node/README.md) for the full picture —
-  the node is a trusted client that needs an owner to grant it, not a service
-  you point at and forget.
-
-## Self-hosting with compose
-
-[`compose.yaml`](compose.yaml) runs the relay alone by default — the honest
-default, since the relay is keyless and the node is not. Bring it up with:
-
-```bash
-docker compose up -d
-```
-
-That publishes the relay on `:8080` and keeps its data in a named volume.
-
-The processing node (OCR proposals, cited Q&A) is an optional profile:
+**Processing node** — trusted; opt in deliberately:
 
 ```bash
 docker compose --profile node up -d
 ```
 
-Enabling it adds a `node` service wired to the `relay` service by its compose
-name (`SVASTHA_RELAY_URL=http://relay:8080`) — no address to configure. To
-enroll it: read its `svastha1:` identity code from `docker compose logs
-node` (or scan the QR the same logs print), then grant it from the PWA's
-devices & grants screen. Inference (OCR/Q&A) stays off until you also set
+The node wires itself to the compose relay by service name. Enroll it by
+reading its `svastha1:` identity code from `docker compose logs node` and
+granting it from the PWA's devices & grants screen; set
 `SVASTHA_NODE_INFERENCE_ENDPOINT`/`_MODEL`/`_API_KEY` to your own
-OpenAI-compatible endpoint — see the commented-out example in `compose.yaml`.
+OpenAI-compatible endpoint to turn on OCR and Q&A. Its mounts tell the trust
+story: `/data` holds only a disposable identity keypair, `/cache` is tmpfs —
+decrypted plaintext lives there and nowhere else, resynced from the relay on
+every restart. No inbound ports; the node only dials out. Running a node means
+running trusted infrastructure — see `docs/ARCHITECTURE.md`'s "Self-hosting".
 
-The node's two mounts have opposite durability: `/data` is a named volume
-holding only its disposable identity keypair, while `/cache` is `tmpfs` —
-decrypted plaintext lives there and nowhere else, and the node resyncs it from
-the relay on every restart by design. No port is published for the node: it
-reaches the relay and your inference endpoint outbound only, and its
-loopback-only bootstrap page is reachable via `docker compose exec`, never the
-network.
-
-Running the node means running trusted infrastructure — see
-`docs/ARCHITECTURE.md`'s "Self-hosting" for what that means for the host it
-runs on.
-
-## Self-hosting the PWA
+**PWA** — any static host:
 
 ```bash
-cd web
-bun install
-bun run build
+cd web && bun install && bun run build   # deployable web/dist/
 ```
 
-This produces a static `web/dist/`, deployable to any static host.
-`web/wrangler.jsonc` is included for deploying that build as static assets on
-Cloudflare Workers (`bunx wrangler deploy`), but nothing about the PWA depends
-on it.
+(`web/wrangler.jsonc` deploys that build to Cloudflare Workers, but nothing
+depends on it.)
+
+**Status:** pre-1.0 and moving. The wire contract is versioned
+(`svastha_core::CONTRACT_VERSION`, documented in `spec/`) and changes are
+additive within the major, but expect sharp edges. It is a personal project in daily real use, not a medical device,
+and it gives no medical advice.
+
+## About the name
+
+**Svastha** comes from the Sanskrit स्वस्थ (*sva-stha*): *sva*, "self," and
+*stha*, "abiding." Being established in oneself — Ayurveda's word for health.
+Self plus health is the whole idea: your records, held by you.
+
+---
+
+## Under the hood
+
+For readers here to evaluate the engineering rather than run the app.
+
+**The trust contract is a first-class artifact.** `spec/README.md` documents
+the key derivation, encryption envelope, event schema, curation records, typed
+mailbox envelope, key epochs, and the full relay wire protocol; `spec/vectors/`
+pins them with test vectors that `crates/core` must reproduce byte-for-byte.
+The contract version is split from the crypto major deliberately, so the wire
+can grow additively while proving — via byte-identical vectors — that no key
+ever rotates by accident.
+
+**One Rust core, everywhere.** `crates/core` implements the contract once and
+compiles to native (relay, node, CLI) and WASM (`@svastha/core` on npm), so the
+browser runs the exact same envelope code as the servers. No SSR anywhere — a
+server that can't read the data can't render it.
+
+**The data model matches the domain.** Clinical history is immutable, so the
+store is an append-only log of signed, content-addressed events — the same
+immunization imported from two providers collapses to one id — with a thin
+last-writer-wins curation overlay (signed, verify-or-drop) for the few things
+that genuinely change: status, names, tags. Events proposed by software carry
+owner-signed provenance (proposer, source page, model) and keep the same
+content id as the directly-logged fact.
+
+**The relay stays dumb on purpose.** Ed25519-authenticated requests with
+replay protection; sealed blobs under prefix-namespaced ids; grants with
+relay-enforced prefix scopes and optional expiry, where an expired, revoked,
+and never-existing grant are deliberately indistinguishable (two-404 rule);
+payload-free push (SSE + VAPID Web Push — the push services learn timing,
+never content); cursor pagination and curation etags. No inter-relay protocol,
+no manifests, no server-side smarts that would need to see anything.
+
+**Trusted compute is modeled as a grantee, not a backdoor.** The processing
+node earns plaintext access the same way a human does — an owner grants it —
+and loses it the same way — revoke-and-rotate. Its writes ride a
+proposer-agnostic approval loop, so a future human caregiver reuses the same
+mechanism, envelope, and inbox. Key rotation is epoch-based (append-only key
+history, mergeable keyrings, epoch marker sealed into the AAD) — never bulk
+re-encryption.
+
+**Tested at the layer that matters.** Contract test vectors; Rust unit and
+integration tests that boot the real relay in-process (the node's enrollment,
+sync, tampering, and rotation tests run against the actual server code);
+Playwright end-to-end suites driving multi-device flows — two browser
+contexts converging through a real relay, cold-recipient share opens,
+revocation actually locking a stale grantee out.
+
+**Boring, automated releases.** Conventional commits; release-please cuts
+tags, a changelog, six crates.io crates, the npm SDK, and two GHCR images from
+one workflow. CI gates every PR with fmt/clippy, the full Rust workspace,
+svelte-check + vitest, and the browser e2e suite.
+
+### Layout
+
+| Path | What |
+|---|---|
+| `crates/core` | Trust contract: envelope, event schema, mailbox messages, keyrings. Native + WASM. |
+| `crates/import` | Client-side C-CDA/FHIR mapping into the event model. |
+| `crates/relay` | Zero-knowledge store-and-forward server. |
+| `crates/node` | Trusted processing client: OCR → proposals, cited Q&A. |
+| `crates/wasm` | WASM bindings (`@svastha/core` on npm). |
+| `crates/svastha` | Umbrella crate re-exporting `core`. |
+| `web` | Svelte 5 PWA (bun + Vite), local-first. |
+| `spec` | Written wire contract + test vectors. |
+| `fixtures` | Synthetic, PHI-free test data. |
+| `docs/ARCHITECTURE.md` | Source of truth for the design. |
+| `docs/ROADMAP.md` | Pending work; removed by the PR that ships it. |
+
+### Developing
+
+```bash
+cd web && bun install && bun run dev   # web app
+cargo build --workspace                # rust (rustup, stable)
+
+just            # list recipes
+just check      # fmt-check + clippy + svelte-check
+just test       # cargo test
+just all        # everything CI runs
+just e2e        # PWA <-> relay browser smoke
+```
+
+### Releasing
+
+[release-please](https://github.com/googleapis/release-please) turns
+conventional commits on `main` into a release PR; merging it tags the version,
+cuts the GitHub release, and publishes the crates
+([`svastha-core`](https://crates.io/crates/svastha-core),
+[`svastha-import`](https://crates.io/crates/svastha-import),
+[`svastha`](https://crates.io/crates/svastha),
+[`svastha-wasm`](https://crates.io/crates/svastha-wasm),
+[`svastha-relay`](https://crates.io/crates/svastha-relay),
+[`svastha-node`](https://crates.io/crates/svastha-node)), the npm SDK
+([`@svastha/core`](https://www.npmjs.com/package/@svastha/core)), and the
+container images (`ghcr.io/cosmicspork/svastha-relay`,
+`ghcr.io/cosmicspork/svastha-node`). Pre-1.0, `feat` bumps the minor and `fix`
+the patch. Each publish job is safe to re-dispatch by hand if one fails.
+
+## License
+
+[AGPL-3.0](LICENSE).
