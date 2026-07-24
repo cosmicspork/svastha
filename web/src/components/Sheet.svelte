@@ -49,6 +49,12 @@
     z-index: 101;
     max-width: 40rem;
     margin: 0 auto;
+    /* Anchored to the bottom and grows upward; cap it at the viewport and scroll
+       inside so a tall sheet's top controls stay reachable instead of running off
+       the top edge (the sheet has no internal scroll otherwise). */
+    max-height: calc(100dvh - var(--space-5));
+    overflow-y: auto;
+    overscroll-behavior: contain;
     background: var(--surface);
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
     box-shadow: var(--shadow-2);

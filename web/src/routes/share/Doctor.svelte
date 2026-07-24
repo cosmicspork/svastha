@@ -12,6 +12,7 @@
     shareStatus,
     type DoctorShareRecord,
   } from '../../lib/doctorShare'
+  import { listFileShares, type FileShareRecord } from '../../lib/fileShare'
   import DoctorShareSheet from '../../components/DoctorShareSheet.svelte'
 
   // Verbatim on every screen that mints or manages a link: revocation and
@@ -27,6 +28,7 @@
   let relay = $state<RelayClient | null>(null)
   let relayOrigin = $state('')
   let shares = $state<DoctorShareRecord[]>([])
+  let fileShares = $state<FileShareRecord[]>([])
   let loaded = $state(false)
   let showCreate = $state(false)
   let qrFor = $state<string | null>(null)
@@ -34,7 +36,7 @@
   let error = $state('')
 
   async function refreshShares() {
-    shares = await listDoctorShares()
+    ;[shares, fileShares] = await Promise.all([listDoctorShares(), listFileShares()])
   }
 
   function statusLabel(record: DoctorShareRecord) {
@@ -74,91 +76,116 @@
 </script>
 
 <h1>Doctor links</h1>
-<p class="lede muted">One-time, expiring summaries you hand a clinician for a visit.</p>
+<p class="lede muted">
+  One-time summaries you hand a clinician — a relay link that expires, or a file you hand over
+  yourself.
+</p>
+
+<button class="primary" onclick={() => (showCreate = true)} data-testid="new-doctor-link">
+  New share
+</button>
 
 {#if !relayUrl}
-  <p class="muted" data-testid="share-needs-relay">
-    A doctor link is uploaded to a relay under a one-off key. <button
+  <p class="muted needs-relay" data-testid="share-needs-relay">
+    Without a relay you can still save a share file to hand over yourself. <button
       class="link"
       onclick={() => navigate('#/settings/sync')}
-      data-testid="go-connect-relay">Connect one in Settings</button
-    > to create a link.
+      data-testid="go-connect-relay">Connect a relay in Settings</button
+    > to also send expiring links.
   </p>
-{:else}
-  <button class="primary" onclick={() => (showCreate = true)} data-testid="new-doctor-link">
-    New link
-  </button>
-
-  {#if error}
-    <p class="error" data-testid="doctor-error">{error}</p>
-  {/if}
-
-  {#if loaded && shares.length === 0}
-    <div class="empty" data-testid="doctor-empty">
-      <p>No doctor links yet.</p>
-      <p class="muted">
-        Create one to package part of your record under a fresh key and hand over a link (or QR) that
-        opens only what you picked — no account needed on their end, and it expires on its own.
-      </p>
-    </div>
-  {:else if shares.length > 0}
-    <ul class="share-list">
-      {#each shares as record (record.token)}
-        {@const status = statusLabel(record)}
-        {@const link = linkFor(record)}
-        <li>
-          <div class="share-head">
-            <span class="scope">{record.scopeDescription}</span>
-            <span class="status status-{status}" data-testid="share-status-{record.token}">
-              {status}
-            </span>
-          </div>
-          <p class="hint muted">
-            Created {record.createdAt.slice(0, 10)} · expires {record.expiresAt.slice(0, 10)}
-          </p>
-          {#if status === 'active'}
-            <div class="row">
-              {#if link}
-                <button
-                  class="ghost"
-                  onclick={() => copy(record.token, link)}
-                  data-testid="reshow-copy-{record.token}"
-                >
-                  {copied === record.token ? 'Copied' : 'Copy link'}
-                </button>
-                <button
-                  class="ghost"
-                  onclick={() => (qrFor = qrFor === record.token ? null : record.token)}
-                  data-testid="reshow-qr-{record.token}"
-                >
-                  {qrFor === record.token ? 'Hide QR' : 'Show QR'}
-                </button>
-              {/if}
-              <button
-                class="danger-outline"
-                onclick={() => revoke(record.token)}
-                data-testid="revoke-{record.token}"
-              >
-                Revoke
-              </button>
-            </div>
-            {#if qrFor === record.token && link}
-              <!-- App-generated link, never user input — safe to inject. -->
-              <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-              <div class="qr small" data-testid="reshow-qr-svg-{record.token}">
-                {@html renderSVG(link, { border: 2 })}
-              </div>
-            {/if}
-          {/if}
-        </li>
-      {/each}
-    </ul>
-  {/if}
-
-  <p class="honest" data-testid="doctor-honest">{HONEST_COPY}</p>
 {/if}
 
-{#if showCreate && relay}
+{#if error}
+  <p class="error" data-testid="doctor-error">{error}</p>
+{/if}
+
+{#if loaded && shares.length === 0 && fileShares.length === 0}
+  <div class="empty" data-testid="doctor-empty">
+    <p>No doctor shares yet.</p>
+    <p class="muted">
+      Create one to package part of your record under a fresh key — a link that opens only what you
+      picked and expires on its own, or a file you hand over yourself. No account needed on their
+      end.
+    </p>
+  </div>
+{/if}
+
+{#if shares.length > 0}
+  <ul class="share-list">
+    {#each shares as record (record.token)}
+      {@const status = statusLabel(record)}
+      {@const link = linkFor(record)}
+      <li>
+        <div class="share-head">
+          <span class="scope">{record.scopeDescription}</span>
+          <span class="status status-{status}" data-testid="share-status-{record.token}">
+            {status}
+          </span>
+        </div>
+        <p class="hint muted">
+          Created {record.createdAt.slice(0, 10)} · expires {record.expiresAt.slice(0, 10)}
+        </p>
+        {#if status === 'active'}
+          <div class="row">
+            {#if link}
+              <button
+                class="ghost"
+                onclick={() => copy(record.token, link)}
+                data-testid="reshow-copy-{record.token}"
+              >
+                {copied === record.token ? 'Copied' : 'Copy link'}
+              </button>
+              <button
+                class="ghost"
+                onclick={() => (qrFor = qrFor === record.token ? null : record.token)}
+                data-testid="reshow-qr-{record.token}"
+              >
+                {qrFor === record.token ? 'Hide QR' : 'Show QR'}
+              </button>
+            {/if}
+            <button
+              class="danger-outline"
+              onclick={() => revoke(record.token)}
+              data-testid="revoke-{record.token}"
+            >
+              Revoke
+            </button>
+          </div>
+          {#if qrFor === record.token && link}
+            <!-- App-generated link, never user input — safe to inject. -->
+            <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+            <div class="qr small" data-testid="reshow-qr-svg-{record.token}">
+              {@html renderSVG(link, { border: 2 })}
+            </div>
+          {/if}
+        {/if}
+      </li>
+    {/each}
+  </ul>
+{/if}
+
+{#if fileShares.length > 0}
+  <h2 class="list-head">Files handed over</h2>
+  <ul class="share-list" data-testid="file-share-list">
+    {#each fileShares as f (f.id)}
+      <li>
+        <div class="share-head">
+          <span class="scope">{f.scopeDescription}</span>
+          <span class="status status-file" data-testid="file-share-status-{f.id}">unrevocable</span>
+        </div>
+        <p class="hint muted">
+          Saved {f.createdAt.slice(0, 10)} · {f.mode === 'passphrase'
+            ? 'passphrase-protected'
+            : 'key embedded'} · never expires, cannot be revoked
+        </p>
+      </li>
+    {/each}
+  </ul>
+{/if}
+
+<p class="honest" data-testid="doctor-honest">{HONEST_COPY}</p>
+
+{#if showCreate}
   <DoctorShareSheet
     {relay}
     {relayUrl}
@@ -227,8 +254,21 @@
   }
 
   .status-expired,
-  .status-revoked {
+  .status-revoked,
+  .status-file {
     color: var(--muted);
+  }
+
+  .list-head {
+    font-size: var(--text-sm);
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin: var(--space-5) 0 0;
+  }
+
+  .needs-relay {
+    margin-top: var(--space-3);
   }
 
   .hint {
