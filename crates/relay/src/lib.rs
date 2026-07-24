@@ -6,7 +6,7 @@
 //! cannot read. See `docs/ARCHITECTURE.md` and `spec/README.md`.
 //!
 //! Beyond blobs, the relay also carries two pieces of pure routing metadata for
-//! household sharing: [`grants::GrantStore`] (who has authorized whom to read
+//! person-to-person sharing: [`grants::GrantStore`] (who has authorized whom to read
 //! their vault) and [`mailbox::MailboxStore`] (a store-and-forward drop box for
 //! the wrapped vault key that makes a grant useful). Neither reveals vault
 //! contents; see `docs/ARCHITECTURE.md`, "Vaults and grants".

@@ -213,7 +213,7 @@
         <fieldset class="kinds">
           <label class="radio">
             <input type="radio" bind:group={kind} value="household" data-testid="enroll-kind-household" />
-            Household member <span class="muted">— record + captured documents</span>
+            Person <span class="muted">— record + captured documents</span>
           </label>
           <label class="radio">
             <input type="radio" bind:group={kind} value="node" data-testid="enroll-kind-node" />
