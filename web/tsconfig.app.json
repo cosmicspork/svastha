@@ -17,5 +17,9 @@
     "moduleDetection": "force"
   },
   "include": ["src/**/*.ts", "src/**/*.js", "src/**/*.svelte"],
-  "exclude": ["src/wasm"]
+  // src/sw.ts needs the `WebWorker` lib (ServiceWorkerGlobalScope, PushEvent,
+  // …), which conflicts with this config's DOM lib — it gets its own
+  // tsconfig.sw.json instead (mirrors tsconfig.node.json/tsconfig.scripts.json
+  // each covering the files that need a different `lib`).
+  "exclude": ["src/wasm", "src/sw.ts"]
 }

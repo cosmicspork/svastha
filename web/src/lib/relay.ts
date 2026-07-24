@@ -229,6 +229,46 @@ export class RelayClient {
     return this.fetch('GET', '/v0/events', undefined, undefined, signal)
   }
 
+  // --- push: Web Push subscription registration (optional relay behavior —
+  // see `spec/README.md`'s "Web Push") ---
+
+  /** The relay's VAPID public key to subscribe with (`applicationServerKey`),
+   * or `null` if the operator hasn't configured Web Push (`GET /v0/push/key`
+   * answers `503`; every other endpoint is unaffected). */
+  async getPushKey(): Promise<string | null> {
+    const res = await this.fetch('GET', '/v0/push/key')
+    if (res.status === 503) return null
+    if (!res.ok) throw new Error(`getPushKey: ${res.status}`)
+    const body = (await res.json()) as { vapid_public_key: string }
+    return body.vapid_public_key
+  }
+
+  /** Register (or replace) a Web Push subscription for this identity — the
+   * browser's own `PushSubscription.toJSON()` shape. Resolves `'unsupported'`
+   * instead of throwing on the relay's `503` so callers can show an honest
+   * feature-off state rather than an error. */
+  async putPushSubscription(sub: {
+    endpoint: string
+    keys: { p256dh: string; auth: string }
+  }): Promise<'ok' | 'unsupported'> {
+    const res = await this.fetch('PUT', '/v0/push', new TextEncoder().encode(JSON.stringify(sub)))
+    if (res.status === 503) return 'unsupported'
+    if (!res.ok) throw new Error(`putPushSubscription: ${res.status}`)
+    return 'ok'
+  }
+
+  /** Unregister a Web Push subscription: a single `endpoint` removes just that
+   * device; omitted clears every subscription this identity holds (the
+   * relay's documented "turn off notifications everywhere" affordance).
+   * Idempotent, like the relay's `DELETE`. */
+  async deletePushSubscription(endpoint?: string): Promise<'ok' | 'unsupported'> {
+    const body = endpoint ? new TextEncoder().encode(JSON.stringify({ endpoint })) : new Uint8Array()
+    const res = await this.fetch('DELETE', '/v0/push', body)
+    if (res.status === 503) return 'unsupported'
+    if (!res.ok) throw new Error(`deletePushSubscription: ${res.status}`)
+    return 'ok'
+  }
+
   private fetch(
     method: string,
     path: string,
@@ -249,10 +289,12 @@ export class RelayClient {
       },
       signal,
     }
-    // GET/DELETE carry no body; fetch rejects a body on those methods. The cast
-    // bridges TS's generic Uint8Array and the DOM BodyInit union — a Uint8Array
-    // is a valid fetch body at runtime.
-    if (body && method !== 'GET' && method !== 'DELETE') {
+    // `fetch` rejects a body on GET (the one method the Fetch spec actually
+    // disallows it on); DELETE is fine and `deletePushSubscription` above
+    // relies on that to carry an optional `{ endpoint }`. The cast bridges
+    // TS's generic Uint8Array and the DOM BodyInit union — a Uint8Array is a
+    // valid fetch body at runtime.
+    if (body && method !== 'GET') {
       init.body = body as BodyInit
     }
     return fetch(this.baseUrl + path, init)

@@ -53,6 +53,19 @@
     <span class="hub-chevron" aria-hidden="true">›</span>
   </button>
 
+  <button
+    class="hub-row"
+    onclick={() => navigate('#/settings/notifications')}
+    data-testid="settings-row-notifications"
+  >
+    <span class="hub-glyph" aria-hidden="true">◔</span>
+    <span class="hub-text">
+      <span class="hub-title">Notifications</span>
+      <span class="hub-sub muted">Lock-screen alerts when something's waiting</span>
+    </span>
+    <span class="hub-chevron" aria-hidden="true">›</span>
+  </button>
+
   <button class="hub-row" onclick={() => navigate('#/settings/data')} data-testid="settings-row-data">
     <span class="hub-glyph" aria-hidden="true">▤</span>
     <span class="hub-text">
