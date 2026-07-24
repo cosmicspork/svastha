@@ -1,0 +1,42 @@
+# Multi-stage build for the svastha node — a trusted processing client, not a
+# service: it holds keys and reaches the relay and a user-supplied inference
+# endpoint outbound only (see crates/node/README.md). It ships no models. TLS
+# is pure-Rust (ureq + rustls, bundled root store), so — like the relay —
+# there is no OpenSSL/ca-certificates dependency to carry.
+
+FROM rust:1-slim-bookworm AS builder
+WORKDIR /build
+COPY . .
+RUN cargo build -p svastha-node --release
+
+FROM debian:bookworm-slim
+WORKDIR /app
+COPY --from=builder /build/target/release/svastha-node /usr/local/bin/svastha-node
+# Path defaults only — SVASTHA_RELAY_URL is deliberately left unset. The
+# binary treats it as required and fails fast at boot (crates/node/src/config.rs);
+# masking that with an image default would turn a loud misconfiguration into a
+# silent one.
+ENV SVASTHA_NODE_DATA_DIR=/data \
+    SVASTHA_NODE_CACHE_DIR=/cache
+# Two mount points, opposite semantics:
+#   /data  — durable. Holds only the node's disposable identity keypair (the
+#            one thing that survives a restart); small, and losing it just
+#            means generating a fresh one and re-granting.
+#   /cache — ephemeral plaintext. Decrypted vault content lives here and
+#            nowhere else; the node must work correctly if this directory is
+#            wiped on every restart (a restart is a resync by design), so
+#            self-hosters are expected to mount it tmpfs — see compose.yaml.
+# No EXPOSE: the bootstrap page (identity code + health) binds loopback
+# *inside the container* on purpose (see README) and is never meant to be
+# published — reach it with `docker exec`/`compose exec` (or the equivalent
+# for your runtime), never a published port. A published port wouldn't even
+# reach it: a loopback bind is scoped to the container's own network
+# namespace. Beyond that page the node holds no inbound ports at all — it
+# reaches the relay and the inference endpoint outbound only.
+# Runs as nobody (65534:65534), same ownership stance as the relay image:
+# /data and /cache are chowned here so the image is runnable standalone; when
+# real volumes are layered on top in production, matching their ownership is
+# the deployer's job, not this image's.
+RUN mkdir -p /data /cache && chown nobody:nogroup /data /cache
+USER nobody
+CMD ["svastha-node"]
