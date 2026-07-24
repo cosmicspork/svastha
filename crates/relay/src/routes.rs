@@ -600,7 +600,7 @@ fn valid_pubkey_hex(s: &str) -> Option<[u8; 32]> {
 
 // --- grants: relay-level read authorization, pure routing metadata ---
 
-/// Authorize `grantee` (the caller's partner) to read the caller's shared
+/// Authorize `grantee` (another keyed identity) to read the caller's shared
 /// blobs. Idempotent and an **upsert**: re-granting an existing grantee replaces
 /// its scope, so this is also how an owner re-scopes a live grant in place.
 ///

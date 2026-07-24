@@ -56,8 +56,8 @@
        nothing to talk to until a processing node is granted access. -->
   <div class="empty" data-testid="ask-no-node">
     <p>
-      No processing node is enrolled yet. A node reads your record (with access you grant, like any
-      household share) and answers questions drawn only from what you've logged.
+      No processing node is enrolled yet. A node reads your record (with access you grant, the same
+      way you'd share with a person) and answers questions drawn only from what you've logged.
     </p>
     <p class="muted">Enroll one from Sync &amp; devices, then come back here to ask.</p>
     <button type="button" class="primary" onclick={() => navigate('#/settings/sync')} data-testid="ask-go-enroll">
