@@ -593,6 +593,210 @@ async fn malformed_grant_body_is_bad_request() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
+// --- pagination composed with prefix scoping, on /v0/shared/{owner}/blobs ---
+
+async fn shared_list_query(
+    app: &axum::Router,
+    caller: &Identity,
+    owner: &str,
+    query: &str,
+    ts: u64,
+) -> serde_json::Value {
+    let resp = app
+        .clone()
+        .oneshot(signed(
+            caller,
+            "GET",
+            &format!("/v0/shared/{owner}/blobs{query}"),
+            b"",
+            ts,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "{query}");
+    serde_json::from_slice(&body_bytes(resp).await).unwrap()
+}
+
+#[tokio::test]
+async fn scoped_grantee_pages_through_only_admitted_ids() {
+    let app = router();
+    let alice = Identity::from_seed(b"alice");
+    let bob = Identity::from_seed(b"bob");
+    let owner = hex_pk(&alice);
+
+    // Alice stores several ev- blobs and one cur- blob; Bob's grant admits only ev-.
+    for (i, id) in ["ev-1", "ev-2", "ev-3", "ev-4", "ev-5", "cur-1"]
+        .iter()
+        .enumerate()
+    {
+        let put = app
+            .clone()
+            .oneshot(signed(
+                &alice,
+                "PUT",
+                &format!("/v0/blobs/{id}"),
+                b"x",
+                now() + i as u64,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(put.status(), StatusCode::NO_CONTENT);
+    }
+    let grant = app
+        .clone()
+        .oneshot(signed(
+            &alice,
+            "PUT",
+            &format!("/v0/grants/{}", hex_pk(&bob)),
+            br#"{"prefixes":["ev-"]}"#,
+            now() + 10,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(grant.status(), StatusCode::NO_CONTENT);
+
+    // Walk two at a time: the cur- id must never surface, on any page.
+    let mut walked = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let query = match &cursor {
+            Some(c) => format!("?limit=2&cursor={c}"),
+            None => "?limit=2".to_string(),
+        };
+        let json = shared_list_query(&app, &bob, &owner, &query, now() + 20).await;
+        let page: Vec<String> = json["ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        walked.extend(page);
+        cursor = json["next"].as_str().map(str::to_string);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    walked.sort();
+    assert_eq!(
+        walked,
+        vec!["ev-1", "ev-2", "ev-3", "ev-4", "ev-5"],
+        "the paginated walk never surfaces the out-of-scope cur- id"
+    );
+}
+
+#[tokio::test]
+async fn bogus_cursor_on_absent_or_expired_grant_answers_exactly_like_no_grant() {
+    let (app, alice, bob) = alice_with_three_blobs().await;
+    let owner = hex_pk(&alice);
+    let base = now();
+
+    // No grant at all: a bogus (nonsense, oversized-looking but under the cap)
+    // cursor still answers plain 404, never a distinguishing 400 from cursor
+    // parsing — the grant check runs before pagination is ever considered.
+    let no_grant = app
+        .clone()
+        .oneshot(signed(
+            &bob,
+            "GET",
+            &format!("/v0/shared/{owner}/blobs?limit=5&cursor=not-a-real-id-zzz"),
+            b"",
+            base,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(no_grant.status(), StatusCode::NOT_FOUND);
+
+    // An expired grant behaves identically.
+    let expired_body = format!(r#"{{"expires_at":{}}}"#, base - 1);
+    let grant = app
+        .clone()
+        .oneshot(signed(
+            &alice,
+            "PUT",
+            &format!("/v0/grants/{}", hex_pk(&bob)),
+            expired_body.as_bytes(),
+            base,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(grant.status(), StatusCode::NO_CONTENT);
+
+    let expired = app
+        .oneshot(signed(
+            &bob,
+            "GET",
+            &format!("/v0/shared/{owner}/blobs?limit=5&cursor=not-a-real-id-zzz"),
+            b"",
+            base + 1,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(expired.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn shared_cur_blob_carries_an_etag_and_answers_304() {
+    let (app, alice, bob) = alice_with_three_blobs().await;
+    let owner = hex_pk(&alice);
+
+    let grant = app
+        .clone()
+        .oneshot(signed(
+            &alice,
+            "PUT",
+            &format!("/v0/grants/{}", hex_pk(&bob)),
+            br#"{"prefixes":["cur-"]}"#,
+            now(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(grant.status(), StatusCode::NO_CONTENT);
+
+    let get1 = app
+        .clone()
+        .oneshot(signed(
+            &bob,
+            "GET",
+            &format!("/v0/shared/{owner}/blobs/cur-1"),
+            b"",
+            now() + 1,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(get1.status(), StatusCode::OK);
+    let etag = get1
+        .headers()
+        .get("etag")
+        .expect("shared cur- GET carries an ETag")
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let auth = svastha_core::relay::AuthRequest::new(
+        "GET",
+        &format!("/v0/shared/{owner}/blobs/cur-1"),
+        b"",
+        now() + 2,
+    );
+    let signature = svastha_core::relay::sign_request(&bob, &auth);
+    let req = axum::http::Request::builder()
+        .method("GET")
+        .uri(format!("/v0/shared/{owner}/blobs/cur-1"))
+        .header(
+            "svastha-public-key",
+            hex::encode(bob.verifying_key().to_bytes()),
+        )
+        .header("svastha-timestamp", (now() + 2).to_string())
+        .header("svastha-signature", hex::encode(signature))
+        .header("if-none-match", &etag)
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let get2 = app.oneshot(req).await.unwrap();
+    assert_eq!(get2.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(body_bytes(get2).await, Vec::<u8>::new());
+}
+
 #[tokio::test]
 async fn fs_grant_store_persists_across_router_rebuild() {
     let dir = tempfile::tempdir().unwrap();

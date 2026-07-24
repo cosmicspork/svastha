@@ -25,6 +25,13 @@ pub struct OwnerState {
     pub owner_x25519: [u8; 32],
     pub keyring: Keyring,
     pub index: VaultIndex,
+    /// The relay's `ETag` last seen for each `cur-` blob id, so the next sync
+    /// can send `If-None-Match` and skip re-fetching/re-verifying unchanged
+    /// curation (see `crate::sync::sync_owner` and `spec/README.md`, "Curation
+    /// etags"). In-memory and disposable like the rest of this state: a
+    /// restart just means the first post-restart sync re-fetches every `cur-`
+    /// blob once (no stored etag to compare against), then resumes saving.
+    pub cur_etags: BTreeMap<String, String>,
 }
 
 /// OCR job-status counters (D2), surfaced so the later C3 admin surface's
@@ -80,6 +87,7 @@ impl NodeState {
                         owner_x25519,
                         keyring,
                         index: VaultIndex::new(owner_key),
+                        cur_etags: BTreeMap::new(),
                     },
                 );
                 true

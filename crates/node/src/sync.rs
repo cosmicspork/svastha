@@ -31,7 +31,7 @@ use svastha_core::mailbox::{
 };
 
 use crate::cache::Cache;
-use crate::client::RelayClient;
+use crate::client::{ConditionalBlob, RelayClient};
 use crate::index::{AttachmentMeta, CurationOutcome, DocMeta};
 use crate::state::NodeState;
 
@@ -71,6 +71,10 @@ pub struct SyncReport {
     /// Listed ids in no namespace the node consumes (e.g. an unscoped grant that
     /// also lists `vault.key`); tolerated and skipped.
     pub skipped: usize,
+    /// `cur-` ids the relay answered `304` for: unchanged since the etag this
+    /// sync sent, so their body was never re-fetched, re-opened, or re-verified
+    /// (see `crate::client::RelayClient::get_shared_blob_conditional`).
+    pub curation_not_modified: usize,
 }
 
 /// An `att-`/`doc-` blob body: bytes carried base64 in JSON (see
@@ -208,11 +212,12 @@ pub fn sync_owner(
     state: &Mutex<NodeState>,
     owner_hex: &str,
 ) -> Result<SyncReport> {
-    // Snapshot the keyring so the network + decrypt work happens off the lock.
-    let keyring = {
+    // Snapshot the keyring and known cur- etags so the network + decrypt work
+    // happens off the lock.
+    let (keyring, cur_etags) = {
         let guard = state.lock().expect("node state mutex");
         match guard.owner(owner_hex) {
-            Some(os) => os.keyring.clone(),
+            Some(os) => (os.keyring.clone(), os.cur_etags.clone()),
             None => return Ok(SyncReport::default()),
         }
     };
@@ -228,7 +233,42 @@ pub fn sync_owner(
     };
 
     let mut batch = Batch::default();
+    let mut new_etags = Vec::new();
+    let mut curation_not_modified = 0;
     for id in ids {
+        if id.starts_with("cur-") {
+            // The mutable namespace: send back whatever etag this sync last
+            // recorded for it, so an unchanged record costs a 304, not a body
+            // (see spec/README.md, "Curation etags"). `dispatch` below already
+            // knows how to route a `cur-` id once it has sealed bytes in hand,
+            // so a `Fresh` result rejoins the same open/verify/route path every
+            // other namespace uses — only the fetch itself is conditional.
+            match client.get_shared_blob_conditional(
+                owner_hex,
+                &id,
+                cur_etags.get(&id).map(String::as_str),
+            )? {
+                ConditionalBlob::NotModified => {
+                    curation_not_modified += 1;
+                }
+                ConditionalBlob::Missing => {} // deleted between listing and fetch
+                ConditionalBlob::Fresh { body, etag } => {
+                    dispatch(
+                        client.identity(),
+                        &keyring,
+                        cache,
+                        owner_hex,
+                        &id,
+                        &body,
+                        &mut batch,
+                    )?;
+                    if let Some(etag) = etag {
+                        new_etags.push((id.clone(), etag));
+                    }
+                }
+            }
+            continue;
+        }
         let Some(sealed) = client.get_shared_blob(owner_hex, &id)? else {
             continue; // deleted between listing and fetch
         };
@@ -249,12 +289,16 @@ pub fn sync_owner(
         granted: true,
         dropped: batch.dropped,
         skipped: batch.skipped,
+        curation_not_modified,
         ..Default::default()
     };
     let mut guard = state.lock().expect("node state mutex");
     let Some(os) = guard.owner_mut(owner_hex) else {
         return Ok(report);
     };
+    for (id, etag) in new_etags {
+        os.cur_etags.insert(id, etag);
+    }
     for ev in batch.events {
         if os.index.ingest_event(ev) {
             report.events += 1;

@@ -240,6 +240,69 @@ fn enrolls_and_syncs_a_sealed_vault() {
 }
 
 #[test]
+fn a_second_sync_skips_unchanged_curation_via_304() {
+    let base = spawn_relay();
+    let owner = Identity::from_seed(b"owner etag");
+    let node = Identity::from_seed(b"node etag");
+    let owner_client = RelayClient::new(base.clone(), Arc::new(Identity::from_seed(b"owner etag")));
+    let node_client = RelayClient::new(base.clone(), Arc::new(Identity::from_seed(b"node etag")));
+
+    let data_key = DataKey::generate();
+    let ring = Keyring::genesis(&owner.x25519_public(), &data_key);
+    let ev = med(&owner, "197361", "2025-01-01T00:00:00Z");
+    put_event(&owner_client, &ring, &owner, &ev);
+    let concept = svastha_node::index::VaultIndex::concept_key(&ev.event).unwrap();
+    let status = owner.sign_curation(
+        format!("status:{concept}"),
+        serde_json::json!({"status":"inactive"}),
+        1_000,
+    );
+    put_curation(&owner_client, &ring, &owner, &status);
+
+    grant_node(&owner_client, &node);
+    deposit_handoff(&owner_client, &owner, &node, &ring, "kh-1");
+
+    let state = Mutex::new(NodeState::new());
+    let cache = Cache::new(tempfile::tempdir().unwrap().path().to_path_buf());
+    consume_mailbox(&node_client, &state).unwrap();
+
+    // First sync: no etag cached yet, so the relay answers 200 and the record
+    // is applied.
+    let r1 = sync_owner(&node_client, &cache, &state, &hex_ed(&owner)).unwrap();
+    assert_eq!(r1.curation_applied, 1);
+    assert_eq!(r1.curation_not_modified, 0);
+
+    // A second sync with nothing changed on the relay: the node sends back the
+    // etag it recorded, gets a 304, and never re-applies the record.
+    let r2 = sync_owner(&node_client, &cache, &state, &hex_ed(&owner)).unwrap();
+    assert_eq!(
+        r2.curation_applied, 0,
+        "unchanged curation is not re-dispatched on a 304"
+    );
+    assert_eq!(r2.curation_not_modified, 1, "the cur- fetch hit its cache");
+
+    // A genuine change (a fresh updated_at) is still picked up: the write
+    // changes the relay's etag, so the next sync gets a 200 with the new body.
+    let active_again = owner.sign_curation(
+        format!("status:{concept}"),
+        serde_json::json!({"status":"active"}),
+        2_000,
+    );
+    put_curation(&owner_client, &ring, &owner, &active_again);
+    let r3 = sync_owner(&node_client, &cache, &state, &hex_ed(&owner)).unwrap();
+    assert_eq!(r3.curation_applied, 1, "the changed record is re-applied");
+    assert_eq!(r3.curation_not_modified, 0);
+
+    let guard = state.lock().unwrap();
+    let idx = &guard.owner(&hex_ed(&owner)).unwrap().index;
+    assert_eq!(
+        idx.concept_status(&concept),
+        svastha_node::index::ConceptStatus::Active,
+        "the later write won"
+    );
+}
+
+#[test]
 fn drops_a_tampered_blob() {
     let base = spawn_relay();
     let owner = Identity::from_seed(b"owner two");

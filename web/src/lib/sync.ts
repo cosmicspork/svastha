@@ -16,6 +16,7 @@
 import { get, put, getAll } from './db'
 import { verify_event } from './svastha'
 import type { StoredEvent } from './events'
+import type { ConditionalBlob } from './relay'
 import { writable } from 'svelte/store'
 import { pullShared, teardownSharing } from './shared'
 import { pullMailbox, teardownMailbox } from './mailbox'
@@ -43,6 +44,20 @@ export interface SealKey {
  * unit tests (the poll timer alone drives them, as before). */
 interface StreamClient {
   openEventStream(signal: AbortSignal): Promise<Response>
+}
+
+/** The optional etag-aware fetch surface (see `spec/README.md`, "Curation
+ * etags"). `RelayClient` satisfies it; a bare `BlobClient` test fake does not,
+ * so a mutable id's pull simply always re-applies under unit tests — the same
+ * graceful-degradation pattern as {@link StreamClient} above. Only worth using
+ * for a `mutable` codec (today, `cur-`): an immutable id is never re-fetched
+ * once applied, so it never reaches this path regardless. */
+interface ConditionalGetClient {
+  getBlobConditional(id: string, ifNoneMatch: string | null): Promise<ConditionalBlob>
+}
+
+function supportsConditionalGet(client: BlobClient): client is BlobClient & ConditionalGetClient {
+  return typeof (client as Partial<ConditionalGetClient>).getBlobConditional === 'function'
 }
 
 /** A namespace plug-in. `doc-` and `cur-` arrive in later PRs and register
@@ -358,6 +373,11 @@ interface SyncRecord {
   id: string
   state: 'pending' | 'done'
   updated_at: string
+  /** The relay's `ETag` from this id's last successful pull, sent back as
+   * `If-None-Match` on the next one (mutable ids only — see
+   * {@link ConditionalGetClient}). Absent for every non-`cur-` id, and for a
+   * `cur-` id until its first successful fetch. */
+  etag?: string
 }
 
 /** Capped exponential backoff for a failing push: 1s, 5s, 30s, then give up
@@ -498,6 +518,29 @@ export async function pullAll(): Promise<void> {
         // Already have it (e.g. logged before sync was configured) — record
         // done without a redundant round trip.
         await markDone(id)
+        continue
+      }
+      if (codec.mutable && supportsConditionalGet(relayClient)) {
+        // A mutable id (today, only cur-) is always re-fetched above — the one
+        // namespace worth an etag, since it's the one a client keeps asking
+        // about after already having the answer. Send back whatever etag the
+        // last successful fetch left, so an unchanged record costs a 304, not
+        // a body (see spec/README.md, "Curation etags").
+        const existing = await get<SyncRecord>('sync', id)
+        const result: ConditionalBlob = await relayClient.getBlobConditional(id, existing?.etag ?? null)
+        if (result.status === 'missing') continue
+        if (result.status === 'ok') {
+          await applySealedBlob(id, result.blob, vaultKey)
+          await put('sync', {
+            id,
+            state: 'done',
+            updated_at: new Date().toISOString(),
+            etag: result.etag ?? undefined,
+          })
+          syncStatus.update((s) => ({ ...s, pulledCount: s.pulledCount + 1 }))
+        }
+        // 'not-modified': nothing changed since `existing.etag` — already
+        // `done` with that etag, so there is nothing to re-apply or re-store.
         continue
       }
       const blob = await relayClient.getBlob(id)

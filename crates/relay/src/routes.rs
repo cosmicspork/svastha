@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{
     body::Bytes,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{header, HeaderMap, HeaderName, StatusCode},
     response::{
         sse::{Event, KeepAlive, Sse},
@@ -19,6 +19,7 @@ use axum::{
 };
 use qrcode::{render::svg, QrCode};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use svastha_core::CONTRACT_VERSION;
 use tokio_stream::{wrappers::BroadcastStream, Stream, StreamExt};
 
@@ -83,6 +84,24 @@ const MAX_GRANT_PREFIX_LEN: usize = 128;
 /// keeps the subscription store from being used as a general-purpose scratch
 /// space and bounds the parse cost.
 const MAX_PUSH_BODY: usize = 4096;
+
+/// Page size used when a listing request opts into pagination (`?limit=` or
+/// `?cursor=`) without specifying an explicit `limit` — a client that only
+/// carries a `next` cursor forward without repeating `limit` still gets a
+/// sane page rather than one huge one.
+const DEFAULT_PAGE_SIZE: usize = 200;
+
+/// Ceiling a requested `limit` is clamped to, so an oversized page request
+/// cannot make one listing call as expensive as the unpaginated one it exists
+/// to avoid. Clamped, not rejected — the same posture as the share expiry
+/// clamp — so a client that asks for too much still gets a usable answer.
+const MAX_PAGE_SIZE: usize = 1000;
+
+/// A cursor is opaque and unvalidated beyond this length cap: it is only ever
+/// compared as a sort boundary against blob ids (at most 128 chars, see
+/// [`valid_id`]), so nothing legitimate is ever near this long — the cap only
+/// bounds the cost of a hostile query string.
+const MAX_CURSOR_LEN: usize = 256;
 
 /// Liveness probe (unauthenticated).
 pub async fn health() -> &'static str {
@@ -377,19 +396,24 @@ pub async fn put_blob(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Fetch a blob owned by the caller, as opaque octets.
+/// Fetch a blob owned by the caller, as opaque octets. A `cur-` id additionally
+/// gets a strong `ETag`/`If-None-Match` conditional-GET path (see
+/// [`etag_response`]) — the mutable curation namespace is the one a client
+/// re-fetches on every pull, so a cheap `304` for an unchanged record is worth
+/// the AAD-free hash; every other namespace is content-addressed already (a
+/// client never re-fetches an id it has) so an etag there would cost more than
+/// it saves.
 pub async fn get_blob(
     State(state): State<AppState>,
     Extension(owner): Extension<Owner>,
     Path(id): Path<String>,
+    headers: HeaderMap,
 ) -> Response {
     if !valid_id(&id) {
         return StatusCode::BAD_REQUEST.into_response();
     }
     match state.store.get(&owner.0, &id) {
-        Ok(Some(blob)) => {
-            ([(header::CONTENT_TYPE, "application/octet-stream")], blob).into_response()
-        }
+        Ok(Some(blob)) => etag_response(&id, blob, &headers),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
@@ -398,18 +422,134 @@ pub async fn get_blob(
 #[derive(Serialize)]
 pub struct BlobList {
     ids: Vec<String>,
+    /// The cursor to resume from, present only when more ids remain past this
+    /// page. Absent (not `null`) on an unpaginated listing and on the final
+    /// page of a paginated one, so an existing client that never sends `limit`
+    /// or `cursor` sees the exact same `{"ids":[...]}` shape as before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next: Option<String>,
 }
 
-/// List the ids the caller has stored.
+/// `?limit=`/`?cursor=` on a listing endpoint. Both optional and independent of
+/// each other; see [`paginate_ids`] for how an absent `limit` alongside a
+/// present `cursor` is handled.
+#[derive(Deserialize)]
+pub struct ListQuery {
+    limit: Option<usize>,
+    cursor: Option<String>,
+}
+
+/// Page `ids` per `limit`/`cursor`, or return them untouched when neither is
+/// present — the byte-compatible path every pre-existing caller takes.
+///
+/// **Ordering guarantee.** Paginating sorts `ids` lexicographically and treats
+/// `cursor` as the last-seen id: a page holds the smallest `limit` ids strictly
+/// greater than `cursor` (or from the start, if absent), and `next` is the
+/// page's own last id, so resuming with it as the next `cursor` continues right
+/// after. Blob ids are content-addressed (a hash, or a hash-derived `cur-` id),
+/// so this ordering is stable under concurrent writes in the sense that matters
+/// for a diffing sync client: a page never repeats or skips an id that existed
+/// at the moment it was read, and a write landing lexicographically behind an
+/// already-consumed cursor is simply picked up by that client's *next* full
+/// pull (which starts a fresh walk from the empty cursor) — exactly the same
+/// eventual-convergence property an unpaginated `GET` already has against a
+/// store with no transactional listing.
+///
+/// The unpaginated path (`limit` and `cursor` both absent) is deliberately
+/// **not** sorted, matching `BlobStore::list`'s own unspecified order, so an
+/// existing caller sees byte-identical behavior to before pagination existed.
+fn paginate_ids(
+    mut ids: Vec<String>,
+    limit: Option<usize>,
+    cursor: Option<&str>,
+) -> Result<(Vec<String>, Option<String>), StatusCode> {
+    if limit.is_none() && cursor.is_none() {
+        return Ok((ids, None));
+    }
+    if let Some(cursor) = cursor {
+        if cursor.len() > MAX_CURSOR_LEN {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+    let page_size = limit
+        .map(|l| l.clamp(1, MAX_PAGE_SIZE))
+        .unwrap_or(DEFAULT_PAGE_SIZE);
+    ids.sort();
+    // First index whose id sorts strictly after the cursor (or 0 when absent):
+    // `ids` is sorted, so everything before it is `<= cursor` and already seen.
+    let start = match cursor {
+        Some(cursor) => ids.partition_point(|id| id.as_str() <= cursor),
+        None => 0,
+    };
+    let remaining = &ids[start..];
+    let page: Vec<String> = remaining.iter().take(page_size).cloned().collect();
+    let next = (remaining.len() > page.len())
+        .then(|| page.last().cloned())
+        .flatten();
+    Ok((page, next))
+}
+
+/// List the ids the caller has stored. See [`paginate_ids`] for the optional
+/// `limit`/`cursor` params' semantics.
 pub async fn list_blobs(
     State(state): State<AppState>,
     Extension(owner): Extension<Owner>,
+    Query(query): Query<ListQuery>,
 ) -> Result<Json<BlobList>, StatusCode> {
     let ids = state
         .store
         .list(&owner.0)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(BlobList { ids }))
+    let (ids, next) = paginate_ids(ids, query.limit, query.cursor.as_deref())?;
+    Ok(Json(BlobList { ids, next }))
+}
+
+/// A strong validator over a blob's exact bytes: cheap and free of any AAD or
+/// key material (the relay never opens the blob), and stable across identical
+/// re-writes (rewriting `cur-` with unchanged content, which a client's LWW
+/// re-push after losing a merge can do, reproduces the same etag). Formatted as
+/// an HTTP quoted entity-tag.
+fn strong_etag(bytes: &[u8]) -> String {
+    format!("\"{}\"", hex::encode(Sha256::digest(bytes)))
+}
+
+/// Whether `headers` carries an `If-None-Match` that matches `etag` — a
+/// comma-separated list per RFC 7232, `*` matching unconditionally. Weak
+/// validators (`W/"..."`) never match, since every etag this relay issues is
+/// strong.
+fn if_none_match_hits(headers: &HeaderMap, etag: &str) -> bool {
+    let Some(value) = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+    else {
+        return false;
+    };
+    value
+        .split(',')
+        .map(str::trim)
+        .any(|candidate| candidate == etag || candidate == "*")
+}
+
+/// Build the response for a fetched blob: a plain octet-stream body for every
+/// namespace except the mutable `cur-` one, which additionally carries a
+/// strong `ETag` and honors `If-None-Match` with a bodyless `304`. See
+/// [`get_blob`] and [`get_shared_blob`] for why the etag path is scoped to
+/// `cur-` alone, and `spec/README.md`'s "Curation etags" for why the listing
+/// response does not also carry these validators.
+fn etag_response(id: &str, blob: Vec<u8>, headers: &HeaderMap) -> Response {
+    if !id.starts_with("cur-") {
+        return ([(header::CONTENT_TYPE, "application/octet-stream")], blob).into_response();
+    }
+    let etag = strong_etag(&blob);
+    let etag_header = etag.parse().expect("hex + quotes is a valid header value");
+    if if_none_match_hits(headers, &etag) {
+        let mut resp = StatusCode::NOT_MODIFIED.into_response();
+        resp.headers_mut().insert(header::ETAG, etag_header);
+        return resp;
+    }
+    let mut resp = ([(header::CONTENT_TYPE, "application/octet-stream")], blob).into_response();
+    resp.headers_mut().insert(header::ETAG, etag_header);
+    resp
 }
 
 /// Delete a blob owned by the caller.
@@ -559,13 +699,21 @@ pub async fn list_shared(
 /// List `owner`'s blob ids, gated on a live grant from `owner` to the caller.
 /// `404` for a missing (or expired) grant, exactly as for a missing blob below
 /// — a caller probing an ungranted owner cannot distinguish "not shared with
-/// you" from "nothing there" (see [`get_shared_blob`]'s doc comment). When the
-/// grant carries a prefix allowlist, the listing is filtered to admitted ids, so
-/// the grantee never even learns which other ids exist.
+/// you" from "nothing there" (see [`get_shared_blob`]'s doc comment), and this
+/// holds regardless of what `limit`/`cursor` the caller sends: the grant check
+/// runs *before* pagination, so a bogus cursor on an absent or expired grant
+/// answers exactly the same `404` as no cursor at all — it can never leak a
+/// distinguishing `400` from cursor validation the caller was never entitled to
+/// reach. When the grant carries a prefix allowlist, the listing (and its
+/// pagination) is over admitted ids only, so a scoped grantee pages through
+/// its own scope and never learns an excluded id exists, let alone its
+/// position in the walk. See [`paginate_ids`] for the `limit`/`cursor`
+/// semantics themselves.
 pub async fn list_shared_blobs(
     State(state): State<AppState>,
     Extension(caller): Extension<Owner>,
     Path(owner_hex): Path<String>,
+    Query(query): Query<ListQuery>,
 ) -> Result<Json<BlobList>, StatusCode> {
     let owner = valid_pubkey_hex(&owner_hex).ok_or(StatusCode::BAD_REQUEST)?;
     let grant = live_grant(&state, &owner, &caller.0)?;
@@ -576,7 +724,8 @@ pub async fn list_shared_blobs(
         .into_iter()
         .filter(|id| grant.admits(id))
         .collect();
-    Ok(Json(BlobList { ids }))
+    let (ids, next) = paginate_ids(ids, query.limit, query.cursor.as_deref())?;
+    Ok(Json(BlobList { ids, next }))
 }
 
 /// Fetch the caller's live grant on `owner`, or `Err(404)` when there is no
@@ -598,11 +747,16 @@ fn live_grant(state: &AppState, owner: &[u8; 32], caller: &[u8; 32]) -> Result<G
 /// answered differently, a caller could probe and learn something the relay is
 /// supposed to keep opaque — whether an arbitrary key grants them access (the
 /// sharing graph), or which ids exist outside their scope. One status code for
-/// every "you can't have this" case keeps all of that unobservable.
+/// every "you can't have this" case keeps all of that unobservable. A `cur-` id
+/// additionally gets the same `ETag`/`If-None-Match` conditional path as the
+/// own-vault fetch (see [`etag_response`]) — the node's grant is the case this
+/// exists for: it is a continuous grantee of `cur-` and would otherwise re-pull
+/// every curation record's full body on every sync.
 pub async fn get_shared_blob(
     State(state): State<AppState>,
     Extension(caller): Extension<Owner>,
     Path((owner_hex, id)): Path<(String, String)>,
+    headers: HeaderMap,
 ) -> Response {
     let Some(owner) = valid_pubkey_hex(&owner_hex) else {
         return StatusCode::BAD_REQUEST.into_response();
@@ -620,9 +774,7 @@ pub async fn get_shared_blob(
         return StatusCode::NOT_FOUND.into_response();
     }
     match state.store.get(&owner, &id) {
-        Ok(Some(blob)) => {
-            ([(header::CONTENT_TYPE, "application/octet-stream")], blob).into_response()
-        }
+        Ok(Some(blob)) => etag_response(&id, blob, &headers),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }

@@ -7,7 +7,6 @@ harvest a PR's "## Deferred" notes into the list.
 
 ## Sync & protocol
 
-- Blob-list pagination and manifests; curation etags
 - Multi-relay replication — client-driven; relays stay dumb replicas, no
   inter-relay protocol (contract enablers — envelope message ids, mergeable
   epoch ids — land with the protocol wave)

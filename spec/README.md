@@ -627,8 +627,8 @@ require the auth handshake above.
 | `GET /health` | — | — | `200 ok` | liveness |
 | `GET /v0/info` | — | — | `200 {"contract_version":N}` | version negotiation |
 | `PUT /v0/blobs/{id}` | yes | ciphertext | `204` | store (or replace) a blob |
-| `GET /v0/blobs/{id}` | yes | — | `200` octets / `404` | fetch the caller's blob |
-| `GET /v0/blobs` | yes | — | `200 {"ids":[...]}` | list the caller's blob ids |
+| `GET /v0/blobs/{id}` | yes | — | `200` octets / `304` / `404` | fetch the caller's blob; a `cur-` id honors `If-None-Match` (see "Curation etags" below) |
+| `GET /v0/blobs` | yes | — | `200 {"ids":[...]}` | list the caller's blob ids; optional `limit`/`cursor` pagination (see below) |
 | `DELETE /v0/blobs/{id}` | yes | — | `204` / `404` | delete the caller's blob |
 
 `{id}` is a client-chosen token, `[A-Za-z0-9._-]`, 1–128 chars, and never `.` or
@@ -638,6 +638,130 @@ a storage failure is `500`.
 Client blob-layout conventions (which ids hold what, and how their contents are
 sealed) are app-level and documented in `docs/ARCHITECTURE.md` ("Sync and
 backup"); the wire contract here is unchanged by them.
+
+#### Pagination (optional)
+
+Both listing endpoints — `GET /v0/blobs` above and `GET /v0/shared/{owner}/blobs`
+(see "Grants" below) — accept two **optional** query parameters:
+
+```
+GET /v0/blobs?limit=200&cursor=ev-3f9a...
+```
+
+- **`limit`** — the page size. Clamped to `[1, 1000]`, not rejected (a `limit=0`
+  or an oversized `limit` is silently corrected rather than answering `400`,
+  matching the share-expiry clamp's posture elsewhere in this contract). When
+  `cursor` is present without `limit`, the page size defaults to `200`.
+- **`cursor`** — an **opaque** token: the caller passes back the previous
+  page's own `next` value to continue. Capped at 256 bytes (→ `400` past it);
+  otherwise unvalidated — a cursor is never parsed, only compared as a sort
+  boundary (see "Ordering" below), so a syntactically-valid but
+  no-longer-meaningful cursor (e.g. from a walk over a store that has since
+  changed) is simply a boundary that may yield fewer or different ids, never an
+  error.
+
+**Both absent is unpaginated and byte-compatible.** With neither `limit` nor
+`cursor`, the response is exactly `{"ids":[...]}` — the same shape and the same
+(store-defined, unspecified) order as before pagination existed. This is the
+request shape every pre-existing client sends, so it is untouched.
+
+**Either present pages the listing.** The response gains an optional `next`:
+
+```
+{"ids": [...], "next": "ev-3f9a..."}
+```
+
+`next` is present only when more ids remain past this page; its absence (not
+`null` — the field is omitted) means the walk is complete. A client walks the
+full listing by looping: request with the last page's `next` as the new
+`cursor`, stop when a response carries no `next`.
+
+**Ordering.** Paginating sorts the (post-scope-filter) ids **lexicographically**
+and treats `cursor` as the last-seen id: a page holds the smallest `limit` ids
+strictly greater than `cursor` (or from the start, if `cursor` is absent), and
+its own `next` is the page's last id — so resuming with it continues right
+after. This differs from the unpaginated listing's order, which is deliberately
+left as the store's own (unspecified) order rather than forced to match, so
+existing behavior is untouched byte-for-byte.
+
+**Stability under concurrent writes.** Blob ids are content-addressed (a hash,
+or — for `cur-` — a hash of the curation key), so the lexicographic ordering
+above is stable in the sense a diffing sync client needs: a page never repeats
+or skips an id that existed at the moment it was read. A write landing
+lexicographically *behind* a cursor a walk has already passed by is not
+included in *that* walk — there is no transactional snapshot across pages — but
+it is picked up by the very next full pull, which starts a fresh walk from the
+empty cursor. This is not a new weakness pagination introduces: an unpaginated
+`GET` racing a concurrent write already has no stronger guarantee, since the
+store itself has no transactional listing. What pagination adds is purely
+mechanical (no duplicates, no gaps *within* one page-to-page walk over an
+otherwise-static store); it does not change the sync engine's existing
+eventual-convergence contract (`docs/ARCHITECTURE.md`, "No manifest").
+
+**Composes with grant scoping and the two-404 rule.** On
+`GET /v0/shared/{owner}/blobs`, pagination runs over the grant's admitted ids
+only — a scoped grantee's cursor walks *its own scope*, never learning an
+excluded id exists or where it would have sorted. The live-grant check runs
+*before* pagination is even considered, so a missing or expired grant answers
+the ordinary `404` regardless of what `limit`/`cursor` the caller sends: a
+bogus cursor can never turn into a distinguishing `400` from cursor validation
+that a caller without a grant was never entitled to reach. See "Grants" below.
+
+This is additive relay behavior — no stored byte format changes — so it does
+not move `CONTRACT_VERSION`, the same posture as the A1 push channel and A2's
+scoped grants.
+
+#### Curation etags
+
+`cur-` is the one blob namespace that is **mutable** (`docs/ARCHITECTURE.md`,
+"Curation overlay") — a `PUT` replaces the existing blob's bytes rather than
+minting a new id — and it is the one namespace a client re-fetches on every
+pull regardless of whether it changed. A `GET` of a `cur-` id — on either
+`GET /v0/blobs/{id}` or `GET /v0/shared/{owner}/blobs/{id}` — therefore carries
+a strong validator, free to compute (the relay already holds the exact sealed
+bytes it is about to serve; it decrypts nothing to produce this):
+
+```
+ETag: "<sha256_hex_of_the_sealed_bytes>"
+```
+
+A request carrying `If-None-Match` with that same value (or `*`) gets:
+
+```
+304 Not Modified
+ETag: "<same value>"
+```
+
+with **no body** — the payoff: an unchanged curation record costs the caller a
+request round trip, not a body download plus the open/verify/merge work the
+body would otherwise trigger. `If-None-Match` may carry a comma-separated list
+per RFC 7232; every value this relay issues is a *strong* validator, so a weak
+one (`W/"..."`) never matches. Any content change (a later `PUT`, even one that
+re-writes byte-identical plaintext to a different sealed form, since sealing is
+randomized) changes the etag, so a stale cached value never causes a wrongly-skipped
+update — an `If-None-Match` mismatch simply serves the current bytes with the
+current etag, exactly as an unconditional `GET` would.
+
+**Scoped to `cur-`.** Every other namespace (`ev-`, `att-`, `doc-`) is
+content-addressed and immutable, so a client that already has an id never
+re-fetches it — there is no re-fetch for an etag to make cheaper there, only
+the cost of computing and transmitting one on every response. `cur-` is where
+the cost is real (the node, in particular, is a continuous grantee of `cur-`
+that re-lists and re-considers every curation record on every sync) and the
+namespace this hardening targets.
+
+**Not surfaced in the listing.** The listing response (`{"ids":[...]}` or, with
+pagination, `{"ids":[...],"next":...}`) does not carry a validator alongside
+each id. Doing so would mean changing `ids` from an array of strings to an
+array of objects — which breaks the unpaginated response's byte-compatible
+shape (see "Pagination" above) for every existing caller, to buy a saving only
+the paginated, `cur-`-scoped case could use. The per-blob `GET`'s conditional
+path above already captures the payoff at negligible cost; the listing shape
+stays exactly `ids: string[]` either way.
+
+Like pagination, this is additive relay behavior — no stored byte format
+changes, no new required client behavior (an `If-None-Match`-less `GET` behaves
+exactly as before) — so it does not move `CONTRACT_VERSION`.
 
 ### Grants
 
@@ -654,8 +778,8 @@ blob endpoints above; there is no separate auth scheme for sharing.
 | `DELETE /v0/grants/{grantee}` | yes | — | `204` / `404` | revoke |
 | `GET /v0/grants` | yes | — | `200 {"grantees":[hex...]}` | who the caller has granted |
 | `GET /v0/shared` | yes | — | `200 {"owners":[hex...]}` | who has granted the caller |
-| `GET /v0/shared/{owner}/blobs` | yes | — | `200 {"ids":[...]}` / `404` | list `{owner}`'s blob ids the grant admits, gated on a live grant |
-| `GET /v0/shared/{owner}/blobs/{id}` | yes | — | `200` octets / `404` | fetch one of `{owner}`'s blobs, gated on a live grant that admits the id |
+| `GET /v0/shared/{owner}/blobs` | yes | — | `200 {"ids":[...]}` / `404` | list `{owner}`'s blob ids the grant admits, gated on a live grant; supports the same optional `limit`/`cursor` pagination as `GET /v0/blobs` |
+| `GET /v0/shared/{owner}/blobs/{id}` | yes | — | `200` octets / `304` / `404` | fetch one of `{owner}`'s blobs, gated on a live grant that admits the id; a `cur-` id honors `If-None-Match` (see "Curation etags" above) |
 
 `{grantee}`/`{owner}` are 64 lowercase hex chars (an Ed25519 public key) or
 `400`. **A missing grant and a missing blob both answer `404`.** If they
