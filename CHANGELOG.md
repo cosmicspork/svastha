@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.11.0](https://github.com/cosmicspork/svastha/compare/v0.10.0...v0.11.0) (2026-07-24)
+
+
+### Features
+
+* **core:** key epochs with mergeable keyrings and aad-bound markers ([#112](https://github.com/cosmicspork/svastha/issues/112)) ([296e30c](https://github.com/cosmicspork/svastha/commit/296e30c30bfa6fae03a71222b733d22b4515cf1f))
+* **core:** typed mailbox envelope with signed kinds and message ids ([#110](https://github.com/cosmicspork/svastha/issues/110)) ([b67ecd1](https://github.com/cosmicspork/svastha/commit/b67ecd1514a0871e81659d1b03d9061a1c8a1de0))
+* **node:** cited rag answers and admin command handling ([#121](https://github.com/cosmicspork/svastha/issues/121)) ([65d4d21](https://github.com/cosmicspork/svastha/commit/65d4d21e471a5594b458008cf9d86e8e805bc794))
+* **node:** enrollment, sync, and curation-aware index substrate ([#114](https://github.com/cosmicspork/svastha/issues/114)) ([6c192b2](https://github.com/cosmicspork/svastha/commit/6c192b2f66eb016d98d8252bc1c4a2dc97de1a60))
+* **node:** OCR captured pages into proposal envelopes ([#118](https://github.com/cosmicspork/svastha/issues/118)) ([d09cd10](https://github.com/cosmicspork/svastha/commit/d09cd10fcdd316bbb9cfbe0fc432d77e322eff64))
+* **relay:** cursor pagination and curation etags ([#119](https://github.com/cosmicspork/svastha/issues/119)) ([df647fb](https://github.com/cosmicspork/svastha/commit/df647fb98ae55e541df0d04e2c9b4f53b9488e7d))
+* **relay:** prefix-scoped grants with optional expiry ([#111](https://github.com/cosmicspork/svastha/issues/111)) ([4d54e60](https://github.com/cosmicspork/svastha/commit/4d54e60a50af3355493c9de4d26183c2dd72b420))
+* **relay:** sse push channel and auth nonce store ([#109](https://github.com/cosmicspork/svastha/issues/109)) ([5542ae0](https://github.com/cosmicspork/svastha/commit/5542ae0eb75902a1e406406d288074f199f7d9b0))
+* **relay:** web push subscriptions and poke fan-out ([#117](https://github.com/cosmicspork/svastha/issues/117)) ([709fc8a](https://github.com/cosmicspork/svastha/commit/709fc8a5147dd4c89ba3f06fa071a9018854e6bf))
+* **share:** cross-device share management and history clearing ([#125](https://github.com/cosmicspork/svastha/issues/125)) ([5b23c82](https://github.com/cosmicspork/svastha/commit/5b23c827e9edddb92f24eb476ca9173738160363))
+* **web:** ask screen, node admin, and SSE push client ([#115](https://github.com/cosmicspork/svastha/issues/115)) ([e09b9e1](https://github.com/cosmicspork/svastha/commit/e09b9e12c8c90b589cd653269d8a38a739c3006a))
+* **web:** devices and grants screen with revoke-and-rotate ([#116](https://github.com/cosmicspork/svastha/issues/116)) ([c41acc3](https://github.com/cosmicspork/svastha/commit/c41acc34af325bbd78a37f5c380abbe4940c0573))
+* **web:** include doc- blobs in doctor-share bundles ([#108](https://github.com/cosmicspork/svastha/issues/108)) ([b503ad9](https://github.com/cosmicspork/svastha/commit/b503ad9e0d0752f6ed846ea4477fd2639b026f87))
+* **web:** pdf attachments in paper-record capture ([#104](https://github.com/cosmicspork/svastha/issues/104)) ([f6b915c](https://github.com/cosmicspork/svastha/commit/f6b915c5732a46232398551cc353ed476ea2dfbd))
+* **web:** proposal inbox with provenance review and batch approval ([#113](https://github.com/cosmicspork/svastha/issues/113)) ([1647e3d](https://github.com/cosmicspork/svastha/commit/1647e3dd3584f7f600bd3184fc5fb86ee5bf1d55))
+* **web:** relay-less file share with optional passphrase ([#124](https://github.com/cosmicspork/svastha/issues/124)) ([8409a63](https://github.com/cosmicspork/svastha/commit/8409a63ffafc6408a5f8080039ae481bb5bb6273))
+* **web:** service worker push handler and notification settings ([#120](https://github.com/cosmicspork/svastha/issues/120)) ([d3562bd](https://github.com/cosmicspork/svastha/commit/d3562bdb4cd49499d9c3001e3c0996578938dfae))
+
+
+### Bug Fixes
+
+* **web:** neutral person language in grant and ask copy ([#127](https://github.com/cosmicspork/svastha/issues/127)) ([935a56e](https://github.com/cosmicspork/svastha/commit/935a56e9c192f47717f51dfb897189cc89b40859))
+
 ## [0.10.0](https://github.com/cosmicspork/svastha/compare/v0.9.0...v0.10.0) (2026-07-22)
 
 
