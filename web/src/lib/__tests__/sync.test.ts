@@ -18,6 +18,7 @@ import {
   type SealKey,
   type Codec,
 } from '../sync'
+import type { ConditionalBlob } from '../relay'
 
 // deleteDb() (not a raw indexedDB.deleteDatabase call) so the module's
 // memoized connection is closed and cleared between tests — same pattern as
@@ -304,6 +305,62 @@ describe('mutable codec (Codec.mutable — the shape cur- relies on)', () => {
     store.set('mut-a', 'stale-again')
     await pullAll()
     expect(store.get('mut-a')).toBe('remote-value')
+  })
+
+  it('uses a conditional get when the relay supports it, and a 304 skips re-applying', async () => {
+    const store2 = new Map<string, string>()
+    let applyCount = 0
+    registerCodec({
+      prefix: 'mut2-',
+      mutable: true,
+      async localHas(id) {
+        return store2.has(id)
+      },
+      async localLoad(id) {
+        const v = store2.get(id)
+        return v === undefined ? null : new TextEncoder().encode(v)
+      },
+      async remoteApply(id, plaintext) {
+        applyCount++
+        store2.set(id, new TextDecoder().decode(plaintext))
+      },
+    })
+
+    const ifNoneMatchSeen: (string | null)[] = []
+    let call = 0
+    const relay: BlobClient & {
+      getBlobConditional(id: string, ifNoneMatch: string | null): Promise<ConditionalBlob>
+    } = {
+      async putBlob() {},
+      async getBlob() {
+        throw new Error('the plain getBlob path should not be used once a conditional get is available')
+      },
+      async listBlobs() {
+        return ['mut2-a']
+      },
+      async getBlobConditional(_id, ifNoneMatch) {
+        ifNoneMatchSeen.push(ifNoneMatch)
+        call++
+        // First pull: nothing cached yet, so the relay answers fresh content.
+        // Second pull: the etag from the first response comes back unchanged.
+        return call === 1
+          ? { status: 'ok', blob: new TextEncoder().encode('v1'), etag: 'etag-1' }
+          : { status: 'not-modified' }
+      },
+    }
+    configure(relay, passthroughSealKey())
+
+    await pullAll()
+    expect(store2.get('mut2-a')).toBe('v1')
+    expect(applyCount).toBe(1)
+    expect(ifNoneMatchSeen[0]).toBeNull() // no etag cached on a first-ever fetch
+
+    // The second pull's 304 must not touch remoteApply again — the whole
+    // point of the etag is to skip the re-verify/re-merge, not just the body
+    // download.
+    await pullAll()
+    expect(applyCount).toBe(1)
+    expect(ifNoneMatchSeen[1]).toBe('etag-1')
   })
 })
 

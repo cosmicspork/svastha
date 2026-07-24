@@ -30,6 +30,22 @@ pub struct MailboxEntry {
     pub from_hex: String,
 }
 
+/// The outcome of [`RelayClient::get_shared_blob_conditional`].
+#[derive(Clone, Debug)]
+pub enum ConditionalBlob {
+    /// New or changed content, plus the etag to remember for the next fetch
+    /// (absent only if the relay ever answers `200` with no `ETag`, which it
+    /// does not today for `cur-` — carried as `Option` so a caller never
+    /// depends on that).
+    Fresh { body: Vec<u8>, etag: Option<String> },
+    /// The caller's `if_none_match` matched: content is unchanged, and the
+    /// relay sent no body.
+    NotModified,
+    /// `404` — missing, or outside the grant's prefix scope (indistinguishable
+    /// by design, same as [`RelayClient::get_shared_blob`]).
+    Missing,
+}
+
 /// The signed relay client. Holds the node identity behind an `Arc` so the sync
 /// engine and the SSE thread can share one client.
 pub struct RelayClient {
@@ -163,6 +179,51 @@ impl RelayClient {
                     .context("read shared blob body")?,
             )),
             StatusCode::NOT_FOUND => Ok(None),
+            status => bail!("GET {path}: unexpected status {status}"),
+        }
+    }
+
+    /// Fetch one of `owner`'s blobs with an `If-None-Match` conditional GET —
+    /// the node's continuous re-sync of the mutable `cur-` namespace is the
+    /// case this exists for (see `spec/README.md`, "Curation etags"): re-list
+    /// every sync, but skip re-downloading, re-opening, and re-verifying a
+    /// curation record that has not changed since the etag was last recorded.
+    /// `if_none_match` is `None` on a first-ever fetch (the relay then always
+    /// answers `200`, never `304`, since there is nothing to compare against).
+    pub fn get_shared_blob_conditional(
+        &self,
+        owner_hex: &str,
+        id: &str,
+        if_none_match: Option<&str>,
+    ) -> Result<ConditionalBlob> {
+        let path = format!("/v0/shared/{owner_hex}/blobs/{id}");
+        let (public_key, timestamp, signature) = self.signed_headers("GET", &path, b"");
+        let url = format!("{}{path}", self.base);
+        let mut req = self
+            .agent
+            .get(&url)
+            .header("Svastha-Public-Key", public_key)
+            .header("Svastha-Timestamp", timestamp)
+            .header("Svastha-Signature", signature);
+        if let Some(etag) = if_none_match {
+            req = req.header("If-None-Match", etag);
+        }
+        let mut resp = req.call().with_context(|| format!("GET {url}"))?;
+        match resp.status() {
+            StatusCode::OK => {
+                let etag = resp
+                    .headers()
+                    .get("etag")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string);
+                let body = resp
+                    .body_mut()
+                    .read_to_vec()
+                    .context("read shared blob body")?;
+                Ok(ConditionalBlob::Fresh { body, etag })
+            }
+            StatusCode::NOT_MODIFIED => Ok(ConditionalBlob::NotModified),
+            StatusCode::NOT_FOUND => Ok(ConditionalBlob::Missing),
             status => bail!("GET {path}: unexpected status {status}"),
         }
     }

@@ -241,9 +241,15 @@ every `cur-*` id and LWW-merges each into the local `curation` store; if the
 remote record loses the merge, the local (winning) record is re-enqueued for
 push so the relay converges on the true winner instead of serving a stale
 value forever. Curation is scoped at hundreds of records even for a
-years-long, heavily-tagged log, so a full-listing pull (no pagination, no
-per-blob etag) is adequate for v1; both are natural future hardening as the
-"no manifest" section below already flags for the `ev-`/`doc-` namespaces.
+years-long, heavily-tagged log, so a full-listing pull is adequate for v1 (a
+paginated walk buys nothing at this scale). Re-fetching every `cur-*` id's
+*body* on every pull is the real cost at continuous-sync scale, though — the
+node re-lists and reconsiders a granted owner's whole curation set on every
+sync loop — so the relay now serves a strong `ETag` on a `cur-` `GET` and
+answers a matching `If-None-Match` with a bodyless `304`; the web client's own
+pull and the node's shared-vault pull both send back the etag from their last
+fetch, so unchanged curation costs a round trip, not a re-open-and-merge (see
+`spec/README.md`, "Curation etags").
 
 **Owner-only in v1.** Shared (read-only household) pulls fetch only `ev-*` and
 `att-*` blobs (the record and the captured documents its events point at) — a
@@ -501,8 +507,14 @@ keyring.
 **No manifest.** The log is append-only and events are content-addressed, so
 `GET /v0/blobs` plus a local diff converges on its own: anything remote and
 unknown locally is pulled; any local event absent from the remote list is
-pushed. A manifest would add nothing except a mutable thing to keep consistent.
-Listing is unpaginated today; pagination is a future hardening as logs grow.
+pushed. A manifest would add nothing except a mutable thing to keep consistent
+— the node/protocol wave's relay hardening reconsidered pagination and etags as
+alternatives and dropped the manifest idea again for the same reason. The web
+client still pulls each listing whole (its vault fits comfortably in one
+response); the relay's listing endpoints additionally accept optional
+`limit`/`cursor` pagination now, opt-in and byte-compatible with the plain
+listing, for a client with a reason to page (see `spec/README.md`,
+"Pagination").
 
 **Push and pull triggers.** Push happens on write: logging events enqueues
 their blobs in a local outbox (the IndexedDB `sync` store) and drains it

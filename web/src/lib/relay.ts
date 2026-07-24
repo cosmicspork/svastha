@@ -19,6 +19,14 @@ export interface MailboxItem {
   from: string
 }
 
+/** The outcome of {@link RelayClient.getBlobConditional}: an `If-None-Match`
+ * conditional GET, so a re-fetch of unchanged content costs a `304`, not a
+ * body (see `spec/README.md`, "Curation etags"). */
+export type ConditionalBlob =
+  | { status: 'ok'; blob: Uint8Array; etag: string | null }
+  | { status: 'not-modified' }
+  | { status: 'missing' }
+
 /** Optional, relay-enforced narrowing on a grant PUT (see `spec/README.md`,
  * "Grants"). Both fields are optional; an absent (or empty) scope is an
  * unscoped, no-expiry grant. */
@@ -84,6 +92,27 @@ export class RelayClient {
     if (!res.ok) throw new Error(`listBlobs: ${res.status}`)
     const body = (await res.json()) as { ids: string[] }
     return body.ids
+  }
+
+  /**
+   * Fetch a blob with an `If-None-Match` conditional GET. `ifNoneMatch` is the
+   * etag remembered from the last successful fetch (`null` on a first-ever
+   * fetch, which the relay then always answers `200` for — nothing to compare
+   * against). Only the mutable `cur-` namespace carries an etag today (see
+   * `spec/README.md`), so this is only useful there; every other id's `GET`
+   * simply never returns `304`.
+   */
+  async getBlobConditional(id: string, ifNoneMatch: string | null): Promise<ConditionalBlob> {
+    const headers = ifNoneMatch ? { 'if-none-match': ifNoneMatch } : undefined
+    const res = await this.fetch('GET', `/v0/blobs/${id}`, undefined, headers)
+    if (res.status === 304) return { status: 'not-modified' }
+    if (res.status === 404) return { status: 'missing' }
+    if (!res.ok) throw new Error(`getBlobConditional ${id}: ${res.status}`)
+    return {
+      status: 'ok',
+      blob: new Uint8Array(await res.arrayBuffer()),
+      etag: res.headers.get('etag'),
+    }
   }
 
   /** Delete a blob; resolves to whether one existed. */
