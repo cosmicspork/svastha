@@ -1,0 +1,54 @@
+# Reference self-hosting profile: the relay alone by default, plus an
+# optional trusted processing node under the "node" profile. Not used to
+# build or test this repo (see the justfile and CI for that) — this is what
+# a self-hoster runs. See README.md's "Self-hosting with compose" and
+# crates/node/README.md for the full walkthrough.
+
+services:
+  relay:
+    image: ghcr.io/cosmicspork/svastha-relay:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - relay-data:/data
+    restart: unless-stopped
+
+  # Optional. Enable with `docker compose --profile node up`. The node is a
+  # trusted client, not a service: once an owner grants it from the PWA it
+  # holds keys and sees that vault's plaintext, so run it only on a host you
+  # trust (see docs/ARCHITECTURE.md, "Self-hosting"). It needs no inbound
+  # connections — it reaches the relay and your inference endpoint outbound
+  # only — so no ports are published for it here.
+  node:
+    image: ghcr.io/cosmicspork/svastha-node:latest
+    profiles: ["node"]
+    environment:
+      # Compose service name, not the published host port — the node talks
+      # to the relay over the compose network directly.
+      SVASTHA_RELAY_URL: http://relay:8080
+      # Unset by default: OCR and cited Q&A stay off until you point the node
+      # at your own synchronous, OpenAI-compatible endpoint (Ollama, LM
+      # Studio, vLLM, or a cloud endpoint you explicitly choose) — enrollment
+      # and sync work either way. Uncomment and fill in to enable them:
+      # SVASTHA_NODE_INFERENCE_ENDPOINT: "https://your-inference-endpoint/v1"
+      # SVASTHA_NODE_INFERENCE_MODEL: "your-vision-model"
+      # SVASTHA_NODE_INFERENCE_API_KEY: "your-api-key"
+    volumes:
+      # Durable: the node's disposable identity keypair, nothing else.
+      - node-data:/data
+      # Ephemeral: decrypted plaintext. tmpfs so it is never written to disk;
+      # the node resyncs it from the relay on every restart by design.
+      - type: tmpfs
+        target: /cache
+    depends_on:
+      - relay
+    restart: unless-stopped
+    # No `ports:` — see the comment above. The node's own bootstrap page
+    # (identity code + health) binds loopback inside its container; read the
+    # identity code with `docker compose logs node` or
+    # `docker compose exec node curl -s localhost:7071`, then grant it from
+    # the PWA's devices & grants screen.
+
+volumes:
+  relay-data:
+  node-data:

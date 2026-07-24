@@ -117,9 +117,31 @@ mirroring the web's posture.
   content-free journal, so a restart never re-answers a question or re-runs a
   command, and the handled item is deleted from the node's mailbox.
 
-## What later releases add
+## What runs today (D4 — packaging)
 
-- **D4 — packaging.** Deployment images and manifests, plus relay-list pagination.
+A container image and a compose profile for self-hosters. No Kubernetes
+manifests live in this repo; deploy configs elsewhere watch the same GHCR
+image tags.
+
+- **Image.** `ghcr.io/cosmicspork/svastha-node`, built from the repo's
+  [`Dockerfile.node`](../../Dockerfile.node) and published alongside the relay
+  image in the release pipeline. Same multi-stage pattern as the relay's, runs
+  as `nobody`, no OpenSSL to carry (pure-Rust TLS).
+- **Two mount points, opposite semantics.** `/data` is durable — the node
+  identity keypair, the only state that survives a restart. `/cache` is
+  ephemeral plaintext and must be safe to lose on any restart (a restart is a
+  resync by design); the image and the compose example both treat it as
+  disposable, mounting it `tmpfs`.
+- **`SVASTHA_RELAY_URL` still has no image default.** The image sets path
+  defaults only (`/data`, `/cache`); the relay URL is left for the operator to
+  supply, so a missing one fails fast at boot rather than silently assuming a
+  co-located relay.
+- **The bootstrap page never leaves the container.** It binds loopback
+  *inside* the container by design; reach it with `docker exec`/`compose
+  exec` (or your runtime's equivalent), and never publish it — see
+  [compose.yaml](../../compose.yaml) at the repo root for the reference
+  profile and the main README's "Self-hosting with compose" section for the
+  end-to-end walkthrough.
 
 ## Configuration (env)
 

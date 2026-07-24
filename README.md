@@ -111,6 +111,49 @@ current `main`.
   container replacement (the image always writes to `/data`; without a named
   volume the data lives only in the container's own filesystem layer).
 
+- **Node image**: `ghcr.io/cosmicspork/svastha-node`, built from this repo's
+  [`Dockerfile.node`](Dockerfile.node). See "Self-hosting with compose" below
+  and [`crates/node/README.md`](crates/node/README.md) for the full picture —
+  the node is a trusted client that needs an owner to grant it, not a service
+  you point at and forget.
+
+## Self-hosting with compose
+
+[`compose.yaml`](compose.yaml) runs the relay alone by default — the honest
+default, since the relay is keyless and the node is not. Bring it up with:
+
+```bash
+docker compose up -d
+```
+
+That publishes the relay on `:8080` and keeps its data in a named volume.
+
+The processing node (OCR proposals, cited Q&A) is an optional profile:
+
+```bash
+docker compose --profile node up -d
+```
+
+Enabling it adds a `node` service wired to the `relay` service by its compose
+name (`SVASTHA_RELAY_URL=http://relay:8080`) — no address to configure. To
+enroll it: read its `svastha1:` identity code from `docker compose logs
+node` (or scan the QR the same logs print), then grant it from the PWA's
+devices & grants screen. Inference (OCR/Q&A) stays off until you also set
+`SVASTHA_NODE_INFERENCE_ENDPOINT`/`_MODEL`/`_API_KEY` to your own
+OpenAI-compatible endpoint — see the commented-out example in `compose.yaml`.
+
+The node's two mounts have opposite durability: `/data` is a named volume
+holding only its disposable identity keypair, while `/cache` is `tmpfs` —
+decrypted plaintext lives there and nowhere else, and the node resyncs it from
+the relay on every restart by design. No port is published for the node: it
+reaches the relay and your inference endpoint outbound only, and its
+loopback-only bootstrap page is reachable via `docker compose exec`, never the
+network.
+
+Running the node means running trusted infrastructure — see
+`docs/ARCHITECTURE.md`'s "Self-hosting" for what that means for the host it
+runs on.
+
 ## Self-hosting the PWA
 
 ```bash
