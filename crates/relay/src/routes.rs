@@ -1011,3 +1011,43 @@ pub async fn delete_share(
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
+
+#[derive(Serialize)]
+pub struct ShareInfo {
+    token: String,
+    created_at: u64,
+    expires_at: u64,
+}
+
+#[derive(Serialize)]
+pub struct ShareList {
+    shares: Vec<ShareInfo>,
+}
+
+/// List the caller's own **live** shares — token, created, and expiry timing,
+/// never the sealed bundle bytes or anything content-derived. This is what lets
+/// a second device discover and revoke a share it did not create, without
+/// syncing share records through the vault: the relay already holds this as
+/// routing metadata (the same class as a grant edge), so a device just asks for
+/// it. A share whose `expires_at` has passed is filtered out here even if the
+/// store hasn't yet lazily tombstoned it on a `GET /v0/share/{token}` — the
+/// listing and the read path must agree on what's still live.
+pub async fn list_shares(
+    State(state): State<AppState>,
+    Extension(owner): Extension<Owner>,
+) -> Result<Json<ShareList>, StatusCode> {
+    let now = now_secs();
+    let shares = state
+        .shares
+        .list_by_owner(owner.0)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .into_iter()
+        .filter(|(_, _, expires_at)| *expires_at > now)
+        .map(|(token, created_at, expires_at)| ShareInfo {
+            token,
+            created_at,
+            expires_at,
+        })
+        .collect();
+    Ok(Json(ShareList { shares }))
+}

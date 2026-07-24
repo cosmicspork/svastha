@@ -85,6 +85,16 @@ pub trait ShareStore: Send + Sync {
     /// no periodic-task machinery, so this runs on startup; expiry is otherwise
     /// detected lazily on the read path.
     fn sweep(&self, now: u64, tombstone_max_age_secs: u64) -> io::Result<()>;
+
+    /// `owner`'s currently-**live** shares as `(token, created_at, expires_at)`.
+    /// Tombstoned tokens (revoked, or already lazily expired on a prior read) are
+    /// never returned; a share whose `expires_at` has passed but has not yet been
+    /// touched by [`Self::get`]'s lazy-expiry path is still returned here (the
+    /// route layer filters those out against its own clock), so this is a plain
+    /// storage-state query, not a re-implementation of the expiry check. Backs
+    /// `GET /v0/shares` — cross-device management asks the relay for what it
+    /// already knows rather than syncing share records through the vault.
+    fn list_by_owner(&self, owner: [u8; 32]) -> io::Result<Vec<(String, u64, u64)>>;
 }
 
 /// In-memory share store. Loses everything on restart. Never errors.
@@ -213,6 +223,24 @@ impl ShareStore for MemoryShareStore {
             }
         }
         Ok(())
+    }
+
+    fn list_by_owner(&self, owner: [u8; 32]) -> io::Result<Vec<(String, u64, u64)>> {
+        Ok(self
+            .shares
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|(token, entry)| match entry {
+                Entry::Live {
+                    owner: o,
+                    created_at,
+                    expires_at,
+                    ..
+                } if *o == owner => Some((token.clone(), *created_at, *expires_at)),
+                _ => None,
+            })
+            .collect())
     }
 }
 
@@ -391,6 +419,46 @@ impl ShareStore for FsShareStore {
         }
         Ok(())
     }
+
+    fn list_by_owner(&self, owner: [u8; 32]) -> io::Result<Vec<(String, u64, u64)>> {
+        const LIVE_HEADER_LEN: usize = HEADER_LEN + 16; // tag ‖ owner ‖ created_at ‖ expires_at
+        let mut out = Vec::new();
+        let entries = match fs::read_dir(&self.dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(out),
+            Err(e) => return Err(e),
+        };
+        for entry in entries {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue; // skip the .tmp staging dir
+            }
+            // Read only the fixed live-record header, never the (possibly
+            // multi-MiB) bundle body — a listing must stay cheap regardless of
+            // how many shares an owner has outstanding.
+            let mut file = match fs::File::open(entry.path()) {
+                Ok(f) => f,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
+            };
+            let mut header = [0u8; LIVE_HEADER_LEN];
+            let n = file.read(&mut header)?;
+            if n < LIVE_HEADER_LEN || header[0] != TAG_LIVE {
+                continue; // tombstone, or a header too short to be live
+            }
+            let stored_owner: [u8; 32] = header[1..HEADER_LEN].try_into().unwrap();
+            if stored_owner != owner {
+                continue;
+            }
+            let created_at =
+                u64::from_be_bytes(header[HEADER_LEN..HEADER_LEN + 8].try_into().unwrap());
+            let expires_at =
+                u64::from_be_bytes(header[HEADER_LEN + 8..LIVE_HEADER_LEN].try_into().unwrap());
+            let token = entry.file_name().to_string_lossy().into_owned();
+            out.push((token, created_at, expires_at));
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -524,5 +592,36 @@ mod tests {
         // Create-or-replace revives the token as a fresh live share.
         store.put("t", o, b"b".to_vec(), 2, 500).unwrap();
         assert_live(store.get("t").unwrap(), o, b"b");
+    }
+
+    fn run_list_by_owner(store: &dyn ShareStore) {
+        let alice = owner(4);
+        let mallory = owner(5);
+        store.put("a1", alice, b"x".to_vec(), 10, 1000).unwrap();
+        store.put("a2", alice, b"y".to_vec(), 20, 2000).unwrap();
+        store.put("m1", mallory, b"z".to_vec(), 30, 3000).unwrap();
+        // A tombstoned token of Alice's must not appear in her listing.
+        store.tombstone("a2", TombstoneReason::Revoked, 40).unwrap();
+
+        let mut alice_shares = store.list_by_owner(alice).unwrap();
+        alice_shares.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(alice_shares, vec![("a1".to_string(), 10, 1000)]);
+
+        let mallory_shares = store.list_by_owner(mallory).unwrap();
+        assert_eq!(mallory_shares, vec![("m1".to_string(), 30, 3000)]);
+
+        // An owner with no shares gets an empty listing, not an error.
+        assert!(store.list_by_owner(owner(9)).unwrap().is_empty());
+    }
+
+    #[test]
+    fn memory_list_by_owner() {
+        run_list_by_owner(&MemoryShareStore::new());
+    }
+
+    #[test]
+    fn fs_list_by_owner() {
+        let dir = tempdir().unwrap();
+        run_list_by_owner(&FsShareStore::new(dir.path()).unwrap());
     }
 }

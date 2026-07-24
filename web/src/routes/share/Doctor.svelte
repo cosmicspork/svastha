@@ -4,7 +4,7 @@
   import { get } from '../../lib/db'
   import { navigate } from '../../lib/router.svelte'
   import { session } from '../../lib/session.svelte'
-  import { RelayClient, normalizeRelayUrl } from '../../lib/relay'
+  import { RelayClient, normalizeRelayUrl, type RelayShareInfo } from '../../lib/relay'
   import {
     listDoctorShares,
     revokeDoctorShare,
@@ -13,6 +13,14 @@
     type DoctorShareRecord,
   } from '../../lib/doctorShare'
   import { listFileShares, type FileShareRecord } from '../../lib/fileShare'
+  import {
+    clearDoctorShareRecord,
+    clearFileShareRecord,
+    clearGateFor,
+    clearInactiveDoctorShares,
+    clearableInactiveShares,
+    mergeRemoteOnlyShares,
+  } from '../../lib/shareManagement'
   import DoctorShareSheet from '../../components/DoctorShareSheet.svelte'
 
   // Verbatim on every screen that mints or manages a link: revocation and
@@ -35,8 +43,40 @@
   let copied = $state<string | null>(null)
   let error = $state('')
 
+  // The relay's own live-share listing (`GET /v0/shares`) — null means it
+  // hasn't been fetched yet or the relay was unreachable this refresh; the
+  // merge and clearing logic below both treat null as "we don't know",
+  // never as "there is nothing else". `crossDeviceError` distinguishes a
+  // configured-but-unreachable relay from simply having none configured, for
+  // an honest degrade note (see `refreshRelayShares`).
+  let relayShares = $state<RelayShareInfo[] | null>(null)
+  let crossDeviceError = $state(false)
+  let clearBusy = $state(false)
+  let confirmingFileDelete = $state<FileShareRecord | null>(null)
+
+  const liveTokens = $derived(relayShares ? new Set(relayShares.map((s) => s.token)) : null)
+  const merge = $derived(mergeRemoteOnlyShares(new Set(shares.map((s) => s.token)), relayShares))
+  const clearable = $derived(clearableInactiveShares(shares, liveTokens))
+  const inactiveCount = $derived(shares.filter((s) => statusLabel(s) !== 'active').length)
+
+  async function refreshRelayShares() {
+    if (!relay) {
+      relayShares = null
+      crossDeviceError = false
+      return
+    }
+    try {
+      relayShares = await relay.listShares()
+      crossDeviceError = false
+    } catch {
+      relayShares = null
+      crossDeviceError = true
+    }
+  }
+
   async function refreshShares() {
     ;[shares, fileShares] = await Promise.all([listDoctorShares(), listFileShares()])
+    await refreshRelayShares()
   }
 
   function statusLabel(record: DoctorShareRecord) {
@@ -61,6 +101,42 @@
       error = err instanceof Error ? err.message : 'Could not revoke the share.'
     }
     if (qrFor === token) qrFor = null
+    await refreshShares()
+  }
+
+  /** Revoke a share known only from the relay (made on another device): the
+   * same tombstone DELETE, but there is no local record to mark revoked — the
+   * listing refresh above simply drops it once the relay stops serving it. */
+  async function revokeRemote(token: string) {
+    if (!relay) return
+    try {
+      await relay.deleteShare(token)
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Could not revoke the share.'
+    }
+    await refreshShares()
+  }
+
+  async function clearOne(token: string) {
+    if (!clearGateFor(token, liveTokens).canClear) return
+    await clearDoctorShareRecord(token)
+    await refreshShares()
+  }
+
+  async function clearAllInactive() {
+    clearBusy = true
+    try {
+      await clearInactiveDoctorShares(liveTokens)
+      await refreshShares()
+    } finally {
+      clearBusy = false
+    }
+  }
+
+  async function deleteFileShare() {
+    if (!confirmingFileDelete) return
+    await clearFileShareRecord(confirmingFileDelete.id)
+    confirmingFileDelete = null
     await refreshShares()
   }
 
@@ -158,7 +234,71 @@
               {@html renderSVG(link, { border: 2 })}
             </div>
           {/if}
+        {:else}
+          {@const gate = clearGateFor(record.token, liveTokens)}
+          <div class="row">
+            <button
+              class="ghost"
+              onclick={() => clearOne(record.token)}
+              disabled={!gate.canClear}
+              title={gate.canClear ? undefined : gate.reason}
+              data-testid="clear-{record.token}"
+            >
+              Clear
+            </button>
+          </div>
         {/if}
+      </li>
+    {/each}
+  </ul>
+{/if}
+
+{#if inactiveCount > 0}
+  <div class="clear-history">
+    <button
+      class="ghost"
+      onclick={clearAllInactive}
+      disabled={clearBusy || clearable.length === 0}
+      data-testid="clear-inactive-history"
+    >
+      Clear inactive history{clearable.length > 0 ? ` (${clearable.length})` : ''}
+    </button>
+    {#if relayShares === null}
+      <p class="muted hint" data-testid="clear-history-unavailable">
+        Reconnect to a relay to confirm these links are really gone before clearing them.
+      </p>
+    {/if}
+  </div>
+{/if}
+
+{#if crossDeviceError}
+  <p class="muted hint" data-testid="cross-device-unavailable">
+    Could not check for shares made on other devices — showing local links only.
+  </p>
+{/if}
+
+{#if merge.crossDeviceAvailable && merge.remoteOnly.length > 0}
+  <h2 class="list-head">Shared from another device</h2>
+  <ul class="share-list" data-testid="remote-share-list">
+    {#each merge.remoteOnly as s (s.token)}
+      <li>
+        <div class="share-head">
+          <span class="scope data" data-testid="remote-fingerprint-{s.token}">{s.fingerprint}</span>
+          <span class="status status-active">active</span>
+        </div>
+        <p class="hint muted">
+          Created {s.createdAt.slice(0, 10)} · expires {s.expiresAt.slice(0, 10)} · made on another device,
+          scope not shown here
+        </p>
+        <div class="row">
+          <button
+            class="danger-outline"
+            onclick={() => revokeRemote(s.token)}
+            data-testid="revoke-remote-{s.token}"
+          >
+            Revoke
+          </button>
+        </div>
       </li>
     {/each}
   </ul>
@@ -178,6 +318,15 @@
             ? 'passphrase-protected'
             : 'key embedded'} · never expires, cannot be revoked
         </p>
+        <div class="row">
+          <button
+            class="ghost"
+            onclick={() => (confirmingFileDelete = f)}
+            data-testid="delete-file-share-{f.id}"
+          >
+            Delete entry
+          </button>
+        </div>
       </li>
     {/each}
   </ul>
@@ -195,6 +344,26 @@
       refreshShares()
     }}
   />
+{/if}
+
+{#if confirmingFileDelete}
+  <div class="scrim" data-testid="file-delete-confirm">
+    <div class="dialog">
+      <h2>Delete this entry?</h2>
+      <p class="muted">
+        This only deletes the local record that a copy of your record was handed over — it doesn't
+        un-hand-over the file. The recipient's copy still exists and this app has no way to revoke it.
+      </p>
+      <div class="dialog-actions">
+        <button onclick={() => (confirmingFileDelete = null)} data-testid="file-delete-cancel">
+          Cancel
+        </button>
+        <button class="danger-outline" onclick={deleteFileShare} data-testid="file-delete-confirm-yes">
+          Delete
+        </button>
+      </div>
+    </div>
+  </div>
 {/if}
 
 <style>
@@ -299,5 +468,41 @@
     line-height: 1.5;
     color: var(--muted);
     margin: var(--space-5) 0 0;
+  }
+
+  .clear-history {
+    margin-top: var(--space-4);
+  }
+
+  .scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-4);
+    background: rgba(0, 0, 0, 0.5);
+  }
+
+  .dialog {
+    width: 100%;
+    max-width: 26rem;
+    padding: var(--space-4);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-2);
+  }
+
+  .dialog h2 {
+    margin: 0 0 var(--space-2);
+  }
+
+  .dialog-actions {
+    display: flex;
+    gap: var(--space-2);
+    justify-content: flex-end;
+    margin-top: var(--space-4);
   }
 </style>

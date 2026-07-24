@@ -368,3 +368,140 @@ async fn fs_share_store_persists_across_router_rebuild() {
     assert_eq!(get.status(), StatusCode::OK);
     assert_eq!(body_bytes(get).await, b"durable bundle");
 }
+
+// --- GET /v0/shares: the caller's own live shares, cross-device listing ---
+
+const TOKEN_A: &str = "share-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const TOKEN_B: &str = "share-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const TOKEN_MALLORY: &str = "share-mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm";
+
+fn list_shares_tokens(body: &[u8]) -> Vec<String> {
+    let parsed: serde_json::Value = serde_json::from_slice(body).unwrap();
+    parsed["shares"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["token"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn list_shares_shows_only_own_live_shares() {
+    let app = router();
+    let alice = Identity::from_seed(b"alice");
+    let mallory = Identity::from_seed(b"mallory");
+
+    for token in [TOKEN_A, TOKEN_B] {
+        let put = app
+            .clone()
+            .oneshot(signed(&alice, "PUT", &share_path(token), b"bundle", now()))
+            .await
+            .unwrap();
+        assert_eq!(put.status(), StatusCode::NO_CONTENT);
+    }
+    let put_mallory = app
+        .clone()
+        .oneshot(signed(
+            &mallory,
+            "PUT",
+            &share_path(TOKEN_MALLORY),
+            b"mallory bundle",
+            now(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(put_mallory.status(), StatusCode::NO_CONTENT);
+
+    let list = app
+        .clone()
+        .oneshot(signed(&alice, "GET", "/v0/shares", b"", now()))
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let mut tokens = list_shares_tokens(&body_bytes(list).await);
+    tokens.sort();
+    assert_eq!(tokens, vec![TOKEN_A.to_string(), TOKEN_B.to_string()]);
+
+    // Mallory's own listing shows only her share, never Alice's.
+    let mallory_list = app
+        .oneshot(signed(&mallory, "GET", "/v0/shares", b"", now()))
+        .await
+        .unwrap();
+    assert_eq!(
+        list_shares_tokens(&body_bytes(mallory_list).await),
+        vec![TOKEN_MALLORY.to_string()]
+    );
+}
+
+#[tokio::test]
+async fn list_shares_excludes_expired() {
+    let app = router();
+    let alice = Identity::from_seed(b"alice");
+
+    // Already past its expiry the moment it lands (the clamp only caps the
+    // upper bound), and nobody has fetched it yet to trigger lazy tombstoning —
+    // the listing must still treat it as gone.
+    let mut put = signed(&alice, "PUT", &share_path(TOKEN_A), b"bundle", now());
+    put.headers_mut().insert(
+        SHARE_EXPIRES_HEADER,
+        HeaderValue::from_str(&(now() - 10).to_string()).unwrap(),
+    );
+    assert_eq!(
+        app.clone().oneshot(put).await.unwrap().status(),
+        StatusCode::NO_CONTENT
+    );
+
+    let list = app
+        .oneshot(signed(&alice, "GET", "/v0/shares", b"", now()))
+        .await
+        .unwrap();
+    assert!(list_shares_tokens(&body_bytes(list).await).is_empty());
+}
+
+#[tokio::test]
+async fn list_shares_excludes_revoked() {
+    let app = router();
+    let alice = Identity::from_seed(b"alice");
+
+    let put = app
+        .clone()
+        .oneshot(signed(
+            &alice,
+            "PUT",
+            &share_path(TOKEN_A),
+            b"bundle",
+            now(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(put.status(), StatusCode::NO_CONTENT);
+
+    let del = app
+        .clone()
+        .oneshot(signed(&alice, "DELETE", &share_path(TOKEN_A), b"", now()))
+        .await
+        .unwrap();
+    assert_eq!(del.status(), StatusCode::NO_CONTENT);
+
+    let list = app
+        .oneshot(signed(&alice, "GET", "/v0/shares", b"", now()))
+        .await
+        .unwrap();
+    assert!(list_shares_tokens(&body_bytes(list).await).is_empty());
+}
+
+#[tokio::test]
+async fn list_shares_requires_auth() {
+    let app = router();
+    let unauthed = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v0/shares")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthed.status(), StatusCode::UNAUTHORIZED);
+}
