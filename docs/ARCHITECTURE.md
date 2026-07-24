@@ -80,7 +80,7 @@ unrecoverable loss is a problem.
   because the sharing graph is mostly people who physically meet.
 
 The first shipped slice of this model is deliberately narrow: **whole-vault,
-ongoing, read-only sharing between two people in one household.** Each vault
+ongoing, read-only sharing between two people.** Each vault
 keeps a single writer — the owner logs, the other person reads — so no
 multi-writer merge machinery is needed yet. The relay learns only the grant edge
 (routing metadata, consistent with zero-knowledge); the wrapped vault key travels
@@ -251,9 +251,10 @@ pull and the node's shared-vault pull both send back the etag from their last
 fetch, so unchanged curation costs a round trip, not a re-open-and-merge (see
 `spec/README.md`, "Curation etags").
 
-**Owner-only in v1.** Shared (read-only household) pulls fetch only `ev-*` and
+**Owner-only in v1.** Shared read-only pulls fetch only `ev-*` and
 `att-*` blobs (the record and the captured documents its events point at) — a
-household grant never touches `cur-*`. The owner's tags, hides, and notes are
+household grant (the code's name for a person-kind grant) never touches
+`cur-*`. The owner's tags, hides, and notes are
 their own working state, not something to project onto someone reading their
 shared record. The one exception is the *doctor share*, which bundles the
 owner's `status:`/`name:` records for the shared concepts inside the sealed
@@ -397,14 +398,32 @@ answers `404` identically for "no such blob" and "no grant," so probing never
 leaks the sharing graph. See `spec/README.md`'s "Mailbox message envelope",
 "Grants", and "Mailbox" sections for the contract.
 
-## Node (`crates/node`, later release)
+## Node (`crates/node`)
 
-A trusted processing client: it holds keys, syncs plaintext locally, and runs the
-OCR, extraction, de-identification, and RAG pipeline. It ships no models. Instead
-it delegates inference to a user-supplied OpenAI-compatible endpoint (Ollama, LM
-Studio, vLLM, or a cloud endpoint the user explicitly chooses). Running inference
-inside the user's own trust boundary is how AI features stay compatible with
-zero-knowledge.
+A trusted processing client — software in the key circle, never a service with
+its own authority. The node is a **keyed grantee**: it generates its own
+`svastha1:` identity, each owner grants it whole-vault read from their app
+(the person-share primitive, with software as the grantee), and the keyring reaches it
+as a `key_handoff` through the mailbox. It holds no seed and cannot sign as any
+owner: a compromised node can leak plaintext (bounded by key epochs, revocable
+by rotation) but can never forge history. Its writes are **proposals** the owner
+reviews and signs in the app; its administration is owner-signed `admin_cmd`
+messages over the same mailbox. One node serves several owners — each grant
+enrolls another vault, and tenants are structurally isolated.
+
+What it runs: OCR of captured pages into draft coded events (each proposal
+carrying source-blob, method, and model provenance), and cited Q&A over the
+owner's own record (every answer cites the event ids it drew from; an answer
+that cannot be grounded is an honest "couldn't answer"). It ships no models —
+inference delegates to a user-supplied OpenAI-compatible endpoint (Ollama, LM
+Studio, vLLM, or a cloud endpoint the user explicitly chooses), which is how AI
+features stay compatible with a zero-knowledge relay: the trust decision about
+who sees plaintext belongs to the owner, explicitly, in one place.
+
+Its state mirrors its trust position: the only durable state is a disposable
+identity keypair (lose it, re-enroll via a fresh grant); decrypted plaintext
+lives in an ephemeral cache and re-syncs from the relay on restart. It makes no
+inbound connections — see "Self-hosting".
 
 ## Web (`web`)
 
@@ -576,15 +595,6 @@ Two roles with different trust properties:
 
 Keep these separate so the hosted relay stays truthfully zero-knowledge while
 power users can run everything locally, from the same codebase.
-
-## Roadmap
-
-Since v0.1.0 the vault has grown passkey unlock, the doctor share and its
-clinician summary view, narrative-notes import, paper-record capture with
-encrypted attachment blobs and an in-app viewer, and render-time code display
-names with the opt-in offline dictionary.
-
-Forward-looking plans live in `docs/ROADMAP.md`.
 
 ## Keep in sync
 
