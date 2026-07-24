@@ -14,6 +14,7 @@ import { KeyringBlobKey, isKeyringContainer } from './keyring'
 import { syncInit } from './sync'
 import { configureSharing, handleIncomingKeyHandoff } from './shared'
 import { configureMailbox } from './mailbox'
+import { reassertPushOnStart } from './push'
 
 const VAULT_KEY_BLOB_ID = 'vault.key'
 
@@ -103,4 +104,9 @@ export async function connectRelay(relay: RelayClient): Promise<void> {
   // re-keying (post-rotation) handoff merges into an existing share rather than
   // surfacing a duplicate invite (see shared.ts).
   configureMailbox(relay, identity, verify_message, handleIncomingKeyHandoff)
+  // Web Push subscriptions rot (see push.ts's doc comment); re-assert
+  // whatever this device currently holds on every relay (re)connect, not just
+  // on the one app-start effect — Sync.svelte's manual "Connect" also lands
+  // here. A no-op when the user has push off or no subscription exists.
+  void reassertPushOnStart(relay)
 }

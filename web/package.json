@@ -8,7 +8,7 @@
     "dev": "bun run wasm && vite",
     "build": "bun run wasm && bun run scripts/build-changelog/build.ts && vite build",
     "preview": "vite preview",
-    "check": "bun run wasm && svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json && tsc -p tsconfig.scripts.json && vitest run",
+    "check": "bun run wasm && svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json && tsc -p tsconfig.scripts.json && tsc -p tsconfig.sw.json && vitest run",
     "test": "vitest run",
     "e2e": "playwright test"
   },
@@ -24,6 +24,7 @@
     "vite": "^8.0.12",
     "vite-plugin-pwa": "^1.3.0",
     "vitest": "^4.1.9",
+    "workbox-precaching": "^7.4.1",
     "wrangler": "^4"
   },
   "dependencies": {

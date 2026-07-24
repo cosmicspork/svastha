@@ -21,11 +21,21 @@ export default defineConfig({
       // surfaces a notification instead, and the user relaunches on their own
       // terms via UpdateSheet's "Relaunch now".
       registerType: 'prompt',
-      workbox: {
-        // The offline code dictionary under /dict/ is opt-in and multi-MB; it
-        // must NOT ride the install-time precache. JSON is already outside
-        // globPatterns, and this ignore makes that exclusion explicit and
-        // future-proof (dictionary.ts fetches these on demand instead).
+      // 'injectManifest' (not the default 'generateSW'): the worker needs a
+      // hand-written `push`/`notificationclick`/`pushsubscriptionchange`
+      // handler (see src/sw.ts) that a fully auto-generated worker can't
+      // carry. src/sw.ts owns everything generateSW's `workbox` options used
+      // to configure — including reproducing its SKIP_WAITING message
+      // listener by hand, since that's normally injected automatically too.
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.ts',
+      injectManifest: {
+        // Unchanged from the former `workbox` option below. The offline code
+        // dictionary under /dict/ is opt-in and multi-MB; it must NOT ride the
+        // install-time precache. JSON is already outside globPatterns, and
+        // this ignore makes that exclusion explicit and future-proof
+        // (dictionary.ts fetches these on demand instead).
         //
         // changelog.json is excluded for a different reason: it's regenerated
         // fresh on every deploy (see scripts/build-changelog) and must always

@@ -19,3 +19,14 @@ export function base64ToBytes(b64: string): Uint8Array {
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
   return bytes
 }
+
+/** The relay's VAPID public key (`GET /v0/push/key`) and a subscription's
+ * `p256dh`/`auth` keys travel as unpadded base64url — the alphabet
+ * `PushManager.subscribe`'s `applicationServerKey` and the browser's own
+ * `toJSON()` both use (`-_` instead of `+/`, no `=` padding) — not the
+ * standard base64 the rest of this module handles. */
+export function base64UrlToBytes(b64url: string): Uint8Array {
+  const standard = b64url.replace(/-/g, '+').replace(/_/g, '/')
+  const padded = standard.padEnd(Math.ceil(standard.length / 4) * 4, '=')
+  return base64ToBytes(padded)
+}
