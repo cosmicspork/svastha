@@ -30,23 +30,24 @@ infrastructure holds nothing readable.
   cold in any browser, or as an encrypted file handed over with no relay
   involved (optional passphrase). Shares are revocable where that's honest and
   labeled unrevocable where it isn't.
-- **Share within a household.** Grant another person ongoing read access to
-  your record, scoped to what a partner actually needs; revoking a grant
-  really rotates keys.
+- **Share with someone you trust.** Grant another person ongoing read access
+  to your record, scoped to the categories they actually need; revoking a
+  grant really rotates keys.
 - **Multi-device.** Restore any device from your seed phrase; devices converge
   through the relay. A devices & grants screen shows both directions of the
   sharing graph, with revoke-and-rotate as one action.
-- **Ask your record.** With an optional self-hosted processing node: OCR turns
-  captured pages into *draft* events you review and approve — nothing enters
-  your record unsigned — and a chat screen answers questions from your own
-  record with citations that link back to the underlying events. Inference
-  runs against an endpoint *you* choose (local Ollama/vLLM or a cloud endpoint
-  you explicitly trust). Clearly labeled retrieval, not medical advice.
+- **Ask your record.** An optional self-hosted processing node adds OCR and
+  cited Q&A over your own record — see [AI on your terms](#ai-on-your-terms-the-processing-node)
+  below for what it does and exactly what it's trusted with.
 - **Know when something's waiting.** Real-time sync pokes over SSE, plus Web
   Push to a locked phone — notifications are deliberately generic, because
   medical content never belongs on a lock screen.
-- **Offline-first PWA.** The app is a static bundle + IndexedDB; the network is
-  a sync optimization, not a requirement.
+- **Local-first.** Your device holds the primary copy (a static PWA over
+  IndexedDB); the app works fully offline, and the relay is a sync channel,
+  never a source of truth.
+- **No lock-in.** A one-way plaintext JSON export puts everything you hold in
+  an open format whenever you want out; the trust boundary stays exit-only —
+  there is deliberately no plaintext import back in.
 
 ## Who can read what
 
@@ -54,7 +55,7 @@ infrastructure holds nothing readable.
 |---|---|
 | You (seed phrase) | Everything. Keys derive from a mnemonic only you hold; unlock via passphrase or passkey. |
 | The relay | Ciphertext and routing metadata only. It stores sealed blobs it cannot open — zero-knowledge by construction, verified by a written contract and test vectors. |
-| A household grantee | The namespaces you granted (relay-enforced), until you revoke — and revoking rotates keys, so it means something. |
+| Someone you granted ongoing access | The namespaces you granted (relay-enforced), until you revoke — and revoking rotates keys, so it means something. |
 | A doctor with a share link | Only the sealed bundle behind that link's key, scoped to what you selected. |
 | Your processing node (optional) | Plaintext of vaults that enrolled it — it's *trusted* infrastructure you run, inside your boundary. It holds no seed and cannot forge history: its writes are proposals you sign. |
 
@@ -63,6 +64,41 @@ reader keeps what it already decrypted (rotation protects everything after), a
 handed-over file is a copy like paper, and the relay necessarily sees traffic
 timing and blob-id prefixes. `docs/ARCHITECTURE.md` states each caveat next to
 the mechanism it belongs to.
+
+## AI on your terms: the processing node
+
+AI features and end-to-end encryption are usually a contradiction — someone's
+server has to read your data. Svastha resolves it by making the AI a **grantee
+you enroll, not a service you're opted into**. The processing node is an
+optional container you run; nothing about the app requires it.
+
+What it adds:
+
+- **OCR → proposals.** Captured paper pages become *draft* coded events in an
+  approval inbox — the source page shown beside each extracted fact — and you
+  approve, edit, or reject. Nothing enters your record unsigned; every
+  approved event permanently attests what proposed it, from which page, with
+  which model.
+- **Cited Q&A.** Ask questions of your own record; every answer cites the
+  events it drew from, and the citations link straight to them. An answer that
+  can't be grounded in your record comes back as an honest "couldn't answer",
+  never uncited prose. Clearly labeled retrieval, not medical advice.
+
+What it's trusted with, exactly:
+
+- The node earns access the way a person does: it has its own identity, you
+  grant it read access from your app after verifying its fingerprint, and
+  **revoke-and-rotate cuts it off** the same as any other grantee. It holds no
+  seed and cannot sign as you — a compromised node can leak what it has read,
+  but can never forge your history.
+- Plaintext reaches two places you chose by name: the node's host, and the
+  OpenAI-compatible inference endpoint you configure. Point it at local
+  Ollama/vLLM and plaintext never leaves your machines; point it at a cloud
+  endpoint and that's your explicit, revocable decision — the relay stays
+  zero-knowledge either way, and the node ships no models of its own.
+- Its design assumes it will be discarded: durable state is one disposable
+  identity keypair, decrypted data lives in an ephemeral cache that re-syncs
+  on restart, and it makes no inbound connections at all.
 
 ## Run it yourself
 
@@ -114,8 +150,6 @@ Self plus health is the whole idea: your records, held by you.
 ---
 
 ## Under the hood
-
-For readers here to evaluate the engineering rather than run the app.
 
 **The trust contract is a first-class artifact.** `spec/README.md` documents
 the key derivation, encryption envelope, event schema, curation records, typed
@@ -184,6 +218,9 @@ svelte-check + vitest, and the browser e2e suite.
 
 ### Developing
 
+Issues and PRs are welcome. Conventional commits, one-line subjects; run
+`just all` (everything CI runs) before pushing.
+
 ```bash
 cd web && bun install && bun run dev   # web app
 cargo build --workspace                # rust (rustup, stable)
@@ -210,6 +247,12 @@ cuts the GitHub release, and publishes the crates
 container images (`ghcr.io/cosmicspork/svastha-relay`,
 `ghcr.io/cosmicspork/svastha-node`). Pre-1.0, `feat` bumps the minor and `fix`
 the patch. Each publish job is safe to re-dispatch by hand if one fails.
+
+## Reporting a security issue
+
+Please don't open a public issue for anything security-sensitive — report it
+privately via [GitHub security advisories](https://github.com/cosmicspork/svastha/security/advisories/new).
+See [SECURITY.md](SECURITY.md).
 
 ## License
 
