@@ -287,6 +287,30 @@ impl RelayClient {
         self.put(&path, body)
     }
 
+    /// Delete one of the caller's own mailbox items. `204` (deleted) and `404`
+    /// (already gone) are both success — a chat question or admin command is
+    /// terminal once answered, so deleting it is idempotent cleanup that races
+    /// harmlessly against a concurrent delete. Used by the chat/admin drains (D3)
+    /// after a reply is deposited; the journal stays the authoritative idempotence
+    /// record (see [`crate::journal`]) — this only keeps the mailbox tidy.
+    pub fn delete_mailbox(&self, id: &str) -> Result<()> {
+        let path = format!("/v0/mailbox/{id}");
+        let (public_key, timestamp, signature) = self.signed_headers("DELETE", &path, b"");
+        let url = format!("{}{path}", self.base);
+        let resp = self
+            .agent
+            .delete(&url)
+            .header("Svastha-Public-Key", public_key)
+            .header("Svastha-Timestamp", timestamp)
+            .header("Svastha-Signature", signature)
+            .call()
+            .with_context(|| format!("DELETE {url}"))?;
+        match resp.status() {
+            StatusCode::NO_CONTENT | StatusCode::NOT_FOUND => Ok(()),
+            status => bail!("DELETE {path}: unexpected status {status}"),
+        }
+    }
+
     /// Store (or replace) one of the caller's own blobs. Not used by the node's
     /// read-only sync; exposed so tests can seed a vault through real signed PUTs
     /// (the same reason the devtool's `RelayHttp` exposes it).

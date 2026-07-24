@@ -54,6 +54,9 @@ pub struct JobStatus {
 pub struct NodeState {
     owners: BTreeMap<String, OwnerState>,
     jobs: JobStatus,
+    /// Unix seconds of the last completed reconcile pass, surfaced by the
+    /// `job_status` admin command. A timestamp — content-free.
+    last_reconcile: Option<i64>,
 }
 
 impl NodeState {
@@ -125,6 +128,17 @@ impl NodeState {
         self.jobs.queued = queued;
         self.jobs.processed += processed;
         self.jobs.failed += failed;
+    }
+
+    /// Stamp the time (Unix seconds) a reconcile pass finished. Reported by the
+    /// `job_status` admin command as "last reconcile".
+    pub fn record_reconcile(&mut self, now_secs: i64) {
+        self.last_reconcile = Some(now_secs);
+    }
+
+    /// Unix seconds of the last completed reconcile, if any has run yet.
+    pub fn last_reconcile(&self) -> Option<i64> {
+        self.last_reconcile
     }
 }
 
