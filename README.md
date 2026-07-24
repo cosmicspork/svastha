@@ -12,6 +12,15 @@ slice. Svastha is a place to gather that picture and own it outright: encrypted
 with keys derived from a seed phrase only you hold, so whoever runs the sync
 infrastructure holds nothing readable.
 
+<p align="center">
+  <img src="docs/screenshots/spine.png" width="24%" alt="Timeline: imported clinical history and self-logged vitals on one spine">
+  <img src="docs/screenshots/proposal-inbox.png" width="24%" alt="Proposal inbox: OCR drafts awaiting the owner's approval, with provenance">
+  <img src="docs/screenshots/ask.png" width="24%" alt="Ask: a cited answer drawn from the owner's own record, with node admin below">
+  <img src="docs/screenshots/doctor-share.png" width="24%" alt="Doctor share: the clinician summary a recipient sees in a plain browser">
+</p>
+<p align="center"><sub>Synthetic fixture data throughout — regenerate with
+<code>cd web && SCREENSHOTS=1 bunx playwright test screenshots.spec.ts</code>.</sub></p>
+
 ## What it does
 
 - **Import your records.** Client-side C-CDA and FHIR import (the formats US
