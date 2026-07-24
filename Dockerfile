@@ -1,13 +1,21 @@
 # Multi-stage build for the svastha relay. Relay-only: no wasm, no PWA assets
-# (those deploy separately to Cloudflare). Pure-Rust crypto and no outbound
-# calls, so there is no OpenSSL/libcurl/ca-certificates dependency to carry.
+# (those deploy separately to Cloudflare). Web Push fan-out (the relay's one
+# outbound call) links OpenSSL via the web-push crate's isahc/curl client, so
+# the builder needs the OpenSSL headers and the runtime needs libssl + CA
+# roots to speak TLS to the push services.
 
 FROM rust:1-slim-bookworm AS builder
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY . .
 RUN cargo build -p svastha-relay --release
 
 FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libssl3 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /build/target/release/svastha-relay /usr/local/bin/svastha-relay
 ENV SVASTHA_RELAY_ADDR=0.0.0.0:8080 \
