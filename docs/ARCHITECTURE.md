@@ -595,20 +595,6 @@ Two roles with different trust properties:
 Keep these separate so the hosted relay stays truthfully zero-knowledge while
 power users can run everything locally, from the same codebase.
 
-## Roadmap
-
-Since v0.1.0 the vault has grown passkey unlock, the doctor share and its
-clinician summary view, narrative-notes import, paper-record capture with
-encrypted attachment blobs and an in-app viewer, and render-time code display
-names with the opt-in offline dictionary. The node/protocol wave then opened
-and closed the contract once (typed mailbox envelope; key epochs) and shipped
-the relay's push channel (SSE + Web Push), scoped grants, pagination and
-curation etags, the proposal inbox, devices & grants with revoke-and-rotate,
-cited Q&A, the processing node itself, relay-less file shares, and cross-device
-share management.
-
-Forward-looking plans live in `docs/ROADMAP.md`.
-
 ## Keep in sync
 
 When the core patterns change, update together:
