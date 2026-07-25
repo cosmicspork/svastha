@@ -33,6 +33,14 @@ pub fn contract_version() -> u32 {
     svastha_core::CONTRACT_VERSION
 }
 
+/// The cryptographic era (key-rotation generation), shown next to the wire
+/// version on the About screen. Distinct from [`contract_version`]: an additive
+/// wire bump does not move it (see `svastha_core`).
+#[wasm_bindgen]
+pub fn contract_major() -> u32 {
+    svastha_core::contract_major()
+}
+
 /// Map any `Display` error to a JS exception.
 fn to_js<E: std::fmt::Display>(e: E) -> JsError {
     JsError::new(&e.to_string())

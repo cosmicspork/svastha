@@ -5,6 +5,7 @@
 // idempotent) before using any export.
 import init, {
   contract_version,
+  contract_major,
   verify_event,
   verify_curation,
   verify_message,
@@ -25,6 +26,7 @@ export function initSvastha(): Promise<void> {
 
 export {
   contract_version,
+  contract_major,
   verify_event,
   verify_curation,
   verify_message,
