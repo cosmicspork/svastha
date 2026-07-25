@@ -33,7 +33,9 @@ export async function onboardViaUI(page: Page, passphrase: string = PASSPHRASE):
   await page.getByTestId('passphrase-confirm').fill(passphrase)
   await page.getByTestId('set-passphrase-submit').click()
 
-  await expect(page.getByTestId('empty-state')).toBeVisible()
+  // Home is a dashboard now (the spine moved to its own Timeline page); the
+  // records section is its stable "unlocked and on Home" marker.
+  await expect(page.getByTestId('home-records')).toBeVisible()
   await dismissInstallSheet(page)
   return words
 }
@@ -51,26 +53,23 @@ async function dismissInstallSheet(page: Page): Promise<void> {
   await expect(notNow).toBeHidden()
 }
 
-/** Connect a relay through the Settings UI (hub -> Sync & devices) and land
- * back on Home. Assumes an unlocked session currently on Home. */
+/** Connect a relay through the Sync & devices screen and land back on Home.
+ * Navigates by hash so it works from any current screen (an unlocked session on
+ * Home, the Summary page, wherever). */
 export async function connectRelayViaUI(page: Page, relayUrl: string = RELAY): Promise<void> {
-  await page.getByTestId('nav-settings').click()
-  await page.getByTestId('settings-row-sync').click()
+  await page.evaluate(() => (window.location.hash = '#/settings/sync'))
   await page.getByTestId('relay-url').fill(relayUrl)
   await page.getByTestId('relay-connect').click()
   await expect(page.getByTestId('sync-pending')).toBeVisible()
-  // The header's Back button on any sub-screen returns straight to Home.
-  await page.getByTestId('nav-back').click()
+  await page.evaluate(() => (window.location.hash = '#/'))
 }
 
-/** Wait (on Settings' Sync & devices sub-screen) until the outbox is fully
- * pushed, then return to Home. A sub-screen's header shows only Back, never
- * Settings (see AppHeader.svelte), so a single Back click reaches Home. */
+/** Wait (on the Sync & devices screen) until the outbox is fully pushed, then
+ * return to Home. Hash navigation, so it's independent of the current screen. */
 export async function waitForPushed(page: Page): Promise<void> {
-  await page.getByTestId('nav-settings').click()
-  await page.getByTestId('settings-row-sync').click()
+  await page.evaluate(() => (window.location.hash = '#/settings/sync'))
   await expect(page.getByTestId('sync-pending')).toHaveText('0')
-  await page.getByTestId('nav-back').click()
+  await page.evaluate(() => (window.location.hash = '#/'))
 }
 
 /** Drive the Restore tab: seed phrase, passphrase, and (optionally) a relay

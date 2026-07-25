@@ -5,7 +5,7 @@
 // `svelte/store` only, no wasm and no relay — so it unit-tests under node vitest
 // exactly like proposals.ts / notifications.ts. The crypto (seal a question to
 // the node, open an incoming answer) lives in mailbox.ts, which owns the
-// configured client and identity; the UI (routes/Ask.svelte) drives sending and
+// configured client and identity; the UI (routes/Search.svelte) drives sending and
 // renders answers with their citations.
 //
 // Nothing produces answers in production yet — the node's RAG is a later PR

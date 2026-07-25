@@ -5,13 +5,18 @@
 // system|code is often named by a different source document elsewhere in the
 // vault, so labels can borrow that name at render time without touching
 // anything signed.
-import type { Code } from './codes'
+import { canonicalSystem, type Code } from './codes'
 import type { StoredEvent } from './events'
 
 type Ev = StoredEvent['event']
 
+// Key by the canonical system so an OID-form coding (`urn:oid:…`) and its
+// URL-form twin land on the same key — both when indexing the vault's own
+// displays and when looking a code up against the offline dictionary (which is
+// keyed by canonical `system|code`). The event's stored system is never
+// changed; this is a lookup-key transform only.
 function keyFor(code: Code): string {
-  return `${code.system}|${code.code}`
+  return `${canonicalSystem(code.system)}|${code.code}`
 }
 
 /** Every Code an event carries that's worth indexing: its own `code`, and —

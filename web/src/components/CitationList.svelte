@@ -44,7 +44,8 @@
   function open(c: Cited): void {
     if (!c.found) return
     focusedEventId.set(c.id)
-    navigate('#/')
+    // The spine lives on its own Timeline page now (Home is a dashboard).
+    navigate('#/timeline')
   }
 </script>
 

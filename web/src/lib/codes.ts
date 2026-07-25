@@ -22,27 +22,60 @@ export const SVASTHA = 'urn:svastha:codes'
  * ("LOINC 4548-4"). Imported events carry the full system URI; this is the only
  * place that maps one to its familiar acronym, so the spine hint and the
  * provenance stub agree. Unknown systems fall back to the raw URI. */
+const ICD9 = 'http://hl7.org/fhir/sid/icd-9-cm'
+const NDC = 'http://hl7.org/fhir/sid/ndc'
+
 const SYSTEM_LABELS: Record<string, string> = {
   [LOINC]: 'LOINC',
   [SNOMED]: 'SNOMED',
   [RXNORM]: 'RxNorm',
   'http://hl7.org/fhir/sid/icd-10-cm': 'ICD-10-CM',
+  [ICD9]: 'ICD-9-CM',
+  [NDC]: 'NDC',
   'http://www.ama-assn.org/go/cpt': 'CPT',
   'http://hl7.org/fhir/sid/cvx': 'CVX',
   'http://terminology.hl7.org/CodeSystem/v3-ActCode': 'ActCode',
 }
 
+/** HL7 OID → canonical system URI. C-CDA (and some FHIR) sources carry a
+ * terminology by its registered OID (`urn:oid:2.16.840.1.113883.6.88`) rather
+ * than its canonical URL, so an otherwise-known system falls through every
+ * label/dictionary lookup and renders as a raw `urn:oid:…`. These are the OIDs
+ * that map back to a system this app already understands. */
+const OID_TO_SYSTEM: Record<string, string> = {
+  '2.16.840.1.113883.6.1': LOINC,
+  '2.16.840.1.113883.6.96': SNOMED,
+  '2.16.840.1.113883.6.88': RXNORM,
+  '2.16.840.1.113883.6.90': 'http://hl7.org/fhir/sid/icd-10-cm',
+  '2.16.840.1.113883.6.103': ICD9,
+  '2.16.840.1.113883.6.104': ICD9,
+  '2.16.840.1.113883.6.12': 'http://www.ama-assn.org/go/cpt',
+  '2.16.840.1.113883.12.292': 'http://hl7.org/fhir/sid/cvx',
+  '2.16.840.1.113883.6.69': NDC,
+}
+
+/** Fold an OID-form system URI to its canonical URL so display and
+ * dictionary/vault-index lookup behave the same as a natively URL-coded event.
+ * A bare or `urn:oid:`-prefixed OID that maps to a known system is rewritten;
+ * anything else is returned unchanged. Render-time only — stored (signed) events
+ * are never rewritten (see code-names.ts). */
+export function canonicalSystem(system: string): string {
+  const oid = system.replace(/^urn:oid:/, '')
+  return OID_TO_SYSTEM[oid] ?? system
+}
+
 export function shortenSystem(system: string): string {
-  const known = SYSTEM_LABELS[system]
+  const canonical = canonicalSystem(system)
+  const known = SYSTEM_LABELS[canonical]
   if (known) return known
   // A full system URI is provenance, not reading material — an unknown one
   // (e.g. a terminology.hl7.org CodeSystem) shortens to its last path segment
   // so the row hint stays scannable; the raw URI stays in the export.
-  if (/^https?:\/\//.test(system)) {
-    const tail = system.replace(/\/+$/, '').split('/').pop()
+  if (/^https?:\/\//.test(canonical)) {
+    const tail = canonical.replace(/\/+$/, '').split('/').pop()
     if (tail) return tail
   }
-  return system
+  return canonical
 }
 
 function loinc(code: string, display: string): Code {

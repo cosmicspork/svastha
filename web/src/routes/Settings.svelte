@@ -40,18 +40,6 @@
     <span class="hub-chevron" aria-hidden="true">›</span>
   </button>
 
-  <button
-    class="hub-row"
-    onclick={() => navigate('#/settings/devices')}
-    data-testid="settings-row-devices"
-  >
-    <span class="hub-glyph" aria-hidden="true">⚷</span>
-    <span class="hub-text">
-      <span class="hub-title">Devices &amp; grants</span>
-      <span class="hub-sub muted">Who you share with, your node, revoke &amp; rotate</span>
-    </span>
-    <span class="hub-chevron" aria-hidden="true">›</span>
-  </button>
 
   <button
     class="hub-row"

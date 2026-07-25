@@ -419,6 +419,51 @@ describe('drain backoff', () => {
   })
 })
 
+describe('relay reachability + friendly errors', () => {
+  it('a successful pull marks the relay reachable and clears any stale error', async () => {
+    const relay = inMemoryBlobClient()
+    configure(relay, passthroughSealKey())
+    await pullAll()
+    const s = storeGet(syncStatus)
+    expect(s.reachable).toBe(true)
+    expect(s.lastError).toBeNull()
+  })
+
+  it('a network failure (TypeError) reads as Unreachable with a friendly message', async () => {
+    const relay: BlobClient = {
+      async putBlob() {},
+      async getBlob() {
+        return null
+      },
+      async listBlobs() {
+        throw new TypeError('Load failed')
+      },
+    }
+    configure(relay, passthroughSealKey())
+    await pullAll()
+    const s = storeGet(syncStatus)
+    expect(s.reachable).toBe(false)
+    expect(s.lastError).toBe('Could not reach the relay — check the address and your connection.')
+  })
+
+  it('an HTTP/app error still counts as reached (reachable stays true), keeping its detail', async () => {
+    const relay: BlobClient = {
+      async putBlob() {},
+      async getBlob() {
+        return null
+      },
+      async listBlobs() {
+        throw new Error('listBlobs: 500')
+      },
+    }
+    configure(relay, passthroughSealKey())
+    await pullAll()
+    const s = storeGet(syncStatus)
+    expect(s.reachable).toBe(true)
+    expect(s.lastError).toContain('500')
+  })
+})
+
 // --- single-blob primitives (the file-import path reuses these) ---
 
 /** A SealKey that records the AAD of every open/seal call, so a test can prove

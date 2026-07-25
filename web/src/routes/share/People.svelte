@@ -8,27 +8,49 @@
   import {
     buildExchangeCode,
     parseExchangeCode,
-    fingerprint,
-    codeQrSvg,
-    exchangeLinkFor,
     extractExchangeCode,
+    exchangeLinkFor,
+    codeQrSvg,
+    fingerprint,
     ExchangeCodeError,
+    type ExchangeCode,
   } from '../../lib/exchange'
   import { listShares, removeShare, type Share } from '../../lib/shared'
-  import { enrollGrantee, getGrantMeta, removeGrantMeta, granteesToReKey } from '../../lib/grants'
+  import {
+    enrollGrantee,
+    getGrantMeta,
+    removeGrantMeta,
+    buildOutgoing,
+    granteesToReKey,
+    type GrantKind,
+    type OutgoingGrant,
+  } from '../../lib/grants'
   import { revokeAndRotate } from '../../lib/keyring'
+  import { enrolledNode } from '../../lib/nodeadmin'
+  import type { ProposerRecord } from '../../lib/proposals'
   import QrScanner from '../../components/QrScanner.svelte'
-
-  /** Local-only label for a grantee — display convenience, never sent to the
-   * relay (which sees only the public key). Keyed by hex Ed25519 key. */
-  type Peers = Record<string, string>
+  import NodeAdmin from '../../components/NodeAdmin.svelte'
 
   let relayUrl = $state('')
   let relay = $state<RelayClient | null>(null)
-  let showScanner = $state(false)
-
-  // --- my code ---
   let displayName = $state('')
+
+  // --- the grant graph, both directions (single source of truth: grantMeta) ---
+  let outgoing = $state<OutgoingGrant[]>([])
+  let incoming = $state<Share[]>([])
+  const nodes = $derived(outgoing.filter((g) => g.kind === 'node'))
+  const people = $derived(outgoing.filter((g) => g.kind !== 'node'))
+  let adminNode = $state<ProposerRecord | null>(null)
+
+  async function refresh(): Promise<void> {
+    if (!relay) return
+    const [grantees, meta] = await Promise.all([relay.listGrants(), getGrantMeta()])
+    outgoing = buildOutgoing(grantees, meta)
+    incoming = await listShares()
+    adminNode = await enrolledNode()
+  }
+
+  // --- my code (share your vault with someone) ---
   const myCode = $derived(
     session.identity
       ? buildExchangeCode(
@@ -38,40 +60,41 @@
         )
       : '',
   )
-  // The QR encodes a link to the share screen, not the bare code: an unknown
-  // `svastha1:` scheme reads as "no usable data" to a generic camera app, so
-  // wrapping it in our own origin's URL is what makes it openable at all. The
-  // link lands on `#/share`, which redirects here with the code applied (see
-  // Share.svelte). "Copy code" below still copies the raw code.
   const myQrSvg = $derived(myCode ? codeQrSvg(exchangeLinkFor(window.location.origin, myCode)) : '')
   let copied = $state(false)
 
-  async function saveDisplayName() {
+  async function saveDisplayName(): Promise<void> {
     await put('prefs', displayName, 'displayName')
   }
 
-  async function copyCode() {
+  async function copyCode(): Promise<void> {
     await navigator.clipboard.writeText(myCode)
     copied = true
     setTimeout(() => (copied = false), 2000)
   }
 
-  // --- share my vault ---
-  // A scanned QR (see `exchangeLinkFor`) lands on `#/share?code=...`; Share.svelte
-  // redirects that here as `#/share/people?code=...`, whether or not the vault was
-  // locked when the link opened — App.svelte renders Unlock in place of the route
-  // without touching the hash, so the param survives an intervening unlock. Read
-  // it once, at mount, then strip it so a refresh doesn't re-show the confirm box.
+  const myFingerprint = $derived(
+    session.identity ? fingerprint(session.identity.ed25519_public_hex) : '',
+  )
+
+  // --- add / enroll (a person OR a processing node) ---
+  let showScanner = $state(false)
+  // A scanned QR lands on `#/share?code=…` which redirects here as
+  // `#/share/people?code=…` (see Share.svelte). Read it once, then strip it so a
+  // refresh doesn't re-show the confirm box.
   const incomingCode = new URLSearchParams(window.location.hash.split('?')[1] ?? '').get('code')
   if (incomingCode) {
-    history.replaceState(
-      null,
-      '',
-      `${window.location.pathname}${window.location.search}#/share/people`,
-    )
+    history.replaceState(null, '', `${window.location.pathname}${window.location.search}#/share/people`)
   }
   let pasteInput = $state(incomingCode ?? '')
-  const parsedCode = $derived.by(() => {
+  let kind = $state<GrantKind>('household')
+  let label = $state('')
+  let expiry = $state('') // yyyy-mm-dd, empty = no expiry
+  let enrollBusy = $state(false)
+  let enrollError = $state('')
+  let enrollDone = $state('')
+
+  const parsed = $derived.by((): { code: ExchangeCode | null; error: string } => {
     if (!pasteInput.trim()) return { code: null, error: '' }
     try {
       return { code: parseExchangeCode(extractExchangeCode(pasteInput)), error: '' }
@@ -83,133 +106,116 @@
     }
   })
 
-  function onScan(code: string) {
+  function onScan(code: string): void {
     showScanner = false
     pasteInput = code
   }
 
-  let shareBusy = $state(false)
-  let shareError = $state('')
-  let shareDone = $state(false)
-
-  async function confirmShare() {
-    const parsed = parsedCode.code
-    if (!parsed || !relay || !session.identity) return
+  async function enroll(): Promise<void> {
+    const code = parsed.code
+    if (!code || !relay || !session.identity) return
     if (!session.keyring) {
-      shareError = 'Still connecting to the relay — try again in a moment.'
+      enrollError = 'Still connecting to the relay — try again in a moment.'
       return
     }
-    shareBusy = true
-    shareError = ''
-    shareDone = false
+    enrollBusy = true
+    enrollError = ''
+    enrollDone = ''
     try {
-      // A household share: a scoped grant (record + captured documents) plus the
-      // vault keyring re-wrapped to them in a signed key_handoff, so a later
-      // rotation can re-key them (see lib/grants.ts).
+      const expiresAt = expiry ? Math.floor(new Date(`${expiry}T23:59:59`).getTime() / 1000) : undefined
       await enrollGrantee({
         relay,
         identity: session.identity,
         keyring: session.keyring,
         ownerLabel: displayName,
-        grantee: {
-          ed: parsed.ed25519Hex,
-          x25519: parsed.x25519Hex,
-          label: parsed.label,
-          kind: 'household',
-        },
+        grantee: { ed: code.ed25519Hex, x25519: code.x25519Hex, label: label || code.label, kind, expiresAt },
       })
-      await rememberPeer(parsed.ed25519Hex, parsed.label)
+      enrollDone =
+        kind === 'node'
+          ? 'Node enrolled. It will pull your vault and begin proposing.'
+          : "Shared. They'll see an invite next time they sync."
       pasteInput = ''
-      shareDone = true
-      await refreshGrants()
+      label = ''
+      expiry = ''
+      await refresh()
     } catch (err) {
-      shareError = err instanceof Error ? err.message : 'Could not share your vault.'
+      enrollError = err instanceof Error ? err.message : 'Could not enroll that identity.'
     } finally {
-      shareBusy = false
+      enrollBusy = false
     }
   }
 
-  // --- active grants (people this identity has granted) ---
-  let grantees = $state<string[]>([])
-  let peers = $state<Peers>({})
+  // --- revoke-and-rotate / rotate-now ---
+  let confirming = $state<{ revoke: OutgoingGrant | null } | null>(null)
+  let rotateBusy = $state(false)
+  let rotateError = $state('')
 
-  async function loadPeers(): Promise<Peers> {
-    return (await get<Peers>('prefs', 'peers')) ?? {}
-  }
-
-  async function rememberPeer(edHex: string, label: string): Promise<void> {
-    const all = await loadPeers()
-    all[edHex] = label || all[edHex] || ''
-    await put('prefs', all, 'peers')
-    peers = all
-  }
-
-  async function refreshGrants(): Promise<void> {
-    if (!relay) return
-    grantees = await relay.listGrants()
-    peers = await loadPeers()
-  }
-
-  // Revoke is always revoke-and-rotate (a revoke without rotation is dishonest):
-  // delete the grant edge, mint a new epoch, and re-key every still-trusted
-  // grantee. The revoked identity keeps what it already synced and old-epoch
-  // material — see the caveat copy below — but everything sealed after is beyond
-  // it. The full confirmation flow lives on the Devices & grants screen.
-  async function revoke(edHex: string): Promise<void> {
-    if (!relay || !session.identity || !session.keyring) return
-    const meta = await getGrantMeta()
-    const rotated = await revokeAndRotate({
-      relay,
-      identity: session.identity,
-      keyring: session.keyring,
-      grantees: granteesToReKey(meta, edHex),
-      revoke: edHex,
-    })
-    session.keyring = rotated as unknown as WasmKeyring
-    await removeGrantMeta(edHex)
-    await refreshGrants()
-  }
-
-  // --- shared with me ---
-  let shares = $state<Share[]>([])
-
-  async function refreshShares(): Promise<void> {
-    shares = await listShares()
+  async function doRotate(): Promise<void> {
+    if (!confirming || !relay || !session.identity || !session.keyring) return
+    const revoke = confirming.revoke
+    rotateBusy = true
+    rotateError = ''
+    try {
+      const meta = await getGrantMeta()
+      const rotated = await revokeAndRotate({
+        relay,
+        identity: session.identity,
+        keyring: session.keyring,
+        grantees: granteesToReKey(meta, revoke ? revoke.ed : null),
+        revoke: revoke ? revoke.ed : null,
+      })
+      session.keyring = rotated as unknown as WasmKeyring
+      if (revoke) await removeGrantMeta(revoke.ed)
+      confirming = null
+      await refresh()
+    } catch (err) {
+      rotateError = err instanceof Error ? err.message : 'Rotation failed.'
+    } finally {
+      rotateBusy = false
+    }
   }
 
   async function forget(ownerEd: string): Promise<void> {
     await removeShare(ownerEd)
-    await refreshShares()
+    await refresh()
+  }
+
+  function scopeText(g: OutgoingGrant): string {
+    if (g.legacy) return 'unscoped (issued before scopes)'
+    const parts: string[] = [g.prefixes.join(' ')]
+    if (g.expiresAt) parts.push(`expires ${new Date(g.expiresAt * 1000).toLocaleDateString()}`)
+    return parts.join(' · ')
   }
 
   onMount(async () => {
     displayName = (await get<string>('prefs', 'displayName')) ?? ''
-
     relayUrl = (await get<string>('prefs', 'relayUrl')) ?? ''
     if (relayUrl && session.identity) {
       relay = new RelayClient(relayUrl, session.identity)
-      await refreshGrants()
+      await refresh()
     }
-
-    await refreshShares()
   })
 </script>
 
 <h1>Your people</h1>
-<p class="lede muted">Ongoing, read-only access to your record for someone you trust.</p>
+<p class="lede muted">
+  Everyone your vault reaches, both ways — people you trust with read access, the processing node
+  that answers your questions, and revoke-and-rotate when a key must be pulled back.
+</p>
 
 {#if !relayUrl}
   <p class="muted" data-testid="share-needs-relay">
-    Sharing routes handshake metadata through a relay. <button
+    Sharing and node enrollment route through a relay. <button
       class="link"
       onclick={() => navigate('#/settings/sync')}
       data-testid="go-connect-relay">Connect one in Settings</button
-    > to invite someone.
+    > to get started.
   </p>
 {:else}
+  <!-- My code -->
   <section class="stack">
     <h2>My code</h2>
-    <label>
+    <label class="field">
       Your name
       <input bind:value={displayName} onchange={saveDisplayName} data-testid="display-name" />
     </label>
@@ -219,90 +225,176 @@
       <div class="qr" data-testid="my-qr">{@html myQrSvg}</div>
     {/if}
     <p class="data" data-testid="my-code">{myCode}</p>
+    <div class="row-item" data-testid="my-fingerprint">
+      <span class="data">{myFingerprint}</span>
+      <span class="badge">you</span>
+    </div>
     <button onclick={copyCode} data-testid="copy-code">{copied ? 'Copied' : 'Copy code'}</button>
   </section>
 
+  <!-- Add someone or a node -->
   <section class="stack">
-    <h2>Add someone</h2>
-    <button class="primary" onclick={() => (showScanner = true)} data-testid="scan-code">
+    <h2>Add someone or a node</h2>
+    <button class="primary" onclick={() => (showScanner = true)} data-testid="enroll-scan">
       Scan their code
     </button>
-    <label>
-      …or paste their code
-      <textarea
-        bind:value={pasteInput}
-        rows="3"
-        autocomplete="off"
-        data-testid="paste-code"
-      ></textarea>
+    <label class="field">
+      …or paste their <code>svastha1:</code> code
+      <textarea bind:value={pasteInput} rows="3" autocomplete="off" data-testid="enroll-paste"></textarea>
     </label>
-    {#if parsedCode.error}
-      <p class="error" data-testid="parse-error">{parsedCode.error}</p>
+    {#if parsed.error}
+      <p class="error" data-testid="enroll-parse-error">{parsed.error}</p>
     {/if}
-    {#if parsedCode.code}
+    {#if parsed.code}
       <div class="confirm-box">
-        <p data-testid="parsed-label">{parsedCode.code.label || 'Their vault'}</p>
-        <p class="data" data-testid="parsed-fingerprint">
-          {fingerprint(parsedCode.code.ed25519Hex)}
-        </p>
-        <p class="muted">Confirm these 16 characters match on their screen.</p>
-        <button
-          class="primary"
-          disabled={shareBusy}
-          onclick={confirmShare}
-          data-testid="confirm-share"
-        >
-          Confirm and share
+        <p class="confirm-name" data-testid="enroll-label">{parsed.code.label || 'Their vault'}</p>
+        <p class="data" data-testid="enroll-fingerprint">{fingerprint(parsed.code.ed25519Hex)}</p>
+        <p class="muted small">Confirm these 16 characters match on their screen.</p>
+
+        <fieldset class="kinds">
+          <label class="radio">
+            <input type="radio" bind:group={kind} value="household" data-testid="enroll-kind-household" />
+            <span>Person <span class="muted">— record + captured documents</span></span>
+          </label>
+          <label class="radio">
+            <input type="radio" bind:group={kind} value="node" data-testid="enroll-kind-node" />
+            <span>Processing node <span class="muted">— full read for OCR &amp; answers</span></span>
+          </label>
+        </fieldset>
+
+        <label class="field">
+          A name for them (optional)
+          <input bind:value={label} data-testid="enroll-name" />
+        </label>
+        <label class="field">
+          Expires (optional)
+          <input type="date" bind:value={expiry} data-testid="enroll-expiry" />
+        </label>
+
+        <button class="primary" disabled={enrollBusy} onclick={enroll} data-testid="enroll-submit">
+          {kind === 'node' ? 'Enroll node' : 'Confirm and share'}
         </button>
       </div>
     {/if}
-    {#if shareError}
-      <p class="error" data-testid="share-error">{shareError}</p>
+    {#if enrollError}
+      <p class="error" data-testid="enroll-error">{enrollError}</p>
     {/if}
-    {#if shareDone}
-      <p data-testid="share-done">Shared. They'll see an invite next time they sync.</p>
+    {#if enrollDone}
+      <p data-testid="enroll-done">{enrollDone}</p>
     {/if}
   </section>
 
-  {#if grantees.length > 0}
+  <!-- Your node(s) -->
+  {#if nodes.length > 0}
     <section class="stack">
-      <h2>Active grants</h2>
-      <ul class="grant-list">
-        {#each grantees as edHex (edHex)}
-          <li>
-            <span class="data">{peers[edHex] || fingerprint(edHex)}</span>
-            <button onclick={() => revoke(edHex)} data-testid="revoke-{edHex}">Revoke</button>
+      <h2>Your node{nodes.length === 1 ? '' : 's'}</h2>
+      <ul class="list">
+        {#each nodes as g (g.ed)}
+          <li data-testid="node-{g.ed}">
+            <span class="row-main">
+              <span class="data">{g.label || fingerprint(g.ed)}</span>
+              <span class="sub muted">{scopeText(g)}</span>
+            </span>
+            <button onclick={() => (confirming = { revoke: g })} data-testid="grant-revoke-{g.ed}">
+              Revoke
+            </button>
           </li>
         {/each}
       </ul>
-      <p class="muted">
-        Revoking rotates your vault key and re-keys everyone still trusted. The revoked person
-        keeps only what they already synced; everything from now on is beyond them.
-      </p>
+      {#if adminNode}
+        <NodeAdmin node={adminNode} />
+      {/if}
     </section>
   {/if}
+
+  <!-- People I've granted -->
+  <section class="stack">
+    <h2>You share with</h2>
+    {#if people.length === 0}
+      <p class="muted" data-testid="no-outgoing">You haven't shared with anyone yet.</p>
+    {:else}
+      <ul class="list">
+        {#each people as g (g.ed)}
+          <li data-testid="grant-{g.ed}">
+            <span class="row-main">
+              <span class="data">{g.label || fingerprint(g.ed)}</span>
+              <span class="sub muted">{scopeText(g)}</span>
+            </span>
+            <button onclick={() => (confirming = { revoke: g })} data-testid="grant-revoke-{g.ed}">
+              Revoke
+            </button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </section>
+
+  <!-- Shared with me -->
+  <section class="stack">
+    <h2>Shared with you</h2>
+    {#if incoming.length === 0}
+      <p class="muted" data-testid="no-incoming">No one has shared their vault with you yet.</p>
+    {:else}
+      <ul class="list">
+        {#each incoming as s (s.ownerEd)}
+          <li data-testid="incoming-{s.ownerEd}">
+            <span class="row-main">
+              <span class="data" style:color={`var(--person-${s.hue})`}>
+                {s.label || fingerprint(s.ownerEd)}
+              </span>
+              {#if s.stale}
+                <span class="sub muted" data-testid="share-stale-{s.ownerEd}">no longer shared</span>
+              {/if}
+            </span>
+            <button onclick={() => forget(s.ownerEd)} data-testid="forget-{s.ownerEd}">Remove</button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </section>
+
+  <!-- Rotate now -->
+  <section class="stack">
+    <h2>Rotate the vault key</h2>
+    <p class="muted">
+      Mint a new key epoch and re-key everyone still trusted, without revoking anyone — for when a
+      key may have been exposed.
+    </p>
+    <button onclick={() => (confirming = { revoke: null })} data-testid="rotate-now">Rotate now</button>
+  </section>
 {/if}
 
-<section class="stack">
-  <h2>Shared with me</h2>
-  {#if shares.length === 0}
-    <p class="muted" data-testid="no-shares">No one has shared their vault with you yet.</p>
-  {:else}
-    <ul class="share-list">
-      {#each shares as share (share.ownerEd)}
-        <li>
-          <span style:color={`var(--person-${share.hue})`}>{share.label}</span>
-          {#if share.stale}
-            <span class="muted" data-testid="share-stale-{share.ownerEd}">no longer shared</span>
-          {/if}
-          <button onclick={() => forget(share.ownerEd)} data-testid="forget-{share.ownerEd}">
-            Remove
-          </button>
-        </li>
-      {/each}
-    </ul>
-  {/if}
-</section>
+{#if confirming}
+  <div class="scrim" data-testid="rotate-confirm">
+    <div class="dialog">
+      {#if confirming.revoke}
+        <h2>Revoke and rotate</h2>
+        <p>
+          Revoke <strong>{confirming.revoke.label || fingerprint(confirming.revoke.ed)}</strong> and rotate
+          your vault key.
+        </p>
+      {:else}
+        <h2>Rotate now</h2>
+        <p>Mint a new key epoch and re-key everyone still trusted.</p>
+      {/if}
+      <p class="muted" data-testid="revoke-caveat">
+        This cannot take back what has already been decrypted, or the old-epoch material a party
+        already holds. Everything sealed from now on is beyond them.
+      </p>
+      {#if rotateError}
+        <p class="error" data-testid="rotate-error">{rotateError}</p>
+      {/if}
+      <div class="dialog-actions">
+        <button onclick={() => (confirming = null)} disabled={rotateBusy} data-testid="rotate-cancel">
+          Cancel
+        </button>
+        <button class="primary" onclick={doRotate} disabled={rotateBusy} data-testid="rotate-confirm-yes">
+          {confirming.revoke ? 'Revoke and rotate' : 'Rotate'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 {#if showScanner}
   <QrScanner onclose={() => (showScanner = false)} ondetect={onScan} />
@@ -318,11 +410,28 @@
     margin-top: var(--space-6);
   }
 
-  label {
+  h2 {
+    font-size: var(--text-lg);
+    margin: 0 0 var(--space-2);
+  }
+
+  .field {
     display: block;
     font-size: var(--text-sm);
     color: var(--muted);
     margin-top: var(--space-3);
+  }
+
+  .field input,
+  .field textarea {
+    margin-top: var(--space-2);
+    font-size: var(--text-base);
+    color: var(--text);
+    max-width: 100%;
+  }
+
+  .small {
+    font-size: var(--text-xs);
   }
 
   .qr :global(svg) {
@@ -330,16 +439,88 @@
     height: 200px;
   }
 
+  .list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  .list li,
+  .row-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .row-main {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .sub {
+    font-size: var(--text-xs);
+  }
+
+  .list li button {
+    margin-left: auto;
+  }
+
+  .badge {
+    margin-left: auto;
+    font-size: var(--text-xs);
+    color: var(--muted);
+  }
+
   .confirm-box {
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: var(--space-3);
+    border-radius: var(--radius-lg);
+    padding: var(--space-4);
     margin-top: var(--space-3);
+  }
+
+  .confirm-name {
+    margin: 0 0 var(--space-1);
+    font-weight: 600;
+  }
+
+  /* Radios styled to the system: native control tinted to the accent, laid out
+     as an aligned row. Replaces the old unstyled radios (and a stale `--ink`
+     token reference). */
+  .kinds {
+    border: none;
+    padding: 0;
+    margin: var(--space-3) 0 var(--space-1);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .radio {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    color: var(--text);
+    font-size: var(--text-sm);
+    margin: 0;
+  }
+
+  .radio input[type='radio'] {
+    accent-color: var(--action);
+    width: 20px;
+    height: 20px;
+    min-height: 0;
+    margin: 0;
+    flex: none;
   }
 
   .link {
     display: inline;
     padding: 0;
+    min-height: 0;
     border: none;
     background: none;
     color: var(--action);
@@ -347,23 +528,35 @@
     font: inherit;
   }
 
-  .grant-list,
-  .share-list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-  }
-
-  .grant-list li,
-  .share-list li {
+  .scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
     display: flex;
     align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-1) 0;
+    justify-content: center;
+    padding: var(--space-4);
+    background: var(--scrim);
   }
 
-  .grant-list li button,
-  .share-list li button {
-    margin-left: auto;
+  .dialog {
+    width: 100%;
+    max-width: 26rem;
+    padding: var(--space-4);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-2);
+  }
+
+  .dialog h2 {
+    margin: 0 0 var(--space-2);
+  }
+
+  .dialog-actions {
+    display: flex;
+    gap: var(--space-2);
+    justify-content: flex-end;
+    margin-top: var(--space-4);
   }
 </style>

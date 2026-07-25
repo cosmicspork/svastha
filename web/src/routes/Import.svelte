@@ -206,7 +206,7 @@
   </p>
 {:else if stage === 'done'}
   <p data-testid="import-done">Imported {importedCount} new event{importedCount === 1 ? '' : 's'}.</p>
-  <button type="button" class="primary" onclick={() => navigate('#/')} data-testid="import-view-timeline">
+  <button type="button" class="primary" onclick={() => navigate('#/timeline')} data-testid="import-view-timeline">
     View timeline
   </button>
 {/if}

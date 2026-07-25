@@ -198,10 +198,11 @@ test('ask: a cited answer from your own record', async ({ page }) => {
     return { ed: n.ed25519_public_hex, mnemonic: n.mnemonic ?? '' }
   })
 
-  await page.getByTestId('nav-ask').click()
-  await page.getByTestId('ask-input').fill('How has my blood pressure been lately?')
-  await page.getByTestId('ask-send').click()
-  await expect(page.getByTestId('ask-waiting')).toBeVisible()
+  await page.getByTestId('nav-search').click()
+  await page.getByTestId('search-ai-toggle').click()
+  await page.getByTestId('search-input').fill('How has my blood pressure been lately?')
+  await page.getByTestId('search-send').click()
+  await expect(page.getByTestId('search-waiting')).toBeVisible()
 
   await page.evaluate(
     async ({ relay, words, nodeMnemonic, text, citations }) => {
@@ -236,8 +237,9 @@ test('ask: a cited answer from your own record', async ({ page }) => {
 
   await expect(async () => {
     await page.evaluate(() => (window.location.hash = '#/'))
-    await page.evaluate(() => (window.location.hash = '#/ask'))
-    await expect(page.getByTestId('ask-turn').filter({ hasText: 'normal range' })).toBeVisible({
+    await page.evaluate(() => (window.location.hash = '#/search'))
+    await page.getByTestId('search-ai-toggle').click()
+    await expect(page.getByTestId('search-turn').filter({ hasText: 'normal range' })).toBeVisible({
       timeout: 2000,
     })
   }).toPass({ timeout: 20_000 })

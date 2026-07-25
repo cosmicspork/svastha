@@ -13,12 +13,14 @@
   import Onboard from './routes/Onboard.svelte'
   import Unlock from './routes/Unlock.svelte'
   import Home from './routes/Home.svelte'
+  import Timeline from './routes/Timeline.svelte'
+  import Summary from './routes/Summary.svelte'
+  import Search from './routes/Search.svelte'
   import Log from './routes/Log.svelte'
   import Settings from './routes/Settings.svelte'
   import SettingsAppearance from './routes/settings/Appearance.svelte'
   import SettingsSecurity from './routes/settings/Security.svelte'
   import SettingsSync from './routes/settings/Sync.svelte'
-  import SettingsDevices from './routes/settings/Devices.svelte'
   import SettingsNotifications from './routes/settings/Notifications.svelte'
   import SettingsData from './routes/settings/Data.svelte'
   import SettingsAbout from './routes/settings/About.svelte'
@@ -27,7 +29,6 @@
   import ShareDoctor from './routes/share/Doctor.svelte'
   import Person from './routes/Person.svelte'
   import Proposals from './routes/Proposals.svelte'
-  import Ask from './routes/Ask.svelte'
   import Import from './routes/Import.svelte'
   import Correlate from './routes/Correlate.svelte'
   import Bloom from './components/Bloom.svelte'
@@ -128,6 +129,12 @@
 
     {#if route.path === '/log/:kind'}
       <Log kind={route.params.kind} />
+    {:else if route.path === '/timeline'}
+      <Timeline />
+    {:else if route.path === '/summary'}
+      <Summary />
+    {:else if route.path === '/search'}
+      <Search />
     {:else if route.path === '/settings'}
       <Settings />
     {:else if route.path === '/settings/appearance'}
@@ -136,8 +143,6 @@
       <SettingsSecurity />
     {:else if route.path === '/settings/sync'}
       <SettingsSync />
-    {:else if route.path === '/settings/devices'}
-      <SettingsDevices />
     {:else if route.path === '/settings/notifications'}
       <SettingsNotifications />
     {:else if route.path === '/settings/data'}
@@ -152,8 +157,6 @@
       <ShareDoctor />
     {:else if route.path === '/proposals'}
       <Proposals />
-    {:else if route.path === '/ask'}
-      <Ask />
     {:else if route.path === '/person/:ed'}
       <Person ed={route.params.ed} />
     {:else if route.path === '/import'}
@@ -165,7 +168,7 @@
     {/if}
   {/if}
 
-  {#if ready && vaultExists && !locked() && route.path !== '/person/:ed' && route.path !== '/log/:kind'}
+  {#if ready && vaultExists && !locked() && route.path !== '/person/:ed' && route.path !== '/log/:kind' && route.path !== '/search'}
     <Bloom />
   {/if}
 </main>

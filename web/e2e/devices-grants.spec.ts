@@ -69,10 +69,10 @@ test('devices & grants: enroll a grantee, then revoke-and-rotate cuts off future
     window.location.hash = '#/'
   })
 
-  // A enrolls B as a household grantee from the Devices & grants screen: scoped
+  // A enrolls B as a household grantee from the consolidated Sharing screen: scoped
   // grant + wrapped-keyring handoff.
   await pageA.evaluate(() => {
-    window.location.hash = '#/settings/devices'
+    window.location.hash = '#/share/people'
   })
   await pageA.getByTestId('enroll-paste').fill(codeB)
   await expect(pageA.getByTestId('enroll-fingerprint')).toBeVisible()
@@ -92,7 +92,7 @@ test('devices & grants: enroll a grantee, then revoke-and-rotate cuts off future
 
   // A revokes B and rotates in one action, confirming the honest caveat.
   await pageA.evaluate(() => {
-    window.location.hash = '#/settings/devices'
+    window.location.hash = '#/share/people'
   })
   await pageA.getByTestId(`grant-revoke-${edB}`).click()
   await expect(pageA.getByTestId('rotate-confirm')).toBeVisible()

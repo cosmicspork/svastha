@@ -406,7 +406,10 @@ async function unlock(page: Page): Promise<void> {
 }
 
 async function openSummary(page: Page): Promise<void> {
-  await page.getByTestId('view-summary').click()
+  // Summary is its own page now (the Home view-toggle is gone).
+  await page.evaluate(() => {
+    window.location.hash = '#/summary'
+  })
   await expect(page.getByTestId('clinician-summary')).toBeVisible()
 }
 

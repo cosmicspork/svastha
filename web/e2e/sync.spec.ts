@@ -18,7 +18,7 @@ async function syncUntilVisible(page: Page, text: string): Promise<void> {
     await page.getByTestId('sync-now').click()
     await page.waitForTimeout(300)
     await page.evaluate(() => {
-      window.location.hash = '#/'
+      window.location.hash = '#/timeline'
     })
     await expect(entryWith(page, text)).toBeVisible({ timeout: 2000 })
   }).toPass({ timeout: 20_000 })
@@ -42,6 +42,10 @@ test('events pushed to the relay restore on a fresh device from mnemonic + relay
   const pageB = await restored.newPage()
   await restoreViaUI(pageB, words, undefined, RELAY)
 
+  // The spine lives on the Timeline page now (Home is a dashboard).
+  await pageB.evaluate(() => {
+    window.location.hash = '#/timeline'
+  })
   await expect(entryWith(pageB, '118/76')).toBeVisible()
   await expect(entryWith(pageB, 'oatmeal')).toBeVisible()
   await restored.close()

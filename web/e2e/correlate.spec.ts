@@ -24,7 +24,7 @@ async function syncNow(page: Page): Promise<void> {
   await page.getByTestId('sync-now').click()
   await page.waitForTimeout(300)
   await page.evaluate(() => {
-    window.location.hash = '#/'
+    window.location.hash = '#/timeline'
   })
 }
 
@@ -50,7 +50,11 @@ test('logging an input before a symptom surfaces it in Patterns, and a tag persi
   await expect(page.getByTestId('spine-entry').filter({ hasText: 'Headache' })).toBeVisible()
 
   // Patterns: the symptom dot is there, and tapping it opens FlarePanel.
-  await page.getByTestId('nav-correlate').click()
+  // (Patterns is reached from the dashboard; hash-navigate since logging left
+  // us on the Timeline page.)
+  await page.evaluate(() => {
+    window.location.hash = '#/correlate'
+  })
   await expect(page.getByTestId('symptom-dot')).toBeVisible()
   await page.getByTestId('symptom-dot').click()
   await expect(page.getByTestId('flare-panel')).toBeVisible()
@@ -67,8 +71,10 @@ test('logging an input before a symptom surfaces it in Patterns, and a tag persi
   await expect(page.getByTestId('tag-chip')).toContainText('#flare')
   await page.getByTestId('flare-close').click()
 
-  // Back on the spine, the tag shows on the Headache entry...
-  await page.getByTestId('nav-back').click()
+  // Back on the spine (its own Timeline page now), the tag shows on Headache...
+  await page.evaluate(() => {
+    window.location.hash = '#/timeline'
+  })
   const headache = page.getByTestId('spine-entry').filter({ hasText: 'Headache' })
   await expect(headache.getByTestId('spine-entry-tag')).toHaveText('#flare')
 
@@ -77,6 +83,9 @@ test('logging an input before a symptom surfaces it in Patterns, and a tag persi
   await page.reload()
   await page.getByTestId('unlock-passphrase').fill(PASSPHRASE)
   await page.getByTestId('unlock-submit').click()
+  await page.evaluate(() => {
+    window.location.hash = '#/timeline'
+  })
   await expect(
     page.getByTestId('spine-entry').filter({ hasText: 'Headache' }).getByTestId('spine-entry-tag'),
   ).toHaveText('#flare')
@@ -104,9 +113,16 @@ test('curation LWW: two devices tagging the same event converge on the later wri
   const pageB = await contextB.newPage()
   await pageB.route('**/v0/events', (route) => route.abort())
   await restoreViaUI(pageB, words, undefined, RELAY)
+  // The spine is its own Timeline page now (Home is a dashboard).
+  await pageB.evaluate(() => {
+    window.location.hash = '#/timeline'
+  })
   await expect(pageB.getByTestId('spine-entry').filter({ hasText: 'Nausea' })).toBeVisible()
 
-  // Device A tags 'x' first...
+  // Device A tags 'x' first (on its Timeline page)...
+  await page.evaluate(() => {
+    window.location.hash = '#/timeline'
+  })
   const entryA = page.getByTestId('spine-entry').filter({ hasText: 'Nausea' })
   await entryA.getByTestId('spine-entry-tag-toggle').click()
   await page.getByTestId('tag-input').fill('x')
@@ -122,6 +138,9 @@ test('curation LWW: two devices tagging the same event converge on the later wri
   await pageB.getByTestId('tag-input').press('Enter')
   await expect(pageB.getByTestId('tag-chip')).toContainText('#y')
   await waitForPushed(pageB)
+  await pageB.evaluate(() => {
+    window.location.hash = '#/timeline'
+  })
 
   // After A syncs, LWW converges both devices on B's later write.
   await syncNow(page)

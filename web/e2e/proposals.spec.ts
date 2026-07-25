@@ -199,8 +199,8 @@ test('reviews proposed drafts with provenance, approves/edits/rejects, and echoe
   await draft('Nausea').getByTestId('draft-reject').click()
   await expect(page.getByTestId('proposals-empty')).toBeVisible()
 
-  // Approved facts are on the spine (signed by the owner); the rejected one is not.
-  await page.evaluate(() => (window.location.hash = '#/'))
+  // Approved facts are on the spine (its own Timeline page); the rejected one is not.
+  await page.evaluate(() => (window.location.hash = '#/timeline'))
   await expect(page.getByTestId('spine-entry').filter({ hasText: 'Headache' })).toBeVisible()
   await expect(page.getByTestId('spine-entry').filter({ hasText: 'Fatigue' })).toBeVisible()
   await expect(page.getByTestId('spine-entry').filter({ hasText: 'Nausea' })).toHaveCount(0)
