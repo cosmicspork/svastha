@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/cosmicspork/svastha/compare/v0.11.0...v0.12.0) (2026-07-26)
+
+
+### Features
+
+* **web:** dashboard home, timeline/summary/search pages, consolidated sharing, and a round of PWA fixes ([#128](https://github.com/cosmicspork/svastha/issues/128)) ([2ebf77c](https://github.com/cosmicspork/svastha/commit/2ebf77c0c7ae0931cda28b4bde3565f5ac6d0ca8))
+
 ## [0.11.0](https://github.com/cosmicspork/svastha/compare/v0.10.0...v0.11.0) (2026-07-24)
 
 
