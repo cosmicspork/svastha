@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { buildCodeNameIndex, resolveDisplay } from '../code-names'
 import type { StoredEvent } from '../events'
 import type { EventKind, EventValue } from '../drafts'
-import { LOINC, type Code } from '../codes'
+import { LOINC, RXNORM, SNOMED, canonicalSystem, shortenSystem, type Code } from '../codes'
 
 let nextId = 0
 function ev(partial: { kind?: EventKind; code?: Code | null; value?: EventValue | null }): StoredEvent {
@@ -92,5 +92,34 @@ describe('resolveDisplay dictionary layering', () => {
   it('returns null (raw fallback) when neither index nor dictionary names it', () => {
     expect(resolveDisplay(new Map(), CODE, new Map())).toBeNull()
     expect(resolveDisplay(new Map(), CODE)).toBeNull()
+  })
+})
+
+describe('OID system canonicalization', () => {
+  it('canonicalSystem maps known urn:oid and bare OIDs, passes others through', () => {
+    expect(canonicalSystem('urn:oid:2.16.840.1.113883.6.88')).toBe(RXNORM)
+    expect(canonicalSystem('2.16.840.1.113883.6.96')).toBe(SNOMED)
+    expect(canonicalSystem(RXNORM)).toBe(RXNORM)
+    expect(canonicalSystem('urn:oid:9.9.9')).toBe('urn:oid:9.9.9')
+  })
+
+  it('shortenSystem renders an acronym for an OID-form system instead of the raw urn', () => {
+    expect(shortenSystem('urn:oid:2.16.840.1.113883.6.88')).toBe('RxNorm')
+    expect(shortenSystem('urn:oid:2.16.840.1.113883.6.96')).toBe('SNOMED')
+    // Unknown OID still degrades to the raw string (provenance, not reading).
+    expect(shortenSystem('urn:oid:9.9.9')).toBe('urn:oid:9.9.9')
+  })
+
+  it('resolves an OID-coded med against a canonical-keyed dictionary', () => {
+    const oidCode = { system: 'urn:oid:2.16.840.1.113883.6.88', code: '313782' }
+    const dict = new Map([[`${RXNORM}|313782`, 'Acetaminophen 325 MG Oral Tablet']])
+    expect(resolveDisplay(new Map(), oidCode, dict)).toBe('Acetaminophen 325 MG Oral Tablet')
+  })
+
+  it('a URL-coded event names its OID-coded twin through the vault index', () => {
+    const events = [ev({ code: { system: RXNORM, code: '313782', display: 'Acetaminophen 325 MG' } })]
+    const index = buildCodeNameIndex(events)
+    const oidCode = { system: 'urn:oid:2.16.840.1.113883.6.88', code: '313782' }
+    expect(resolveDisplay(index, oidCode)).toBe('Acetaminophen 325 MG')
   })
 })

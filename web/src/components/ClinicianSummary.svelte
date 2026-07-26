@@ -29,11 +29,16 @@
     readonly = false,
     status: providedStatus,
     names: providedNames,
+    heading,
   }: {
     events?: StoredEvent[]
     readonly?: boolean
     status?: Map<string, ConceptStatus>
     names?: Map<string, string>
+    /** When set, the summary owns its page title and renders it inline with the
+     * Print action (the own Summary page). Left unset where the host already
+     * has an h1 (the shared-person screen), so the Print action sits alone. */
+    heading?: string
   } = $props()
 
   let ownEvents = $state<StoredEvent[]>([])
@@ -145,8 +150,12 @@
 
 {#if loaded}
   <div class="summary" data-testid="clinician-summary">
-    <div class="toolbar">
+    <div class="toolbar" class:titled={heading}>
+      {#if heading}<h1 class="sum-heading">{heading}</h1>{/if}
       <button type="button" class="ghost print-btn" onclick={() => window.print()} data-testid="summary-print">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M6 9V3h12v6" /><path d="M6 18H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2" /><rect x="6" y="14" width="12" height="7" rx="1" />
+        </svg>
         Print
       </button>
     </div>
@@ -340,11 +349,26 @@
 <style>
   .toolbar {
     display: flex;
+    align-items: center;
     justify-content: flex-end;
-    margin-bottom: var(--space-3);
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
+  }
+
+  /* With a heading, the title anchors the left and Print sits opposite it —
+     a proper page header rather than a lone floating button. */
+  .toolbar.titled {
+    justify-content: space-between;
+  }
+
+  .sum-heading {
+    margin: 0;
   }
 
   .print-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
     min-height: 36px;
     min-width: 0;
     font-size: var(--text-sm);
@@ -479,6 +503,7 @@
       background: #fff;
       color: #000;
     }
+    :global(.app-header),
     :global(.fab),
     :global(.layer),
     :global(.settings-nav),

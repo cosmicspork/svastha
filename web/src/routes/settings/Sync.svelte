@@ -25,6 +25,20 @@
     $syncStatus.lastPullAt ? new Date($syncStatus.lastPullAt).toLocaleTimeString() : 'never',
   )
 
+  // Status reflects the relay, not just the browser link: a reachable relay is
+  // "Online", a browser that's offline is "Offline", and a relay we can't reach
+  // while online is "Unreachable" (rather than the old, misleading "Online").
+  const statusText = $derived(
+    !$syncStatus.online
+      ? 'Offline'
+      : $syncStatus.reachable === false
+        ? 'Unreachable'
+        : $syncStatus.reachable === true
+          ? 'Online'
+          : 'Checking…',
+  )
+  const statusBad = $derived($syncStatus.online && $syncStatus.reachable === false)
+
   async function submitConnect(e: SubmitEvent) {
     e.preventDefault()
     relayError = ''
@@ -94,7 +108,7 @@
       <dt>Relay</dt>
       <dd class="data" data-testid="relay-connected-url">{relayUrlInput}</dd>
       <dt>Status</dt>
-      <dd data-testid="sync-online">{$syncStatus.online ? 'Online' : 'Offline'}</dd>
+      <dd class:error={statusBad} data-testid="sync-online">{statusText}</dd>
       <dt>Pending</dt>
       <dd data-testid="sync-pending">{$syncStatus.pendingCount}</dd>
       <dt>Last pull</dt>

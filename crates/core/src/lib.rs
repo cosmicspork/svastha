@@ -42,6 +42,14 @@ pub(crate) fn version_label(operation: &str) -> String {
     format!("svastha/v{CONTRACT_MAJOR}/{operation}")
 }
 
+/// The cryptographic era ([`CONTRACT_MAJOR`]), exposed for display alongside the
+/// wire [`CONTRACT_VERSION`] (the About screen shows both). The constant stays
+/// crate-private — this getter is the sanctioned read so nothing outside the
+/// crate can accidentally derive against a hand-copied value.
+pub fn contract_major() -> u32 {
+    CONTRACT_MAJOR
+}
+
 pub mod curation;
 pub mod envelope;
 pub mod event;

@@ -338,6 +338,13 @@ export async function listLocalBlobIds(): Promise<string[]> {
 export interface SyncStatusValue {
   configured: boolean
   online: boolean
+  /** Whether the relay itself was reachable on the last attempt — distinct from
+   * `online` (which is only `navigator.onLine`, the browser's view of the local
+   * link). `null` before the first attempt. A dead/misconfigured relay is
+   * `online: true, reachable: false`, so the UI stops falsely reading "Online".
+   * Set true on any successful relay call, false on a network-level fetch
+   * failure; an HTTP/app error still counts as "reached" (true). */
+  reachable: boolean | null
   pendingCount: number
   lastPullAt: string | null
   lastError: string | null
@@ -354,9 +361,27 @@ function isOnline(): boolean {
   return typeof navigator === 'undefined' || navigator.onLine !== false
 }
 
+/** A rejected `fetch()` is a `TypeError` ("Load failed" in Safari, "Failed to
+ * fetch" in Chromium) — a network-level failure the relay never answered. An
+ * HTTP or app error is thrown here as a plain `Error` (e.g. `listBlobs: 500`),
+ * so this cleanly separates "couldn't reach the relay" from "the relay said
+ * no". */
+function isNetworkError(err: unknown): boolean {
+  return err instanceof TypeError
+}
+
+/** A human message for the status line — a raw `TypeError: Load failed` means
+ * nothing to a user. Mirrors relay.ts's `checkRelayInfo` copy. Non-network
+ * errors keep their detail (a status code is actionable). */
+function describeError(err: unknown): string {
+  if (isNetworkError(err)) return 'Could not reach the relay — check the address and your connection.'
+  return String(err)
+}
+
 export const syncStatus = writable<SyncStatusValue>({
   configured: false,
   online: isOnline(),
+  reachable: null,
   pendingCount: 0,
   lastPullAt: null,
   lastError: null,
@@ -365,6 +390,19 @@ export const syncStatus = writable<SyncStatusValue>({
 
 function patchStatus(partial: Partial<SyncStatusValue>): void {
   syncStatus.update((s) => ({ ...s, ...partial }))
+}
+
+/** Record a successful round trip: the relay is reachable, and a stale error
+ * (if any) is cleared. */
+function noteContact(): void {
+  patchStatus({ reachable: true, lastError: null })
+}
+
+/** Record a failed relay call, mapping it to a friendly message and updating
+ * reachability (a network failure means unreachable; an HTTP error still
+ * reached the relay). */
+function noteFailure(err: unknown): void {
+  patchStatus({ lastError: describeError(err), reachable: isNetworkError(err) ? false : true })
 }
 
 // --- outbox ---
@@ -460,9 +498,10 @@ export async function drain(): Promise<void> {
       for (;;) {
         try {
           await pushOne(pending.id)
+          noteContact()
           break
         } catch (err) {
-          patchStatus({ lastError: String(err) })
+          noteFailure(err)
           if (attempt >= BACKOFF_SCHEDULE_MS.length) return // wait for the next trigger
           await new Promise((resolve) => setTimeout(resolve, BACKOFF_SCHEDULE_MS[attempt]))
           attempt++
@@ -495,8 +534,9 @@ export async function pullAll(): Promise<void> {
   let remoteIds: string[]
   try {
     remoteIds = await relayClient.listBlobs()
+    noteContact()
   } catch (err) {
-    patchStatus({ lastError: String(err) })
+    noteFailure(err)
     return
   }
 
@@ -551,7 +591,7 @@ export async function pullAll(): Promise<void> {
     } catch (err) {
       // Left un-done on failure (bad open, failed verify, network hiccup) —
       // retried on the next pull rather than dropped.
-      patchStatus({ lastError: String(err) })
+      noteFailure(err)
     }
   }
 
@@ -644,6 +684,7 @@ export function syncInit(relay: BlobClient, key: SealKey): void {
   patchStatus({
     configured: true,
     online: isOnline(),
+    reachable: null,
     lastError: null,
   })
 

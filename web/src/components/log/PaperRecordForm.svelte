@@ -139,7 +139,7 @@
       void drain()
 
       await logEvent(paperRecordDrafts(captured, caption, effectiveAt()))
-      navigate('#/')
+      navigate('#/timeline')
     } catch (err) {
       error = err instanceof Error ? err.message : 'Could not save — try again.'
       saving = false

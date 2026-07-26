@@ -10,7 +10,7 @@
 // for the same reason — a value import of shared.ts/doctorShare.ts would drag in
 // the wasm module those touch.
 import { writable, derived, get as getStore } from 'svelte/store'
-import { getAll, put, del, clear } from './db'
+import { getAll, get, put, del, clear } from './db'
 import { isoToMillis } from './time'
 import { fingerprint } from './exchange'
 import type { PendingInvite } from './shared'
@@ -18,6 +18,22 @@ import type { DoctorShareRecord } from './doctorShare'
 import type { ProposalRecord } from './proposals'
 
 const STORE = 'notifications'
+
+/** Ids the user explicitly swipe-deleted, persisted in `prefs` so a source that
+ * re-derives the same fact every app open (invites, expiring links, …) doesn't
+ * resurrect a row the user just dismissed. Keyed by the exact notification id,
+ * so a *changed* fact — a higher proposal count, a new invite token — mints a
+ * fresh id that is not suppressed. Bounded FIFO; the underlying facts stay
+ * actionable on their own screens regardless. Loaded into memory on
+ * {@link loadNotifications} so {@link addNotification} can consult it without an
+ * await. */
+const DISMISSED_KEY = 'dismissedNotifications'
+const DISMISSED_CAP = 200
+let dismissedIds = new Set<string>()
+
+async function loadDismissed(): Promise<void> {
+  dismissedIds = new Set((await get<string[]>('prefs', DISMISSED_KEY)) ?? [])
+}
 
 /** Keep the inbox bounded: the newest 50. Older items fall off both the store
  * and IndexedDB — an inbox that only grows is a memory leak, and nobody scrolls
@@ -165,14 +181,17 @@ export function deriveExpiringShareNotifications(
 
 /** Hydrate the store from IndexedDB. Call once on unlock. */
 export async function loadNotifications(): Promise<void> {
+  await loadDismissed()
   const all = await getAll<Notification>(STORE)
   notifications.set(sortNewestFirst(all))
 }
 
 /** Add a notification, idempotent by id (a re-derived source never duplicates).
  * Persists the new item and prunes anything that fell past the cap from both the
- * store and IndexedDB. */
+ * store and IndexedDB. A previously dismissed id is skipped so a swipe-delete
+ * sticks across re-derivation. */
 export async function addNotification(item: Notification): Promise<void> {
+  if (dismissedIds.has(item.id)) return
   const current = getStore(notifications)
   if (current.some((n) => n.id === item.id)) return
   const next = dedupeAndCap(current, item)
@@ -192,7 +211,27 @@ export async function markRead(id: string): Promise<void> {
   await put(STORE, next.find((n) => n.id === id)!)
 }
 
-/** Drop every notification (store + IndexedDB). Used by lock/teardown. */
+/** Dismiss (delete) one item: remove it from the store + IndexedDB and record
+ * the id as dismissed so a re-deriving source doesn't resurrect it. Recording
+ * the dismissal is unconditional (even if the row is already gone) so it holds
+ * against a source that runs a moment later. The dismissed set is bounded FIFO;
+ * the underlying fact stays actionable on its own screen (Sharing, Proposals). */
+export async function dismiss(id: string): Promise<void> {
+  const current = getStore(notifications)
+  notifications.set(current.filter((n) => n.id !== id))
+  await del(STORE, id)
+  if (!dismissedIds.has(id)) {
+    dismissedIds.add(id)
+    // Keep the newest DISMISSED_CAP (Set preserves insertion order).
+    const bounded = [...dismissedIds].slice(-DISMISSED_CAP)
+    dismissedIds = new Set(bounded)
+    await put('prefs', bounded, DISMISSED_KEY)
+  }
+}
+
+/** Drop every notification (store + IndexedDB). Used by lock/teardown. Leaves
+ * the dismissed set intact — it must outlive a lock so re-derivation after the
+ * next unlock doesn't resurrect what was dismissed. */
 export async function clearNotifications(): Promise<void> {
   notifications.set([])
   await clear(STORE)

@@ -89,8 +89,10 @@
         clearTimeout(toastTimer)
         toastTimer = setTimeout(() => (toast = null), 2500)
       } else {
-        // Linger long enough to read the checkmark and reach "Favorite this".
-        navTimer = setTimeout(() => navigate('#/'), 900)
+        // Linger long enough to read the checkmark and reach "Favorite this",
+        // then land on the timeline so the just-logged entry is right there
+        // (Home is a dashboard now, not the spine).
+        navTimer = setTimeout(() => navigate('#/timeline'), 900)
       }
     } catch (err) {
       error = err instanceof Error ? err.message : 'Could not save — try again.'
@@ -111,7 +113,7 @@
     await addFavorite({ label: toast.label, category, drafts: toast.templates })
     favorited = true
     favoritesVersion += 1
-    navTimer = setTimeout(() => navigate('#/'), 700)
+    navTimer = setTimeout(() => navigate('#/timeline'), 700)
   }
 
   function instantLog(templates: DraftTemplate[], label: string) {

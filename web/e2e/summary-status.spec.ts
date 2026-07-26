@@ -40,9 +40,10 @@ async function unlock(page: Page): Promise<void> {
 }
 
 async function openSummary(page: Page): Promise<void> {
-  // click() auto-waits for the toggle (Home may still be mounting after unlock);
-  // the Summary view persists in prefs, so re-clicking it once shown is a no-op.
-  await page.getByTestId('view-summary').click()
+  // Summary is its own page now (the Home view-toggle is gone).
+  await page.evaluate(() => {
+    window.location.hash = '#/summary'
+  })
   await expect(page.getByTestId('clinician-summary')).toBeVisible()
 }
 

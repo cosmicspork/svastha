@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { navigate } from '../lib/router.svelte'
+  import { navigate, route } from '../lib/router.svelte'
   import { unreadCount } from '../lib/notifications'
   import NotificationSheet from './NotificationSheet.svelte'
   import UpdateSheet from './UpdateSheet.svelte'
@@ -7,6 +7,14 @@
   // The app shell decides visibility (see App.svelte). The only per-route choice
   // the header itself makes is Back vs. Settings on the right, driven by this.
   let { showBack = false }: { showBack?: boolean } = $props()
+
+  // Search is a header affordance, context-aware: from a shared person's record
+  // it scopes the search to that person; everywhere else it searches your own.
+  // Hidden while already on the search screen.
+  const showSearch = $derived(route.path !== '/search')
+  function openSearch(): void {
+    navigate(route.path === '/person/:ed' ? `#/search?person=${route.params.ed}` : '#/search')
+  }
 
   let sheetOpen = $state(false)
   // Set (to the running version) when the app-update notification is tapped;
@@ -25,6 +33,15 @@
   <svelte:element this={showBack ? 'span' : 'h1'} class="wordmark">Svastha</svelte:element>
 
   <div class="actions">
+    {#if showSearch}
+      <button class="icon-btn" onclick={openSearch} aria-label="Search" data-testid="nav-search">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
+          stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="11" cy="11" r="7" />
+          <path d="M21 21l-4-4" />
+        </svg>
+      </button>
+    {/if}
     <button
       class="icon-btn"
       onclick={() => (sheetOpen = true)}

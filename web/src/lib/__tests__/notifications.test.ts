@@ -6,6 +6,7 @@ import {
   unreadCount,
   addNotification,
   markRead,
+  dismiss,
   loadNotifications,
   clearNotifications,
   dedupeAndCap,
@@ -190,6 +191,27 @@ describe('store ops (IndexedDB-backed)', () => {
     await clearNotifications()
     expect(storeValue(notifications)).toEqual([])
     await loadNotifications()
+    expect(storeValue(notifications)).toEqual([])
+  })
+
+  // Appended last: dismiss records a module-global id, so keeping it here avoids
+  // suppressing an add in a later test.
+  it('dismiss deletes a row, and a re-derived source cannot resurrect it', async () => {
+    await loadNotifications() // sync the dismissed set from the (empty) db
+    await addNotification(note('dismiss-me', '2026-07-01T00:00:00Z'))
+    expect(storeValue(notifications).map((n) => n.id)).toEqual(['dismiss-me'])
+
+    await dismiss('dismiss-me')
+    expect(storeValue(notifications)).toEqual([])
+
+    // A source re-deriving the same id must not bring it back...
+    await addNotification(note('dismiss-me', '2026-07-01T00:00:00Z'))
+    expect(storeValue(notifications)).toEqual([])
+
+    // ...and the suppression survives a reload (dismissed set is persisted).
+    notifications.set([])
+    await loadNotifications()
+    await addNotification(note('dismiss-me', '2026-07-01T00:00:00Z'))
     expect(storeValue(notifications)).toEqual([])
   })
 })

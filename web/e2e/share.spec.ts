@@ -86,11 +86,11 @@ test('spousal sharing: grant, accept, read-only timeline, then revoke goes stale
 
   // A pastes B's code, confirms the fingerprint, and shares — this grants B
   // and mails B the wrapped vault key.
-  await pageA.getByTestId('paste-code').fill(codeB)
-  await expect(pageA.getByTestId('confirm-share')).toBeVisible()
-  await expect(pageA.getByTestId('parsed-fingerprint')).toBeVisible()
-  await pageA.getByTestId('confirm-share').click()
-  await expect(pageA.getByTestId('share-done')).toBeVisible()
+  await pageA.getByTestId('enroll-paste').fill(codeB)
+  await expect(pageA.getByTestId('enroll-submit')).toBeVisible()
+  await expect(pageA.getByTestId('enroll-fingerprint')).toBeVisible()
+  await pageA.getByTestId('enroll-submit').click()
+  await expect(pageA.getByTestId('enroll-done')).toBeVisible()
 
   // B opens the sharing home (fresh mount re-checks the mailbox) and sees the
   // invite in "Waiting for you".
@@ -102,13 +102,13 @@ test('spousal sharing: grant, accept, read-only timeline, then revoke goes stale
   await pageB.getByTestId('invite-accept').click()
   await expect(pageB.getByTestId('invite-banner')).toHaveCount(0)
 
-  // B's Home shows Alex's chip.
+  // B's dashboard lists Alex as a shared record.
   await pageB.evaluate(() => {
     window.location.hash = '#/'
   })
-  const chip = pageB.locator('[data-testid^="switch-"]').filter({ hasText: 'Alex' })
-  await expect(chip).toBeVisible()
-  await chip.click()
+  const record = pageB.locator('[data-testid^="open-person-"]').filter({ hasText: 'Alex' })
+  await expect(record).toBeVisible()
+  await record.click()
 
   // A's two entries render read-only on B's device, with no log bar. Both
   // arrive via the same background shared pull, so wait for a single mounted
@@ -122,7 +122,11 @@ test('spousal sharing: grant, accept, read-only timeline, then revoke goes stale
   await pageA.evaluate(() => {
     window.location.hash = '#/share/people'
   })
-  await pageA.locator('[data-testid^="revoke-"]').click()
+  await pageA.locator('[data-testid^="grant-revoke-"]').click()
+  // Revoke-and-rotate now confirms via a dialog (the consolidated screen).
+  await expect(pageA.getByTestId('rotate-confirm')).toBeVisible()
+  await pageA.getByTestId('rotate-confirm-yes').click()
+  await expect(pageA.getByTestId('rotate-confirm')).toHaveCount(0)
 
   await syncNow(pageB)
   await pageB.evaluate((ed) => {
@@ -162,9 +166,9 @@ test('a scanned share link prefills the confirm box, surviving a locked-vault re
   await pageA.getByTestId('unlock-passphrase').fill(PASSPHRASE)
   await pageA.getByTestId('unlock-submit').click()
 
-  await expect(pageA.getByTestId('paste-code')).toHaveValue(codeB)
-  await expect(pageA.getByTestId('confirm-share')).toBeVisible()
-  await expect(pageA.getByTestId('parsed-fingerprint')).toBeVisible()
+  await expect(pageA.getByTestId('enroll-paste')).toHaveValue(codeB)
+  await expect(pageA.getByTestId('enroll-submit')).toBeVisible()
+  await expect(pageA.getByTestId('enroll-fingerprint')).toBeVisible()
 
   // The `#/share?code=…` link is redirected into the people screen and the
   // param is consumed and stripped, so a refresh won't re-trigger it.

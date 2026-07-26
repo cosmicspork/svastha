@@ -26,8 +26,11 @@ test('encrypted backup round-trips to a fresh device from the seed alone, and re
   await expect(page.getByTestId('tag-chip')).toContainText('#breakfast')
 
   // Download the encrypted backup from Settings (ciphertext — no confirm sheet).
-  await page.getByTestId('nav-settings').click()
-  await page.getByTestId('settings-row-data').click()
+  // Hash-navigate: logging left us on the Timeline page, where the header shows
+  // Back, not the Settings gear.
+  await page.evaluate(() => {
+    window.location.hash = '#/settings/data'
+  })
   const downloadPromise = page.waitForEvent('download')
   await page.getByTestId('export-encrypted').click()
   const backupPath = await (await downloadPromise).path()
@@ -38,25 +41,28 @@ test('encrypted backup round-trips to a fresh device from the seed alone, and re
   const pageB = await contextB.newPage()
   await restoreViaUI(pageB, words)
 
-  await pageB.getByTestId('nav-settings').click()
-  await pageB.getByTestId('settings-row-data').click()
+  await pageB.evaluate(() => {
+    window.location.hash = '#/settings/data'
+  })
   await pageB.getByTestId('import-backup-input').setInputFiles(backupPath)
 
   const resultB = pageB.getByTestId('import-backup-result')
   await expect(resultB).toContainText('new event')
   await expect(resultB).toContainText('curation record')
 
-  // The imported events (and the tag) show on the fresh device's timeline.
-  // A sub-screen's header shows only Back; a single click reaches Home.
-  await pageB.getByTestId('nav-back').click()
+  // The imported events (and the tag) show on the fresh device's Timeline page.
+  await pageB.evaluate(() => {
+    window.location.hash = '#/timeline'
+  })
   await expect(entryWith(pageB, '118/76')).toBeVisible()
   const oatmealB = entryWith(pageB, 'oatmeal')
   await expect(oatmealB).toBeVisible()
   await expect(oatmealB.getByTestId('spine-entry-tag')).toHaveText('#breakfast')
 
   // Re-importing the exact same file finds everything already present: zero new.
-  await pageB.getByTestId('nav-settings').click()
-  await pageB.getByTestId('settings-row-data').click()
+  await pageB.evaluate(() => {
+    window.location.hash = '#/settings/data'
+  })
   await pageB.getByTestId('import-backup-input').setInputFiles(backupPath)
   await expect(resultB).toContainText('0 new events')
   await expect(resultB).toContainText('already present')

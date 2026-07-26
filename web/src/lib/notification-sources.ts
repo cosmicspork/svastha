@@ -12,6 +12,7 @@ import {
 } from './notifications'
 import { get, put } from './db'
 import { pendingInvites, listShares } from './shared'
+import { getGrantMeta } from './grants'
 import { pendingProposals, refreshPendingProposals } from './proposals'
 import { listDoctorShares } from './doctorShare'
 import { isEnabled, checkForUpdate } from './dictionary'
@@ -54,16 +55,19 @@ export async function notifyScopesNoticeOnce(): Promise<void> {
   // Only owners who already share have pre-scope shares to migrate. A vault that
   // has never shared (a fresh install) gets nothing — and stays eligible to see
   // the notice the day it first shares, since the flag is only set once shown.
-  const peers = (await get<Record<string, string>>('prefs', 'peers')) ?? {}
+  // Eligible once this vault has ever shared, in either direction. Reads the
+  // grant metadata (the single source of truth for outgoing grants) rather than
+  // the retired `peers` store.
+  const grantMeta = await getGrantMeta()
   const shares = await listShares()
-  if (Object.keys(peers).length === 0 && shares.length === 0) return
+  if (Object.keys(grantMeta).length === 0 && shares.length === 0) return
   await addNotification({
     id: 'scopes-notice',
     kind: 'scopes-notice',
     title: 'Sharing now supports scopes',
     body: 'Shares have been updated to include scopes, existing shares will continue to work. Revoke and re-issue to add scopes to existing shares.',
     createdAt: new Date().toISOString(),
-    data: { action: 'View', href: '#/settings/devices' },
+    data: { action: 'View', href: '#/share/people' },
   })
   await put('prefs', true, SCOPES_NOTICE_FLAG)
 }

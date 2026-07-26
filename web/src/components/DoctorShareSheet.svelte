@@ -632,20 +632,25 @@
     display: block;
   }
 
+  /* Stacked, not side by side: a native date input has a wide, barely
+     compressible intrinsic width, so two in a row overflow the sheet on a
+     narrow screen. One per line sidesteps that entirely. */
   .dates {
     display: flex;
+    flex-direction: column;
     gap: var(--space-3);
   }
 
   .dates label {
-    flex: 1;
     display: block;
+    min-width: 0;
     font-size: var(--text-sm);
     color: var(--muted);
   }
 
   .dates input {
     width: 100%;
+    max-width: 100%;
   }
 
   .hint {
