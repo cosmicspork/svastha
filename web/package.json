@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "check": "bun run wasm && svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json && tsc -p tsconfig.scripts.json && tsc -p tsconfig.sw.json && vitest run",
     "test": "vitest run",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "icons": "bun run scripts/build-icons/build.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",

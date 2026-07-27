@@ -6,6 +6,7 @@
   import { setSession } from '../lib/session.svelte'
   import { get } from '../lib/db'
   import Sheet from '../components/Sheet.svelte'
+  import Mark from '../components/Mark.svelte'
 
   let passphrase = $state('')
   let showPassphrase = $state(false)
@@ -41,17 +42,6 @@
   $effect(() => {
     input?.focus()
   })
-
-  // 24 ticks = 24 BIP39 words; angle math from the mockup's tick-ring generator.
-  function tick(k: number) {
-    const a = (k / 24) * 2 * Math.PI
-    return {
-      x1: 32 + 23 * Math.sin(a),
-      y1: 32 - 23 * Math.cos(a),
-      x2: 32 + 29 * Math.sin(a),
-      y2: 32 - 29 * Math.cos(a),
-    }
-  }
 
   async function submit(e: SubmitEvent) {
     e.preventDefault()
@@ -104,21 +94,9 @@
 </script>
 
 <div class="unlock-body" class:err={!!error}>
-  <svg class="seal" viewBox="0 0 64 64" aria-hidden="true">
-    {#each Array.from({ length: 24 }) as _, k}
-      {@const t = tick(k)}
-      <line
-        class="seal-line"
-        x1={t.x1}
-        y1={t.y1}
-        x2={t.x2}
-        y2={t.y2}
-        stroke-width="1.6"
-        stroke-linecap="round"
-      />
-    {/each}
-    <circle cx="32" cy="32" r="3.5" fill="var(--action)" />
-  </svg>
+  <div class="mark">
+    <Mark />
+  </div>
 
   <span class="word">Svastha</span>
 
@@ -230,23 +208,20 @@
     padding: var(--space-7) var(--space-5) var(--space-5);
   }
 
-  .seal {
+  .mark {
     width: 64px;
     height: 64px;
     margin-bottom: var(--space-4);
+    color: var(--border);
+    transition: color var(--duration-base);
   }
 
-  .seal-line {
-    stroke: var(--border);
-    transition: stroke var(--duration-base);
+  .unlock-body:focus-within .mark {
+    color: var(--action);
   }
 
-  .unlock-body:focus-within .seal-line {
-    stroke: var(--action);
-  }
-
-  .unlock-body.err .seal-line {
-    stroke: var(--danger);
+  .unlock-body.err .mark {
+    color: var(--danger);
   }
 
   .word {

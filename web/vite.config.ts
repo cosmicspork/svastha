@@ -55,6 +55,9 @@ export default defineConfig({
         theme_color: '#F2F5F1',
         background_color: '#F2F5F1',
         icons: [
+          // SVG master first so a launcher that can use it gets a
+          // resolution-independent mark; the PNGs are the bitmap-only fallback.
+          { src: '/icons/icon.svg', sizes: 'any', type: 'image/svg+xml' },
           { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
           { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' },
           {
