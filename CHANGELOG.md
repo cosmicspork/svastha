@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.13.0](https://github.com/cosmicspork/svastha/compare/v0.12.0...v0.13.0) (2026-07-27)
+
+
+### Features
+
+* **node:** split OCR and chat inference into per-role configs ([#134](https://github.com/cosmicspork/svastha/issues/134)) ([22288d8](https://github.com/cosmicspork/svastha/commit/22288d83d192cb4dc71a427d8182e4de612f5753))
+* **web:** app-maintained back stack ([#132](https://github.com/cosmicspork/svastha/issues/132)) ([9ba2341](https://github.com/cosmicspork/svastha/commit/9ba2341d5464045796677db2128816c8ddd96b1a))
+* **web:** dashboard glance cards (activity, vitals, symptoms, meds) ([#137](https://github.com/cosmicspork/svastha/issues/137)) ([31953f8](https://github.com/cosmicspork/svastha/commit/31953f8ca718b4de6f0d1d2c3b2e71f66e345855))
+* **web:** fiddlehead mark for the app icon and unlock screen ([#142](https://github.com/cosmicspork/svastha/issues/142)) ([3196b46](https://github.com/cosmicspork/svastha/commit/3196b46eb84c546929005a24647479e6b17255e6))
+* **web:** name SNOMED codes from the Global Patient Set dictionary ([#141](https://github.com/cosmicspork/svastha/issues/141)) ([7abe27f](https://github.com/cosmicspork/svastha/commit/7abe27fd93b497d09e8e0304a5a1e52ef118ff2a))
+* **web:** search results expand in place (shared EventDetail) ([#136](https://github.com/cosmicspork/svastha/issues/136)) ([8195b42](https://github.com/cosmicspork/svastha/commit/8195b42f36f273b083764ba33c6e5378e6589f23))
+* **web:** unify own & shared records into one RecordView ([#133](https://github.com/cosmicspork/svastha/issues/133)) ([0b5bdb3](https://github.com/cosmicspork/svastha/commit/0b5bdb31319386659d0e7ff7886bc79680d18485))
+
+
+### Bug Fixes
+
+* **web:** header icon hover bug + trim Today heading and swipe hint ([#131](https://github.com/cosmicspork/svastha/issues/131)) ([d03184c](https://github.com/cosmicspork/svastha/commit/d03184c4201774dbc2edc0711f181670d97e6863))
+* **web:** restore enrolled-node detection and stop silent pull stalls ([#130](https://github.com/cosmicspork/svastha/issues/130)) ([b2ee891](https://github.com/cosmicspork/svastha/commit/b2ee891fe5cf7287f5673483ef3e987282dc01b6))
+
 ## [0.12.0](https://github.com/cosmicspork/svastha/compare/v0.11.0...v0.12.0) (2026-07-26)
 
 
