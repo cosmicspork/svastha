@@ -625,7 +625,6 @@ mod tests {
             serde_json::to_value(&admin).unwrap(),
             serde_json::to_value(&chat).unwrap(),
         ] {
-            // Round-trips through a string without loss.
             let s = v.to_string();
             let back: serde_json::Value = serde_json::from_str(&s).unwrap();
             assert_eq!(v, back);
@@ -806,8 +805,6 @@ mod tests {
                     "signature: {}",
                     v.note
                 );
-                // The freshly built envelope equals the pinned one, verifies, and
-                // opens back to the plaintext.
                 assert_eq!(
                     serde_json::to_value(&built).unwrap(),
                     serde_json::to_value(&v.envelope).unwrap(),

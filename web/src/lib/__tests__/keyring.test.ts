@@ -35,8 +35,6 @@ function fakeIdentity(): SealingIdentity & { sealed: { kind: string; body: strin
   }
 }
 
-/** A fake keyring: `rotate` mints a "next" ring, `to_bytes` names the ring, and
- * `wrap_for_grantee` returns a fixed wrapped blob. */
 function fakeKeyring(name: string): WrappableKeyring {
   return {
     to_bytes: () => enc.encode(name),
@@ -125,7 +123,6 @@ describe('sealKeyHandoff', () => {
       label: 'Alex',
       wrapped_hex: 'aabb',
     })
-    // The returned bytes are the enc'd envelope JSON.
     expect(JSON.parse(dec.decode(bytes)).kind).toBe('key_handoff')
   })
 })
@@ -150,12 +147,11 @@ describe('revokeAndRotate', () => {
       now: 1000,
     })
 
-    // 1. revoked edge deleted; 2. new ring published as vault.key.
     expect(relay.grantsDeleted).toEqual([revoked])
     expect(relay.blobs).toEqual([{ id: 'vault.key', bytes: 'r0+1' }])
     expect(rotated.to_bytes && dec.decode(rotated.to_bytes())).toBe('r0+1')
 
-    // 3. every still-trusted grantee re-keyed under the stable owner item id.
+    // re-keyed under the stable owner item id, not a per-grantee id.
     expect(relay.mail).toHaveLength(2)
     expect(relay.mail.map((m) => m.to)).toEqual([grantees[0].ed, grantees[1].ed])
     for (const m of relay.mail) {

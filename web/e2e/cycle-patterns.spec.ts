@@ -27,7 +27,6 @@ test('Patterns shows the cycle Day-N headline and a band over seeded cycles', as
 
   await page.getByTestId('nav-correlate').click()
 
-  // The overview headline and its caption.
   await expect(page.getByTestId('cycle-stats')).toBeVisible()
   await expect(page.getByTestId('cycle-day')).toHaveText(/Day \d+/)
   await expect(page.getByTestId('cycle-stats').getByText(/Current cycle/i)).toBeVisible()
@@ -38,7 +37,6 @@ test('Patterns shows the cycle Day-N headline and a band over seeded cycles', as
   await expect(page.getByTestId('cycle-bar')).toHaveCount(2)
   await expect(page.getByTestId('cycle-band').getByText(/d…/)).toBeVisible()
 
-  // The per-day flow lane surfaces alongside the other lanes.
   await expect(page.getByTestId('cycle-lane')).toBeVisible()
   await expect(page.getByTestId('cycle-cell').first()).toBeVisible()
 })

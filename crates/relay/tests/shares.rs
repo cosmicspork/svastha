@@ -42,7 +42,6 @@ fn share_path(token: &str) -> String {
     format!("/v0/share/{token}")
 }
 
-/// A `GET` needs no auth, so it is a plain request.
 fn unauth_get(token: &str) -> Request<Body> {
     Request::builder()
         .method("GET")

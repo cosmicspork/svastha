@@ -28,7 +28,6 @@
   const ed25519 = $derived(session.identity ? fingerprint(session.identity.ed25519_public_hex) : '')
   const x25519 = $derived(session.identity ? fingerprint(session.identity.x25519_public_hex) : '')
 
-  // --- show seed phrase ---
   let showingSeedForm = $state(false)
   let seedPassphrase = $state('')
   let seedError = $state('')
@@ -54,7 +53,6 @@
     setTimeout(() => (seedCopied = false), 2500)
   }
 
-  // --- change passphrase ---
   let oldPassphrase = $state('')
   let newPassphrase = $state('')
   let newPassphraseConfirm = $state('')

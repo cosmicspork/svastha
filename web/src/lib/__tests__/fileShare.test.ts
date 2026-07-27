@@ -214,7 +214,6 @@ describe('createFileShare → inspect/open round-trip', () => {
     const exported = await createFileShare({ identity, events, mode: 'embedded' })
     expect(exported.mode).toBe('embedded')
     expect(exported.passphrase).toBeNull()
-    // Header advertises embedded mode.
     const header = parseHeader(exported.bytes)
     expect(header!.mode).toBe('embedded')
 

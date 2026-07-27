@@ -104,8 +104,6 @@ function aad(blobId: string): Uint8Array {
   return new TextEncoder().encode(blobId)
 }
 
-// --- events codec ('ev-') ---
-
 function eventBlobId(eventId: string): string {
   return `ev-${eventId}`
 }
@@ -405,8 +403,6 @@ function noteFailure(err: unknown): void {
   patchStatus({ lastError: describeError(err), reachable: isNetworkError(err) ? false : true })
 }
 
-// --- outbox ---
-
 interface SyncRecord {
   id: string
   state: 'pending' | 'done'
@@ -620,8 +616,6 @@ export async function pullAll(): Promise<void> {
 
   patchStatus({ lastPullAt: new Date().toISOString() })
 }
-
-// --- lifecycle ---
 
 const PULL_INTERVAL_MS = 5 * 60 * 1000
 let pullTimer: ReturnType<typeof setInterval> | null = null

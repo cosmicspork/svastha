@@ -284,7 +284,7 @@ describe('downloadDictionary: resume', () => {
     await downloadDictionary(MANIFEST)
 
     const updated = await buildManifest('2026-08-01')
-    updated.files[0] = { ...updated.files[0], sha256: 'deadbeef'.repeat(8) } // force a mismatch
+    updated.files[0] = { ...updated.files[0], sha256: 'deadbeef'.repeat(8) }
     MANIFEST = updated
     mockFetch()
     // LOINC's fixture bytes still hash to the original digest, so serving it

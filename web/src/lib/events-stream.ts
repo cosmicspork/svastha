@@ -45,7 +45,6 @@ export class SseParser {
   push(chunk: string): Poke[] {
     this.buffer += chunk
     const pokes: Poke[] = []
-    // Process only complete lines; keep the last (possibly partial) fragment.
     let newlineIndex: number
     while ((newlineIndex = this.buffer.indexOf('\n')) !== -1) {
       // Strip a trailing CR so CRLF streams parse identically to LF ones.
@@ -53,7 +52,7 @@ export class SseParser {
       this.buffer = this.buffer.slice(newlineIndex + 1)
 
       if (line === '') {
-        // End of an event: dispatch if it named a poke, then reset for the next.
+        // End of an event.
         const poke = this.eventName ? asPoke(this.eventName) : null
         if (poke) pokes.push(poke)
         this.eventName = ''

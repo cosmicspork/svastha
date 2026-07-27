@@ -241,9 +241,9 @@ fn read_proposals(owner_client: &RelayClient, owner: &Identity) -> Vec<(String, 
     out
 }
 
-/// Full owner-side setup: seal a vault with `images`, grant + hand off to the
-/// node. Returns `(node RelayClient, owner RelayClient, node identity, owner
-/// identity)` plus the node's fresh state/cache/journal for the pipeline.
+/// Full owner-side setup: seals a vault with `images`, grants the node, and
+/// hands off keys. Bundles the resulting relay clients and identities with the
+/// node's fresh state/cache/journal for the pipeline.
 struct Fixture {
     node_client: RelayClient,
     owner_client: RelayClient,
@@ -288,8 +288,6 @@ fn setup(seed: &[u8], images: &[&[u8]]) -> Fixture {
     }
 }
 
-// ---- tests ----
-
 #[test]
 fn ocr_happy_path_deposits_a_parseable_proposal() {
     let (base, calls) = spawn_inference(Mode::Ok(one_bp_finding()));
@@ -323,7 +321,6 @@ fn ocr_happy_path_deposits_a_parseable_proposal() {
     assert_eq!(code.code, "8480-6");
     assert!(!msg_id.is_empty());
 
-    // Job status reflects the pass.
     let jobs = fx.state.lock().unwrap().job_status();
     assert_eq!(jobs.processed, 1);
     assert_eq!(jobs.failed, 0);

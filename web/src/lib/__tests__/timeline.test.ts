@@ -98,9 +98,7 @@ describe('buildTimeline: offline dictionary layering', () => {
   it('labels an unnamed coded condition from the dictionary, below the vault index', () => {
     const events = [ev({ kind: 'condition', effective_at: at, code: { system: ICD, code: 'E11.9' } })]
     const dict = new Map([[`${ICD}|E11.9`, 'Type 2 diabetes mellitus without complications']])
-    // Without the dictionary it degrades to the shortened coding hint / kind.
     expect(buildTimeline(events, 'all')[0].entries[0].label).toBe('condition')
-    // With it, the dictionary name surfaces.
     expect(buildTimeline(events, 'all', dict)[0].entries[0].label).toBe(
       'Type 2 diabetes mellitus without complications',
     )
@@ -242,7 +240,6 @@ describe('buildTimeline: visit-note nesting (decision C2)', () => {
       ],
       'all',
     )
-    // Three rows: two encounters (neither carrying the note) + the lone note.
     expect(days[0].entries).toHaveLength(3)
     const noteRow = days[0].entries.find((e) => e.category === 'note')
     expect(noteRow).toBeDefined()

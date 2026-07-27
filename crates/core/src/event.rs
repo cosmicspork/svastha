@@ -90,10 +90,12 @@ pub struct Proposed {
 #[serde(rename_all = "snake_case")]
 pub enum EventValue {
     /// A measured quantity, e.g. `value = "118"`, `unit = mm[Hg]` (UCUM).
-    Quantity { value: String, unit: Option<Code> },
+    Quantity {
+        value: String,
+        unit: Option<Code>,
+    },
     /// A coded value, e.g. an allergy substance or a condition's clinical status.
     Coded(Code),
-    /// Free text.
     Text(String),
     /// A captured document (e.g. a photographed paper record). The bytes live
     /// out of band as a content-addressed, vault-sealed blob; the event carries
@@ -505,7 +507,6 @@ mod tests {
 
     #[test]
     fn id_ignores_provenance() {
-        // The same fact from two sources must collapse to one id.
         let a = observation("118", "Clinic A");
         let b = observation("118", "Clinic B");
         assert_ne!(a.provenance, b.provenance);
@@ -757,8 +758,6 @@ mod tests {
         );
 
         for v in &file.events {
-            // Canonical bytes and the derived id must reproduce, and the event's
-            // stored id must equal its content id.
             assert_eq!(
                 hex::encode(v.event.canonical_content()),
                 v.canon_hex,

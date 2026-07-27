@@ -89,8 +89,6 @@ export function keyringUnwrapsTo(wrappedHex: string, identity: WasmIdentity): bo
   }
 }
 
-// --- key_handoff envelope construction ---
-
 /** The `key_handoff` body (spec's `KeyHandoffBody`): the sender's identity and a
  * wrapped keyring (or, grandfathered, a bare wrapped key). */
 export interface KeyHandoffBody {

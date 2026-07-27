@@ -56,7 +56,6 @@ test('passphrase file: export, then open cold with the phrase and see verified d
   expect(phrase).not.toBeNull()
   expect(phrase!.split(' ')).toHaveLength(7) // ≥ 64 bits over the 1296-word list
 
-  // The saved file shows up in the owner's history, marked unrevocable.
   await ownerPage.getByTestId('share-done').click()
   await expect(ownerPage.getByTestId('file-share-list')).toContainText('unrevocable')
 
@@ -96,7 +95,6 @@ test('passphrase file: a wrong phrase is a friendly retry, the right one opens',
   const docPage = await freshRecipient(browser)
   await docPage.getByTestId('file-share-input').setInputFiles(path)
 
-  // Wrong phrase: the file stays closed and the retry message shows — no data.
   await docPage.getByTestId('file-passphrase-input').fill('these are not the right words at all')
   await docPage.getByTestId('file-passphrase-submit').click()
   await expect(docPage.getByTestId('file-passphrase-error')).toBeVisible()
@@ -131,13 +129,11 @@ test('embedded file without a relay: possession is access, opens straight from t
     },
   })
   expect(phrase).toBeNull()
-  // Embedded mode shows the honest "anyone can open it" note, no passphrase box.
   await expect(ownerPage.getByTestId('file-embedded-note')).toBeVisible()
   await expect(ownerPage.getByTestId('file-share-passphrase-box')).toHaveCount(0)
 
   const docPage = await freshRecipient(browser)
   await docPage.getByTestId('file-share-input').setInputFiles(path)
-  // Embedded: opens directly, no passphrase prompt.
   await expect(docPage.getByTestId('file-passphrase-input')).toHaveCount(0)
   await expect(docPage.getByRole('heading', { name: 'Shared medical record' })).toBeVisible({
     timeout: 15_000,
@@ -150,7 +146,6 @@ test('embedded file without a relay: possession is access, opens straight from t
 
 test('a damaged file is honestly reported, not silently rendered', async ({ browser }) => {
   const docPage = await freshRecipient(browser)
-  // A file that is not a Svastha share at all.
   await docPage.getByTestId('file-share-input').setInputFiles({
     name: 'not-a-share.svashare',
     mimeType: 'application/octet-stream',

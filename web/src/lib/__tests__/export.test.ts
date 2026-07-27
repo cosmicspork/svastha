@@ -127,7 +127,6 @@ describe('encryptedExportFilename', () => {
   })
 })
 
-// --- encrypted export/import ---
 
 function utf8(s: string): Uint8Array {
   return new TextEncoder().encode(s)
@@ -151,7 +150,7 @@ describe('buildEncryptedExport', () => {
     expect(built.version).toBe(1)
     expect(built.contract_version).toBe(5)
     expect(built.exported_at).toBe('2026-07-11T00:00:00.000Z')
-    expect(Object.keys(built.blobs)).toEqual(['ev-a', 'ev-b']) // sorted
+    expect(Object.keys(built.blobs)).toEqual(['ev-a', 'ev-b'])
   })
 
   it('skips ids whose seal returns null', async () => {

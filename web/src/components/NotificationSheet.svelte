@@ -85,7 +85,6 @@
     void open(n)
   }
 
-  // The active row's live offset; every other row rests at 0.
   const offset = (n: Notification): number => (activeId === n.id ? dx : 0)
 </script>
 

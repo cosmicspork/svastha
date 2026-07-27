@@ -105,13 +105,9 @@ export async function isEnrolledNode(ed: string): Promise<boolean> {
   return (await nodeProposers()).some((p) => p.ed === ed)
 }
 
-// --- store ---
-
 /** The admin command/reply log, newest first. A plain `writable` (not a rune
  * module) so it reads under node vitest without the Svelte compiler. */
 export const adminLog = writable<AdminLogEntry[]>([])
-
-// --- IndexedDB-backed ops ---
 
 export function listAdminLog(): Promise<AdminLogEntry[]> {
   return getAll<AdminLogEntry>(STORE)

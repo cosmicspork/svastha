@@ -15,8 +15,6 @@ beforeEach(async () => {
   await deleteDb()
 })
 
-// --- fakes ---
-
 function fakeSubscription(endpoint: string, withKeys = true): PushSubscriptionLike {
   return {
     endpoint,
@@ -68,8 +66,6 @@ function fakeRelay(overrides: Partial<PushRelayClient> = {}): PushRelayClient & 
 
 const grant = async (): Promise<NotificationPermission> => 'granted'
 const deny = async (): Promise<NotificationPermission> => 'denied'
-
-// --- enablePush ---
 
 describe('enablePush', () => {
   it('subscribes, registers with the relay, and persists the pref on success', async () => {
@@ -155,8 +151,6 @@ describe('enablePush', () => {
   })
 })
 
-// --- disablePush ---
-
 describe('disablePush', () => {
   it('unsubscribes locally and deletes the one subscription at the relay', async () => {
     const sub = fakeSubscription('https://push.example/mine')
@@ -194,8 +188,6 @@ describe('disablePush', () => {
     expect(await isPushEnabledPref()).toBe(false)
   })
 })
-
-// --- reassertPush ---
 
 describe('reassertPush', () => {
   it('does nothing when the user has push off', async () => {
@@ -239,8 +231,6 @@ describe('reassertPush', () => {
     expect(pm.subscribe).not.toHaveBeenCalled()
   })
 })
-
-// --- reassertPushOnStart ---
 
 describe('reassertPushOnStart', () => {
   it('resolves without throwing when there is no navigator (node/vitest environment)', async () => {

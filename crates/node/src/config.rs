@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn a_role_with_no_endpoint_anywhere_is_disabled() {
-        let l = lookup_from(&[(ENV_INFERENCE_MODEL, "m")]); // model but no endpoint
+        let l = lookup_from(&[(ENV_INFERENCE_MODEL, "m")]);
         assert!(ocr(&l).unwrap().is_none());
         assert!(chat(&l).unwrap().is_none());
     }

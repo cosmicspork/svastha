@@ -115,7 +115,6 @@ async fn shared_blobs_404_without_grant_then_works_then_404_after_revoke() {
     let bob = Identity::from_seed(b"bob");
     let owner = hex_pk(&alice);
 
-    // Alice stores a blob of her own.
     let put_blob = app
         .clone()
         .oneshot(signed(
@@ -158,7 +157,6 @@ async fn shared_blobs_404_without_grant_then_works_then_404_after_revoke() {
         .unwrap();
     assert_eq!(get_before.status(), StatusCode::NOT_FOUND);
 
-    // Alice grants Bob read access.
     let grant = app
         .clone()
         .oneshot(signed(
@@ -201,7 +199,7 @@ async fn shared_blobs_404_without_grant_then_works_then_404_after_revoke() {
     assert_eq!(get_after.status(), StatusCode::OK);
     assert_eq!(body_bytes(get_after).await, b"alice ciphertext");
 
-    // Alice revokes; Bob is locked out again, same 404 as before the grant.
+    // Same 404 as before the grant — Bob is locked out again.
     let revoke = app
         .clone()
         .oneshot(signed(
@@ -265,7 +263,6 @@ async fn dual_direction_listing() {
     let bob = Identity::from_seed(b"bob");
     let carol = Identity::from_seed(b"carol");
 
-    // Alice grants both Bob and Carol; Bob is also granted by Carol.
     for (owner, grantee) in [(&alice, &bob), (&alice, &carol), (&carol, &bob)] {
         let resp = app
             .clone()
@@ -299,7 +296,6 @@ async fn dual_direction_listing() {
     expected.sort();
     assert_eq!(grantees, expected);
 
-    // Bob's "shared with me" lists both Alice and Carol as granters.
     let bob_shared = app
         .oneshot(signed(&bob, "GET", "/v0/shared", b"", now()))
         .await
@@ -389,7 +385,6 @@ async fn prefix_allowlist_scopes_listing_and_fetch() {
     let (app, alice, bob) = alice_with_three_blobs().await;
     let owner = hex_pk(&alice);
 
-    // Alice grants Bob a prefix-scoped grant: only ev- and att- are readable.
     let grant = app
         .clone()
         .oneshot(signed(
@@ -464,7 +459,6 @@ async fn expired_grant_behaves_as_no_grant() {
         StatusCode::NOT_FOUND
     );
 
-    // Re-issue with an expiry comfortably in the future (upsert): it now works.
     let future_body = format!(r#"{{"expires_at":{}}}"#, base + 3600);
     let regrant = app
         .clone()
@@ -529,7 +523,6 @@ async fn upsert_rescopes_an_existing_grant() {
     let owner = hex_pk(&alice);
     let base = now();
 
-    // Start with a full (unscoped) grant: att-1 is readable.
     let full = app
         .clone()
         .oneshot(signed(
@@ -624,7 +617,6 @@ async fn scoped_grantee_pages_through_only_admitted_ids() {
     let bob = Identity::from_seed(b"bob");
     let owner = hex_pk(&alice);
 
-    // Alice stores several ev- blobs and one cur- blob; Bob's grant admits only ev-.
     for (i, id) in ["ev-1", "ev-2", "ev-3", "ev-4", "ev-5", "cur-1"]
         .iter()
         .enumerate()
@@ -828,7 +820,6 @@ async fn fs_grant_store_persists_across_router_rebuild() {
         .unwrap();
     assert_eq!(grant.status(), StatusCode::NO_CONTENT);
 
-    // A fresh router over the same directory still sees the grant.
     let second = build(dir.path());
     let check = second
         .oneshot(signed(&alice, "GET", "/v0/grants", b"", now()))

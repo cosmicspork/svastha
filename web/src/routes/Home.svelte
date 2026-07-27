@@ -369,7 +369,6 @@
     grid-column: 1 / -1;
   }
 
-  /* Recently logged */
   .loglist {
     list-style: none;
     margin: 0;
@@ -476,7 +475,6 @@
     color: var(--muted);
   }
 
-  /* Recent symptoms */
   .chips {
     display: flex;
     flex-wrap: wrap;

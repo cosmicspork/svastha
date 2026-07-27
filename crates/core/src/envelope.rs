@@ -541,7 +541,6 @@ mod tests {
         let recipient = Identity::from_seed(b"recipient seed");
         let key_bytes = [7u8; KEY_LEN];
         let sealed = seal_to(&recipient.x25519_public(), &key_bytes, b"");
-        // Reinterpret the sealed-box bytes as a WrappedKey and try to unwrap.
         let as_wrapped = WrappedKey::from_bytes(&sealed.to_bytes()).unwrap();
         assert!(matches!(
             recipient.unwrap_key(&as_wrapped),

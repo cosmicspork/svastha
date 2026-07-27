@@ -43,8 +43,7 @@ const KNOWN_PATTERNS = [
   '/correlate',
 ]
 
-/** Split a pattern and a concrete path into same-length segment arrays, or
- * `null` if the segment counts differ. */
+/** Split a path into its non-empty segments. */
 function segments(s: string): string[] {
   return s.split('/').filter(Boolean)
 }

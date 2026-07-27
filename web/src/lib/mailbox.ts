@@ -617,7 +617,6 @@ export async function resolveProposalIfDone(proposalId: string): Promise<boolean
       Date.now(),
       new TextEncoder().encode(bodyJson),
     )
-    // Deposit into the proposer's own mailbox under a fresh, unique item id.
     const replyId = `proposal-result-${record.id.slice(0, 32)}`
     await client.putMailbox(proposer.ed, replyId, new TextEncoder().encode(envelope))
     await client.deleteMailbox(record.mailboxItemId)

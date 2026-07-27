@@ -238,7 +238,6 @@ mod tests {
             json!({ "tags": ["a"] }),
             1_700_000_000_000,
         );
-        // Swap in the attacker's public key but keep the original signature.
         let forged = SignedCurationRecord::new(
             CurationRecord {
                 author: attacker.verifying_key().to_bytes(),

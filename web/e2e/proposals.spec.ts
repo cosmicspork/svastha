@@ -162,7 +162,6 @@ test('reviews proposed drafts with provenance, approves/edits/rejects, and echoe
     { code: NAUSEA, value: { quantity: { value: '4', unit: null } } },
   ])
 
-  // The notification center / badge surfaces it; the notification deep-links.
   await syncUntil(page, async () => {
     await expect(page.getByTestId('notification-badge')).toBeVisible({ timeout: 2000 })
   })
@@ -171,7 +170,6 @@ test('reviews proposed drafts with provenance, approves/edits/rejects, and echoe
   await page.getByTestId('notification-item').filter({ hasText: 'waiting for review' }).first().click()
   await expect(page).toHaveURL(/#\/proposals$/)
 
-  // Three drafts, each with its extracted fact and extraction provenance.
   await expect(page.getByTestId('proposal-draft')).toHaveCount(3)
   await expect(page.getByTestId('draft-label').first()).toHaveText('Headache')
   await expect(page.getByTestId('draft-provenance').first()).toContainText('ocr')
@@ -185,17 +183,15 @@ test('reviews proposed drafts with provenance, approves/edits/rejects, and echoe
   const draft = (display: string) =>
     page.getByTestId('proposal-draft').filter({ hasText: display })
 
-  // Approve Headache as-is.
   await draft('Headache').getByTestId('draft-approve').click()
   await expect(draft('Headache').getByTestId('draft-decided')).toHaveText('Approved')
 
-  // Edit Fatigue's value, then approve.
   await draft('Fatigue').getByTestId('draft-edit').click()
   await draft('Fatigue').getByTestId('draft-edit-value').fill('3')
   await draft('Fatigue').getByTestId('draft-save-approve').click()
   await expect(draft('Fatigue').getByTestId('draft-decided')).toHaveText('Approved')
 
-  // Reject Nausea. That resolves the whole proposal, so the inbox empties.
+  // Rejecting resolves the whole proposal, so the inbox empties.
   await draft('Nausea').getByTestId('draft-reject').click()
   await expect(page.getByTestId('proposals-empty')).toBeVisible()
 

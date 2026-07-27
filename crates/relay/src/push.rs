@@ -280,7 +280,6 @@ pub struct PushService {
 }
 
 impl PushService {
-    /// Build the service over an already-constructed subscription store.
     pub fn new(vapid: Vapid, store: Arc<dyn PushStore>) -> Self {
         Self {
             vapid,
@@ -447,12 +446,10 @@ mod tests {
         store.put(&alice, &subscription_key(e1), &sub(e1)).unwrap();
         assert_eq!(store.list(&alice).unwrap().len(), 2);
 
-        // Delete one.
         assert!(store.delete(&alice, &subscription_key(e1)).unwrap());
         assert_eq!(store.list(&alice).unwrap().len(), 1);
         assert!(!store.delete(&alice, &subscription_key(e1)).unwrap());
 
-        // Delete all clears the rest.
         assert_eq!(store.delete_all(&alice).unwrap(), 1);
         assert!(store.list(&alice).unwrap().is_empty());
         assert_eq!(store.delete_all(&alice).unwrap(), 0);

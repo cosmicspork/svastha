@@ -19,7 +19,7 @@ use crate::{EventDraft, ImportError, ImportResult, Skipped};
 
 pub fn import(xml: &str) -> Result<ImportResult, ImportError> {
     let doc = Document::parse(xml)?;
-    let root = doc.root_element(); // ClinicalDocument
+    let root = doc.root_element();
     let mut result = ImportResult::default();
 
     // A document with no structured body (e.g. a scanned-PDF-only C-CDA) has
@@ -74,8 +74,6 @@ fn document_visit_date(root: Node) -> Option<String> {
     }
     None
 }
-
-// --- section dispatch ---
 
 fn import_section(section: Node, visit_date: Option<&str>, result: &mut ImportResult) {
     let Some(code) = section_code(section) else {
@@ -779,8 +777,6 @@ fn collect_narrative(node: Node, lines: &mut Vec<String>) {
         }
     }
 }
-
-// --- shared helpers ---
 
 /// A code-bearing element's `code`/`codeSystem`/`displayName`, with
 /// nullFlavor and translation fallback: if the root is unusable (missing or

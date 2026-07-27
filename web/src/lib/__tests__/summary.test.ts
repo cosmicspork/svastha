@@ -46,7 +46,7 @@ describe('buildSummary: problems', () => {
     expect(problems).toHaveLength(1)
     expect(problems[0].label).toBe('Hypertension')
     expect(problems[0].count).toBe(2)
-    expect(problems[0].date).toBe('2020-03-01T00:00:00+00:00') // earliest onset
+    expect(problems[0].date).toBe('2020-03-01T00:00:00+00:00')
     expect(problems[0].eventIds).toEqual(['a', 'b'])
     // resolved via the event's own display: name-first, coding demoted as data
     expect(problems[0].nameResolved).toBe(true)
@@ -154,7 +154,7 @@ describe('buildSummary: immunizations', () => {
     const { immunizations } = buildSummary(events)
     expect(immunizations).toHaveLength(1)
     expect(immunizations[0].detail).toBe('2 doses')
-    expect(immunizations[0].date).toBe('2024-10-01T00:00:00+00:00') // latest
+    expect(immunizations[0].date).toBe('2024-10-01T00:00:00+00:00')
   })
 
   it('shows no dose count for a single immunization', () => {
@@ -166,22 +166,19 @@ describe('buildSummary: immunizations', () => {
 describe('buildSummary: latest vitals', () => {
   it('produces one row per vital code, each the most-recent reading, pairing BP', () => {
     const events = [
-      // older BP pair
       ev({ code: BP_SYSTOLIC, value: q('130', 'mm[Hg]'), effective_at: '2024-01-01T09:00:00+00:00' }),
       ev({ code: BP_DIASTOLIC, value: q('85', 'mm[Hg]'), effective_at: '2024-01-01T09:00:00+00:00' }),
-      // newer BP pair
       ev({ code: BP_SYSTOLIC, value: q('120', 'mm[Hg]'), effective_at: '2024-05-01T09:00:00+00:00' }),
       ev({ code: BP_DIASTOLIC, value: q('80', 'mm[Hg]'), effective_at: '2024-05-01T09:00:00+00:00' }),
-      // heart rate readings
       ev({ code: HR, value: q('72', '/min'), effective_at: '2024-05-01T09:00:00+00:00' }),
       ev({ code: HR, value: q('66', '/min'), effective_at: '2024-02-01T09:00:00+00:00' }),
     ]
     const { latestVitals } = buildSummary(events)
     const bp = latestVitals.find((r) => r.label === 'Blood pressure')!
     const hr = latestVitals.find((r) => r.label === 'Heart rate')!
-    expect(bp.detail).toBe('120/80 mm[Hg]') // most-recent pair
+    expect(bp.detail).toBe('120/80 mm[Hg]')
     expect(bp.count).toBe(4)
-    expect(hr.detail).toBe('72 /min') // most-recent reading
+    expect(hr.detail).toBe('72 /min')
     expect(hr.count).toBe(2)
     // BP row comes before HR (VITALS declaration order)
     expect(latestVitals.map((r) => r.label)).toEqual(['Blood pressure', 'Heart rate'])
@@ -207,7 +204,7 @@ describe('buildSummary: recent results', () => {
     ]
     const { recentResults } = buildSummary(events, { resultLimit: 2 })
     expect(recentResults).toHaveLength(2)
-    expect(recentResults.map((r) => r.label)).toEqual(['HbA1c', 'Sodium']) // newest first
+    expect(recentResults.map((r) => r.label)).toEqual(['HbA1c', 'Sodium'])
     expect(recentResults[0].detail).toBe('5.4 %')
   })
 })

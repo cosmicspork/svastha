@@ -104,7 +104,6 @@ pub fn run(
             continue;
         };
 
-        // Open and parse the command.
         let Ok(plain) = msg.open(node) else {
             report.dropped += 1;
             continue;
@@ -204,8 +203,6 @@ fn job_status_detail(
 /// logs are content-free by construction (see [`crate::logtail`]).
 fn log_tail_detail(logs: &LogBuffer, want: usize) -> String {
     let lines = logs.tail(want);
-    // Keep the newest lines that fit the budget: walk from the end, accumulating
-    // until adding another would overflow, then present them oldest-first.
     let mut kept: Vec<&String> = Vec::new();
     let mut used = 0usize;
     for line in lines.iter().rev() {

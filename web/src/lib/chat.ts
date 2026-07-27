@@ -38,8 +38,6 @@ export interface ChatTurn {
  * Purely a function of the turns, so the UI never invents a resolving spinner. */
 export type ConversationState = 'empty' | 'waiting' | 'answered'
 
-// --- pure helpers (unit-tested directly) ---
-
 /** Oldest-first, the order a transcript reads. Ties (same millisecond) break by
  * id so the order is stable across reloads. */
 export function sortChronological(turns: ChatTurn[]): ChatTurn[] {
@@ -54,13 +52,9 @@ export function conversationState(turns: ChatTurn[]): ConversationState {
   return newest.role === 'user' ? 'waiting' : 'answered'
 }
 
-// --- store ---
-
 /** The whole conversation, chronological. A plain `writable` (not a rune
  * module) so it reads under node vitest without the Svelte compiler. */
 export const chatTurns = writable<ChatTurn[]>([])
-
-// --- IndexedDB-backed ops ---
 
 export function listChatTurns(): Promise<ChatTurn[]> {
   return getAll<ChatTurn>(STORE)

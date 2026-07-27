@@ -92,7 +92,6 @@ describe('deviceLinkUrl', () => {
     expect(link).toBe(
       `https://app.example.com/#/onboard?relay=${encodeURIComponent(relayUrl)}`,
     )
-    // Round-trips back to the exact original relay URL.
     const [, query] = link.split('?')
     expect(new URLSearchParams(query).get('relay')).toBe(relayUrl)
   })

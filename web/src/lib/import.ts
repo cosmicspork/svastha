@@ -317,7 +317,7 @@ export async function commitImport(plan: ImportPlan, onProgress?: (p: CommitProg
     const newBlobIds: string[] = []
     for (let j = 0; j < doc.drafts.length; j++) {
       const id = doc.draftIds[j]
-      if ((await get('events', id)) !== undefined) continue // dup — already in the log
+      if ((await get('events', id)) !== undefined) continue
 
       const draft = doc.drafts[j]
       const content = {

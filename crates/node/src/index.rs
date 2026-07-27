@@ -150,7 +150,6 @@ impl VaultIndex {
         self.docs.insert(sha256, meta);
     }
 
-    /// Number of indexed events.
     pub fn event_count(&self) -> usize {
         self.events.len()
     }
@@ -160,12 +159,10 @@ impl VaultIndex {
         self.curation.len()
     }
 
-    /// Number of indexed attachments.
     pub fn attachment_count(&self) -> usize {
         self.attachments.len()
     }
 
-    /// Number of indexed source documents.
     pub fn doc_count(&self) -> usize {
         self.docs.len()
     }

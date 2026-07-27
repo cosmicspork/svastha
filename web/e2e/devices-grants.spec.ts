@@ -57,7 +57,6 @@ test('devices & grants: enroll a grantee, then revoke-and-rotate cuts off future
   await onboardViaUI(pageB)
   await connectRelayViaUI(pageB)
 
-  // A logs an entry and pushes it before sharing.
   await logBP(pageA, '120', '80')
   await waitForPushed(pageA)
 
@@ -80,7 +79,7 @@ test('devices & grants: enroll a grantee, then revoke-and-rotate cuts off future
   await pageA.getByTestId('enroll-submit').click()
   await expect(pageA.getByTestId('enroll-done')).toBeVisible()
 
-  // B accepts the invite and reads A's entry (access works before revocation).
+  // Baseline: access works before revocation.
   const ownerEdA = (await openShareAndSetName(pageA, 'Alex')).split(':')[1]
   await pageB.evaluate(() => {
     window.location.hash = '#/share'

@@ -182,8 +182,6 @@
     return `${cats}; ${dates}`
   })
 
-  /** Opt-in row sub-copy: a category-specific prefix (Mind names what it holds)
-   * plus the current-state clause. */
   function optinSubcopy(cat: Category): string {
     const prefix = cat === 'mind' ? 'Mood and gratitude. ' : ''
     return prefix + (sensitiveOn.has(cat) ? 'Included in this share.' : 'Left out unless you turn it on.')
@@ -293,7 +291,6 @@
 
 <Sheet {onclose}>
   {#if result}
-    <!-- Result screen: the link, a QR, and the honest guarantee. -->
     <h2>Share ready</h2>
     <p class="muted">{result.record.scopeDescription}</p>
 

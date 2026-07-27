@@ -7,7 +7,6 @@
   import { syncTeardown, syncStatus, pullAll } from '../../lib/sync'
   import { deviceLinkUrl, codeQrSvg } from '../../lib/exchange'
 
-  // --- relay sync ---
   let relayUrlInput = $state('')
   let relayConnected = $state(false)
   let relayError = $state('')
@@ -72,7 +71,6 @@
     void pullAll()
   }
 
-  // --- link another device (device → device QR linking) ---
   // The new device's native camera opens this directly — no in-app scanner,
   // no new relay protocol. It lands the new device on Onboard's restore tab
   // with this relay prefilled (see `Onboard.svelte`'s `relay=` handling); the

@@ -96,14 +96,11 @@ test('local search finds a record entry; AI search returns a cited answer', asyn
   // record (local search) and the node (AI toggle).
   const node = await seedNode(page, words)
 
-  // The header search icon opens the page. Local search first: a query matches
-  // the logged entry, and the mode pill says On-device (AI toggle present but off).
   await page.getByTestId('nav-search').click()
   await page.getByTestId('search-input').fill('oatmeal')
   await expect(page.getByTestId('search-hit').filter({ hasText: 'oatmeal' })).toBeVisible()
   await expect(page.getByTestId('search-mode')).toHaveText('On-device')
 
-  // Turn on AI and ask, on the same page.
   await page.getByTestId('search-ai-toggle').click()
   await expect(page.getByTestId('search-mode')).toContainText('Node')
 
@@ -112,7 +109,6 @@ test('local search finds a record entry; AI search returns a cited answer', asyn
   await expect(page.getByTestId('search-turn').filter({ hasText: 'What did I eat?' })).toBeVisible()
   await expect(page.getByTestId('search-waiting')).toBeVisible()
 
-  // The node answers (fixture), citing the oatmeal event.
   await depositAnswer(page, words, node.mnemonic, 'You logged oatmeal on the 24th.', [eventId])
   await pullSearchUntil(page, async () => {
     await expect(
@@ -120,7 +116,6 @@ test('local search finds a record entry; AI search returns a cited answer', asyn
     ).toBeVisible({ timeout: 2000 })
   })
 
-  // The citation renders and deep-links to the event on the Timeline, highlighted.
   const citation = page.getByTestId('citation').first()
   await expect(citation).toContainText('oatmeal')
   await citation.click()

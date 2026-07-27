@@ -40,7 +40,6 @@ fn main() -> ExitCode {
     let config = match Config::from_env() {
         Ok(config) => config,
         Err(e) => {
-            // Fail fast and clearly on missing or invalid required config.
             tracing::error!(error = %e, "configuration error");
             return ExitCode::FAILURE;
         }

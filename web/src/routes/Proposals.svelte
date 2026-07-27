@@ -28,7 +28,6 @@
     await refreshPendingProposals()
   })
 
-  // Resolve a friendly label per proposer as the set changes.
   $effect(() => {
     for (const [fromEd] of groupByProposer($pendingProposals)) {
       if (labels[fromEd] !== undefined) continue

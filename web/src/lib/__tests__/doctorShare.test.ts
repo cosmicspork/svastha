@@ -192,7 +192,7 @@ describe('referencedDocumentShas', () => {
       withSourceDoc(ev('a', 'condition', '2026-01-01T00:00:00Z'), 'bb'),
       withSourceDoc(ev('b', 'condition', '2026-01-01T00:00:00Z'), 'aa'),
       withSourceDoc(ev('c', 'condition', '2026-01-01T00:00:00Z'), 'aa'),
-      ev('d', 'condition', '2026-01-01T00:00:00Z'), // source_doc: null (default)
+      ev('d', 'condition', '2026-01-01T00:00:00Z'),
     ]
     expect(referencedDocumentShas(events)).toEqual(['aa', 'bb'])
   })
@@ -342,7 +342,6 @@ describe('applyMedScope', () => {
   })
 
   it('never drops a non-medication event, whatever its status', () => {
-    // The resolved condition and the vital survive the default scope.
     const ids = applyMedScope([cond, bp], statuses, false).map((se) => se.event.id)
     expect(ids).toEqual(['c1', 'bp'])
   })

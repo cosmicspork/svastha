@@ -171,7 +171,6 @@ fn enrolls_and_syncs_a_sealed_vault() {
         Arc::new(Identity::from_seed(b"processing node")),
     );
 
-    // Owner's genesis keyring; seal a vault under it.
     let data_key = DataKey::generate();
     let ring = Keyring::genesis(&owner.x25519_public(), &data_key);
     let a = med(&owner, "197361", "2025-01-01T00:00:00Z");
@@ -189,13 +188,11 @@ fn enrolls_and_syncs_a_sealed_vault() {
     // A tag curation record the node must ignore by convention.
     let tag = owner.sign_curation("tag:ev-1".into(), serde_json::json!({"tags":["x"]}), 1_000);
     put_curation(&owner_client, &ring, &owner, &tag);
-    // A captured attachment.
     let sha = put_attachment(&owner_client, &ring, &owner, b"fake jpeg bytes");
 
     grant_node(&owner_client, &node);
     deposit_handoff(&owner_client, &owner, &node, &ring, "kh-1");
 
-    // Node enrols, then syncs.
     let state = Mutex::new(NodeState::new());
     let cache = Cache::new(tempfile::tempdir().unwrap().path().to_path_buf());
     let enroll = consume_mailbox(&node_client, &state).unwrap();
@@ -313,7 +310,6 @@ fn drops_a_tampered_blob() {
     let data_key = DataKey::generate();
     let ring = Keyring::genesis(&owner.x25519_public(), &data_key);
 
-    // One good event, one whose ciphertext is corrupted after sealing.
     let good = med(&owner, "197361", "2025-01-01T00:00:00Z");
     put_event(&owner_client, &ring, &owner, &good);
 
@@ -351,7 +347,6 @@ fn keyring_merges_on_rotation_redelivery() {
         RelayClient::new(base.clone(), Arc::new(Identity::from_seed(b"owner three")));
     let node_client = RelayClient::new(base.clone(), Arc::new(Identity::from_seed(b"node three")));
 
-    // Genesis vault + one event under the genesis epoch.
     let data_key = DataKey::generate();
     let genesis = Keyring::genesis(&owner.x25519_public(), &data_key);
     let old = med(&owner, "197361", "2025-01-01T00:00:00Z");
@@ -388,7 +383,6 @@ fn keyring_merges_on_rotation_redelivery() {
 
     let guard = state.lock().unwrap();
     let idx = &guard.owner(&hex_ed(&owner)).unwrap().index;
-    // Both the genesis-epoch event and the rotated-epoch event are indexed.
     assert_eq!(idx.event_count(), 2);
     assert!(idx.event(&old.event.id.to_hex()).is_some());
     assert!(idx.event(&fresh.event.id.to_hex()).is_some());

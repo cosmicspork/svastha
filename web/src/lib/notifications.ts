@@ -163,7 +163,7 @@ export function deriveExpiringShareNotifications(
   for (const share of shares) {
     if (share.revokedAt) continue
     const expMs = isoToMillis(share.expiresAt)
-    if (expMs <= now || expMs > horizon) continue // already expired, or not close yet
+    if (expMs <= now || expMs > horizon) continue
     const days = Math.max(1, Math.ceil((expMs - now) / dayMs))
     const label = share.scopeDescription || 'A shared link'
     out.push({

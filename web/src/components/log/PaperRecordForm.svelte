@@ -337,7 +337,6 @@
     font-size: var(--text-xl);
   }
 
-  /* The PDF picker is a secondary, lower-profile row under the camera target. */
   .pick.compact {
     margin-top: var(--space-2);
   }

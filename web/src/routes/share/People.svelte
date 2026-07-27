@@ -50,7 +50,6 @@
     adminNode = await enrolledNode()
   }
 
-  // --- my code (share your vault with someone) ---
   const myCode = $derived(
     session.identity
       ? buildExchangeCode(
@@ -77,7 +76,6 @@
     session.identity ? fingerprint(session.identity.ed25519_public_hex) : '',
   )
 
-  // --- add / enroll (a person OR a processing node) ---
   let showScanner = $state(false)
   // A scanned QR lands on `#/share?code=…` which redirects here as
   // `#/share/people?code=…` (see Share.svelte). Read it once, then strip it so a
@@ -145,7 +143,6 @@
     }
   }
 
-  // --- revoke-and-rotate / rotate-now ---
   let confirming = $state<{ revoke: OutgoingGrant | null } | null>(null)
   let rotateBusy = $state(false)
   let rotateError = $state('')
@@ -212,7 +209,6 @@
     > to get started.
   </p>
 {:else}
-  <!-- My code -->
   <section class="stack">
     <h2>My code</h2>
     <label class="field">
@@ -232,7 +228,6 @@
     <button onclick={copyCode} data-testid="copy-code">{copied ? 'Copied' : 'Copy code'}</button>
   </section>
 
-  <!-- Add someone or a node -->
   <section class="stack">
     <h2>Add someone or a node</h2>
     <button class="primary" onclick={() => (showScanner = true)} data-testid="enroll-scan">
@@ -284,7 +279,6 @@
     {/if}
   </section>
 
-  <!-- Your node(s) -->
   {#if nodes.length > 0}
     <section class="stack">
       <h2>Your node{nodes.length === 1 ? '' : 's'}</h2>
@@ -307,7 +301,6 @@
     </section>
   {/if}
 
-  <!-- People I've granted -->
   <section class="stack">
     <h2>You share with</h2>
     {#if people.length === 0}
@@ -329,7 +322,6 @@
     {/if}
   </section>
 
-  <!-- Shared with me -->
   <section class="stack">
     <h2>Shared with you</h2>
     {#if incoming.length === 0}
@@ -353,7 +345,6 @@
     {/if}
   </section>
 
-  <!-- Rotate now -->
   <section class="stack">
     <h2>Rotate the vault key</h2>
     <p class="muted">
