@@ -3,7 +3,7 @@
 // unit-test without a clock or a DB. Consumed by the Home "At a glance" cards.
 import type { StoredEvent } from './events'
 import type { Category } from './category'
-import { VITALS, BP_SYSTOLIC, BP_DIASTOLIC } from './codes'
+import { VITALS, BP_SYSTOLIC, BP_DIASTOLIC, canonicalSystem } from './codes'
 import { categorize } from './category'
 import { quantityOf, describeEvent } from './timeline'
 
@@ -163,26 +163,33 @@ export function recentSymptoms(
   now = Date.now(),
   days = 14,
   limit = 5,
+  // Names the coded rows (see dictionary.ts; empty means the feature is off).
+  dictionary: Map<string, string> = new Map(),
 ): SymptomGlance[] {
   const from = now - days * DAY
-  const worst = new Map<string, { severity: number | null; at: number }>()
+  // Keyed by code, not by resolved label: a symptom carries no display of its
+  // own, so with the dictionary off every coded row would otherwise share the
+  // "Symptom" fallback label and collapse into a single entry. Free-text
+  // symptoms have no code and key by their label, which is their identity.
+  const worst = new Map<string, { label: string; severity: number | null; at: number }>()
 
   for (const { event } of events) {
     if (categorize(event) !== 'symptom' || !event.effective_at) continue
     const at = Date.parse(event.effective_at)
     if (at < from) continue
-    const label = describeEvent(event).label
+    const label = describeEvent(event, dictionary).label
+    const key = event.code ? `${canonicalSystem(event.code.system)}|${event.code.code}` : label
     const q = quantityOf(event)
     const raw = q ? Number(q.value) : NaN
     const severity = Number.isFinite(raw) ? raw : null
-    const prev = worst.get(label)
+    const prev = worst.get(key)
     if (!prev || (severity ?? -1) > (prev.severity ?? -1)) {
-      worst.set(label, { severity, at })
+      worst.set(key, { label, severity, at })
     }
   }
 
-  return [...worst.entries()]
-    .map(([label, v]) => ({ label, severity: v.severity }))
+  return [...worst.values()]
+    .map((v) => ({ label: v.label, severity: v.severity }))
     .sort((a, b) => (b.severity ?? -1) - (a.severity ?? -1))
     .slice(0, limit)
 }

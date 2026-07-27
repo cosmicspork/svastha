@@ -51,6 +51,23 @@ describe('searchEvents', () => {
     expect(hits).toHaveLength(2)
   })
 
+  it('names and matches a display-less code through the offline dictionary', () => {
+    // An imported condition: no display of its own, no other occurrence to
+    // borrow from, and not one of the app's own quick-log codes — so the
+    // dictionary is the only thing that can name it.
+    const events = [ev({ code: { system: SNOMED, code: '73211009' } })]
+    const dictionary = new Map([[`${SNOMED}|73211009`, 'Diabetes mellitus']])
+    expect(searchEvents(events, 'diabetes').hits).toHaveLength(0)
+    const { hits } = searchEvents(events, 'diabetes', dictionary)
+    expect(hits).toHaveLength(1)
+    expect(hits[0].label).toBe('Diabetes mellitus')
+  })
+
+  it("names a quick-logged symptom from the app's own label, dictionary or not", () => {
+    const events = [ev({ code: { system: SNOMED, code: '25064002' } })]
+    expect(searchEvents(events, 'headache').hits).toHaveLength(1)
+  })
+
   it('matches on the raw code and on the system acronym', () => {
     const events = [ev({ code: { system: RXNORM, code: '313782', display: 'Acetaminophen' } })]
     expect(searchEvents(events, '313782').hits).toHaveLength(1)

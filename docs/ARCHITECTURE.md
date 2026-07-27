@@ -286,8 +286,12 @@ fallback. The dictionary is downloaded wholesale from the app's own origin and
 consulted only in memory — there is never a per-code or third-party lookup,
 because which codes a vault holds is itself health data. It bundles only
 freely-redistributable terminologies (LOINC, RxNorm's prescribable subset,
-ICD-10-CM, CVX); SNOMED CT and CPT names are excluded on licensing grounds and
-fall through to the earlier layers.
+ICD-10-CM, CVX, and SNOMED CT via the CC BY-ND Global Patient Set); CPT names
+are excluded on licensing grounds and fall through to the earlier layers.
+
+The app's own quick-log SNOMED codes carry **no** `display` for the same reason:
+a name that lives only in the dictionary can never drift, and terminology text
+stays under its own license instead of being embedded in signed events.
 
 - **Import.** US EHR exports arrive as Epic C-CDA (in IHE XDM packages, one
   Continuity of Care Document plus many per-encounter Summary of Care documents)

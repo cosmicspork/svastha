@@ -5,10 +5,19 @@
 // system|code is often named by a different source document elsewhere in the
 // vault, so labels can borrow that name at render time without touching
 // anything signed.
-import { canonicalSystem, type Code } from './codes'
+import { canonicalSystem, SYMPTOMS, type Code } from './codes'
 import type { StoredEvent } from './events'
 
 type Ev = StoredEvent['event']
+
+/** The app's own name for each quick-log symptom code. These are the picker's
+ * button labels (codes.ts `SymptomDef.label`) — this app's UI text, not
+ * terminology content — so they stay available with the offline dictionary
+ * switched off, which is the default. They also read better than the raw
+ * preferred term for several concepts ("Shortness of breath", not "Dyspnea"). */
+const SYMPTOM_LABELS: Map<string, string> = new Map(
+  SYMPTOMS.map((s) => [`${canonicalSystem(s.snomed.system)}|${s.snomed.code}`, s.label]),
+)
 
 // Key by the canonical system so an OID-form coding (`urn:oid:…`) and its
 // URL-form twin land on the same key — both when indexing the vault's own
@@ -69,10 +78,11 @@ export function buildCodeNameIndex(events: StoredEvent[]): Map<string, string> {
  * callers should check the code's own `display` first, since a code's own
  * display always wins over a borrowed one.
  *
- * The optional `dictionary` is the offline code dictionary (see
- * dictionary.ts): a strictly lower-priority fallback than the vault index, so a
- * name borrowed from the user's own records always beats the generic reference
- * one, and both beat the raw "LOINC 39156-5" the callers render on a miss. */
+ * Priority after that: a name borrowed from the user's own records, then the
+ * app's own label for a code it quick-logs, then the optional offline
+ * dictionary (see dictionary.ts) — the generic reference name ranks last
+ * because it is the least specific to this record. All of them beat the raw
+ * "LOINC 39156-5" the callers render on a miss. */
 export function resolveDisplay(
   index: Map<string, string>,
   code: Code | null | undefined,
@@ -80,5 +90,5 @@ export function resolveDisplay(
 ): string | null {
   if (!code) return null
   const key = keyFor(code)
-  return index.get(key) ?? dictionary?.get(key) ?? null
+  return index.get(key) ?? SYMPTOM_LABELS.get(key) ?? dictionary?.get(key) ?? null
 }

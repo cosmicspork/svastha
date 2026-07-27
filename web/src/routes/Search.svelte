@@ -11,6 +11,7 @@
   import { pullMailbox, sendChatMessage } from '../lib/mailbox'
   import { chatTurns, refreshChat, conversationState } from '../lib/chat'
   import { enrolledNode, getNodeLastSeen } from '../lib/nodeadmin'
+  import { loadDictionaryIndex, dictionaryStatus } from '../lib/dictionary'
   import type { ProposerRecord } from '../lib/proposals'
   import CitationList from '../components/CitationList.svelte'
   import EventDetail from '../components/EventDetail.svelte'
@@ -46,7 +47,18 @@
   // of the doubt.
   const nodeStale = $derived(!!nodeSeenAt && Date.now() - Date.parse(nodeSeenAt) >= NODE_FRESH_MS)
   const nodeAvailable = $derived(!!node && !nodeStale)
-  const result = $derived(aiOn ? { hits: [] as SearchHit[], truncated: false } : searchEvents(events, query))
+  // The offline code dictionary, hydrated the same way Spine/ClinicianSummary do
+  // it — a code with no display of its own is searchable only through this.
+  let dictionary = $state<Map<string, string>>(new Map())
+  $effect(() => {
+    void $dictionaryStatus.version
+    void $dictionaryStatus.enabled
+    void loadDictionaryIndex().then((d) => (dictionary = d))
+  })
+
+  const result = $derived(
+    aiOn ? { hits: [] as SearchHit[], truncated: false } : searchEvents(events, query, dictionary),
+  )
   const convoState = $derived(conversationState($chatTurns))
   const modeLabel = $derived(aiOn ? `${node?.label || 'Node'} Node` : 'On-device')
 

@@ -8,6 +8,7 @@ import {
   parseIcd10Order,
   dottedIcd10,
   parseCvx,
+  parseSnomedGps,
 } from '../../../scripts/build-code-dictionary/parsers'
 
 // Synthetic snippets only — no bulk real source files are committed as
@@ -155,5 +156,33 @@ describe('parseCvx', () => {
       '\n',
     )
     expect(parseCvx(text)).toEqual({ '08': 'Hep B, adolescent or pediatric' })
+  })
+})
+
+describe('parseSnomedGps', () => {
+  const header = 'ConceptID\tActive\tFSN\tUSPreferredTerm'
+
+  it('prefers the preferred term over the FSN, which carries a hierarchy tag', () => {
+    const text = [header, '25064002\t1\tHeadache (finding)\tHeadache'].join('\n')
+    expect(parseSnomedGps(text)).toEqual({ '25064002': 'Headache' })
+  })
+
+  it('keeps inactive concepts — an old document still cites retired codes', () => {
+    const text = [header, '1234567\t0\tRetired thing (finding)\tRetired thing'].join('\n')
+    expect(parseSnomedGps(text)).toEqual({ '1234567': 'Retired thing' })
+  })
+
+  it('falls back to the FSN when a row has no preferred term', () => {
+    const text = [header, '7654321\t1\tSomething (finding)\t'].join('\n')
+    expect(parseSnomedGps(text)).toEqual({ '7654321': 'Something (finding)' })
+  })
+
+  it('strips a BOM and tolerates CRLF', () => {
+    const text = ['﻿' + header, '25064002\t1\tHeadache (finding)\tHeadache', ''].join('\r\n')
+    expect(parseSnomedGps(text)).toEqual({ '25064002': 'Headache' })
+  })
+
+  it('throws on an unrecognized header rather than shipping a thin dictionary', () => {
+    expect(() => parseSnomedGps(['id\tname', '25064002\tHeadache'].join('\n'))).toThrow(/SNOMED GPS/)
   })
 })

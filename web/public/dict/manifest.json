@@ -1,6 +1,6 @@
 {
-  "version": "2026-07-22",
-  "generated_at": "2026-07-22T09:03:12.415Z",
+  "version": "2026-07-27",
+  "generated_at": "2026-07-27T19:55:30.633Z",
   "files": [
     {
       "system": "http://loinc.org",
@@ -38,6 +38,15 @@
       "entries": 289,
       "label": "CVX",
       "attribution": "CVX vaccine codes courtesy of the U.S. CDC."
+    },
+    {
+      "system": "http://snomed.info/sct",
+      "path": "snomed.json",
+      "bytes": 20982711,
+      "sha256": "649cf37fc096365259498ae0b2906708ae581e1f338c873b12ade73ec6aacfdb",
+      "entries": 429674,
+      "label": "SNOMED CT",
+      "attribution": "This material includes SNOMED Clinical Terms® (SNOMED CT®) from the SNOMED International Global Patient Set, © International Health Terminology Standards Development Organisation, used under the Creative Commons Attribution-NoDerivatives 4.0 International Public License (https://creativecommons.org/licenses/by-nd/4.0/). SNOMED CT® was originally created by the College of American Pathologists. SNOMED® and SNOMED CT® are registered trademarks of SNOMED International. Dependent International Edition version 20260101."
     }
   ]
 }
