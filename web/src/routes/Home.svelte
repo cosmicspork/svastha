@@ -109,8 +109,6 @@
   </div>
 {/each}
 
-<h1>Today</h1>
-
 <section>
   <h2 class="eyebrow">Records</h2>
   <div class="vaults" data-testid="home-records">

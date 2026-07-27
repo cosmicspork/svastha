@@ -128,7 +128,6 @@
         </li>
       {/each}
     </ul>
-    <p class="hint muted" data-testid="notifications-swipe-hint">Swipe a row: right to mark read, left to delete.</p>
   {/if}
 </Sheet>
 
@@ -238,10 +237,5 @@
     flex: none;
     font-size: var(--text-xs);
     white-space: nowrap;
-  }
-
-  .hint {
-    font-size: var(--text-xs);
-    margin: var(--space-3) 0 0;
   }
 </style>
