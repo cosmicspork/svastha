@@ -108,7 +108,9 @@ test('spousal sharing: grant, accept, read-only timeline, then revoke goes stale
   })
   const record = pageB.locator('[data-testid^="open-person-"]').filter({ hasText: 'Alex' })
   await expect(record).toBeVisible()
-  await record.click()
+  // The shared record now carries its own Timeline/Summary buttons, matching the
+  // own-record card, rather than a whole-card tap.
+  await record.getByRole('button', { name: 'Timeline' }).click()
 
   // A's two entries render read-only on B's device, with no log bar. Both
   // arrive via the same background shared pull, so wait for a single mounted

@@ -13,8 +13,7 @@
   import Onboard from './routes/Onboard.svelte'
   import Unlock from './routes/Unlock.svelte'
   import Home from './routes/Home.svelte'
-  import Timeline from './routes/Timeline.svelte'
-  import Summary from './routes/Summary.svelte'
+  import RecordView from './routes/RecordView.svelte'
   import Search from './routes/Search.svelte'
   import Log from './routes/Log.svelte'
   import Settings from './routes/Settings.svelte'
@@ -27,7 +26,6 @@
   import Share from './routes/Share.svelte'
   import SharePeople from './routes/share/People.svelte'
   import ShareDoctor from './routes/share/Doctor.svelte'
-  import Person from './routes/Person.svelte'
   import Proposals from './routes/Proposals.svelte'
   import Import from './routes/Import.svelte'
   import Correlate from './routes/Correlate.svelte'
@@ -130,9 +128,9 @@
     {#if route.path === '/log/:kind'}
       <Log kind={route.params.kind} />
     {:else if route.path === '/timeline'}
-      <Timeline />
+      <RecordView view="timeline" />
     {:else if route.path === '/summary'}
-      <Summary />
+      <RecordView view="summary" />
     {:else if route.path === '/search'}
       <Search />
     {:else if route.path === '/settings'}
@@ -158,7 +156,11 @@
     {:else if route.path === '/proposals'}
       <Proposals />
     {:else if route.path === '/person/:ed'}
-      <Person ed={route.params.ed} />
+      <RecordView ed={route.params.ed} view="timeline" />
+    {:else if route.path === '/person/:ed/timeline'}
+      <RecordView ed={route.params.ed} view="timeline" />
+    {:else if route.path === '/person/:ed/summary'}
+      <RecordView ed={route.params.ed} view="summary" />
     {:else if route.path === '/import'}
       <Import />
     {:else if route.path === '/correlate'}
@@ -168,7 +170,7 @@
     {/if}
   {/if}
 
-  {#if ready && vaultExists && !locked() && route.path !== '/person/:ed' && route.path !== '/log/:kind' && route.path !== '/search'}
+  {#if ready && vaultExists && !locked() && !route.path.startsWith('/person/') && route.path !== '/log/:kind' && route.path !== '/search'}
     <Bloom />
   {/if}
 </main>

@@ -49,6 +49,18 @@ describe('matchRoute', () => {
     })
   })
 
+  it('routes the person-scoped timeline and summary views', () => {
+    const ed = 'b'.repeat(64)
+    expect(matchRoute(`#/person/${ed}/timeline`)).toEqual({
+      path: '/person/:ed/timeline',
+      params: { ed },
+    })
+    expect(matchRoute(`#/person/${ed}/summary`)).toEqual({
+      path: '/person/:ed/summary',
+      params: { ed },
+    })
+  })
+
   it('captures the whole share fragment as one segment', () => {
     const frag = 'abcdefghijklmnopqrstuvwxyz.AAAA-_.aHR0cA'
     expect(matchRoute(`#/s/${frag}`)).toEqual({

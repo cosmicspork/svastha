@@ -129,11 +129,7 @@
     </div>
 
     {#each shares as share (share.ownerEd)}
-      <button
-        class="vault person"
-        onclick={() => navigate(`#/person/${share.ownerEd}`)}
-        data-testid="open-person-{share.ownerEd}"
-      >
+      <div class="vault" data-testid="open-person-{share.ownerEd}">
         <div class="vault-top">
           <span class="av" style:background={`var(--person-${share.hue})`} aria-hidden="true">{initials(share.label)}</span>
           <span class="vault-id">
@@ -141,8 +137,11 @@
             <span class="sub muted">read-only{#if share.stale} · no longer shared{/if}</span>
           </span>
         </div>
-        <span class="chev" aria-hidden="true">›</span>
-      </button>
+        <div class="vault-actions">
+          <button class="ghost act" onclick={() => navigate(`#/person/${share.ownerEd}/timeline`)} data-testid="person-timeline-{share.ownerEd}">Timeline</button>
+          <button class="ghost act" onclick={() => navigate(`#/person/${share.ownerEd}/summary`)} data-testid="person-summary-{share.ownerEd}">Summary</button>
+        </div>
+      </div>
     {/each}
   </div>
 </section>
@@ -231,16 +230,6 @@
     text-align: left;
   }
 
-  .vault.person {
-    flex-direction: row;
-    align-items: center;
-    cursor: pointer;
-  }
-
-  .vault.person:hover {
-    border-color: var(--action);
-  }
-
   .vault-top {
     display: flex;
     align-items: center;
@@ -277,12 +266,6 @@
 
   .sub {
     font-size: var(--text-xs);
-  }
-
-  .chev {
-    color: var(--muted);
-    font-size: var(--text-lg);
-    flex: none;
   }
 
   .vault-actions {

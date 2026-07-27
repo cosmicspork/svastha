@@ -37,6 +37,8 @@ const KNOWN_PATTERNS = [
   '/s',
   '/s/:frag',
   '/person/:ed',
+  '/person/:ed/timeline',
+  '/person/:ed/summary',
   '/import',
   '/correlate',
 ]
