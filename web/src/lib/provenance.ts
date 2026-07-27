@@ -63,3 +63,23 @@ export function prettyTextForDoc(bytes: Uint8Array, mime: string): PrettyText {
   const boundary = cut > MAX_RENDERED_TEXT_BYTES * 0.9 ? cut : MAX_RENDERED_TEXT_BYTES
   return { text: text.slice(0, boundary), truncated: true }
 }
+
+/**
+ * Turn a raw provenance `source` token into something a person reads. Stored
+ * events carry `source` as 'self' (you logged it), '' (unknown), or
+ * `import:<document name>` (mapped from an imported file). The detail panels
+ * (timeline entry + search hit) render this instead of the raw token.
+ */
+export function friendlySource(source: string | null | undefined): string {
+  if (!source) return 'Unknown source'
+  if (source === 'self') return 'Logged by you'
+  if (source.startsWith('import:')) {
+    // Drop the prefix and a trailing file extension so "import:Mercy Health.xml"
+    // reads as "Imported from Mercy Health".
+    const name = source.slice('import:'.length).replace(/\.[a-z0-9]+$/i, '').trim()
+    return name ? `Imported from ${name}` : 'Imported'
+  }
+  // An unrecognised source (e.g. a future node/proposal origin) shows as-is
+  // rather than being hidden — honesty over prettiness.
+  return source
+}

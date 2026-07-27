@@ -13,11 +13,17 @@
   import { enrolledNode, getNodeLastSeen } from '../lib/nodeadmin'
   import type { ProposerRecord } from '../lib/proposals'
   import CitationList from '../components/CitationList.svelte'
+  import EventDetail from '../components/EventDetail.svelte'
+  import { describeEvent } from '../lib/timeline'
 
   // Optional `?person=<ed>`: search a shared record instead of your own. The
   // header's search icon passes it when you're already viewing that person.
   // Read once from the hash query (the router strips the query from its params).
-  const person = new URLSearchParams(window.location.hash.split('?')[1] ?? '').get('person') ?? undefined
+  const params = new URLSearchParams(window.location.hash.split('?')[1] ?? '')
+  const person = params.get('person') ?? undefined
+  // A query carried in the URL so returning here (Back from a hit's timeline
+  // jump) restores the search rather than a blank box.
+  const initialQuery = params.get('q') ?? ''
 
   // A node counts as reachable for AI answers only if it has been heard from
   // recently — enrolled-but-silent shows the toggle disabled rather than sending
@@ -26,7 +32,9 @@
 
   let events = $state<StoredEvent[]>([])
   let scopeLabel = $state<string | null>(null)
-  let query = $state('')
+  let query = $state(initialQuery)
+  // The hit whose detail is expanded in place (null = all collapsed).
+  let expandedId = $state<string | null>(null)
   let node = $state<ProposerRecord | null>(null)
   let nodeSeenAt = $state<string | null>(null)
   let aiOn = $state(false)
@@ -85,12 +93,30 @@
     }
   }
 
-  function openHit(hit: SearchHit): void {
-    // Land on the record this hit belongs to, at the timeline, and focus the
-    // tapped entry via the shared one-shot signal (see spine-focus.ts).
-    focusedEventId.set(hit.event.event.id)
-    navigate(person ? `#/person/${person}` : '#/timeline')
+  function toggle(hit: SearchHit): void {
+    // Expand the hit's detail in place rather than leaving the search — the
+    // reported "jumps to the top of the timeline" was a hit flinging you away.
+    expandedId = expandedId === hit.event.event.id ? null : hit.event.event.id
   }
+
+  function openHit(hit: SearchHit): void {
+    // The optional secondary action: land on the record's timeline and focus
+    // the entry via the shared one-shot signal (see spine-focus.ts). Back
+    // returns here because the query is kept in the URL (effect below).
+    focusedEventId.set(hit.event.event.id)
+    navigate(person ? `#/person/${person}/timeline` : '#/timeline')
+  }
+
+  // Mirror the query into the URL so a timeline jump (and Back) restores the
+  // search. replaceState avoids a history entry per keystroke and doesn't
+  // re-trigger the router (matchRoute ignores the query string).
+  $effect(() => {
+    const next = new URLSearchParams()
+    if (person) next.set('person', person)
+    if (query.trim()) next.set('q', query)
+    const qs = next.toString()
+    window.history.replaceState(null, '', qs ? `#/search?${qs}` : '#/search')
+  })
 
   function hueClass(hit: SearchHit): string {
     return CATEGORY_META[categorize(hit.event.event)].hueClass
@@ -132,8 +158,14 @@
   {:else}
     <ul class="hits">
       {#each result.hits as hit (hit.event.event.id)}
+        {@const open = expandedId === hit.event.event.id}
         <li>
-          <button class="hit" onclick={() => openHit(hit)} data-testid="search-hit">
+          <button
+            class="hit"
+            onclick={() => toggle(hit)}
+            aria-expanded={open}
+            data-testid="search-hit"
+          >
             <span class="dot {hueClass(hit)}" aria-hidden="true">●</span>
             <span class="hit-body">
               <span class="hit-label">{hit.label}</span>
@@ -141,7 +173,30 @@
                 {#if hit.coding}<span class="data">{hit.coding}</span> · {/if}{hit.category}
               </span>
             </span>
+            <span class="caret" class:open aria-hidden="true">›</span>
           </button>
+          {#if open}
+            <div class="hit-detail" data-testid="search-hit-detail">
+              <EventDetail
+                effectiveAt={hit.event.event.effective_at}
+                kind={hit.event.event.kind}
+                code={hit.event.event.code ?? null}
+                value={describeEvent(hit.event.event).value}
+                source={hit.event.event.provenance.source}
+                sourceDoc={hit.event.event.provenance.source_doc}
+                category={categorize(hit.event.event)}
+                testid="search-event-detail"
+              />
+              <button
+                type="button"
+                class="open-timeline"
+                onclick={() => openHit(hit)}
+                data-testid="search-open-timeline"
+              >
+                Open in timeline →
+              </button>
+            </div>
+          {/if}
         </li>
       {/each}
     </ul>
@@ -274,6 +329,36 @@
   .more {
     font-size: var(--text-xs);
     margin-top: var(--space-3);
+  }
+
+  .hit-body {
+    flex: 1;
+  }
+
+  .caret {
+    flex: none;
+    align-self: center;
+    color: var(--muted);
+    transition: transform var(--duration-base) ease;
+  }
+
+  .caret.open {
+    transform: rotate(90deg);
+  }
+
+  .hit-detail {
+    padding: 0 var(--space-1) var(--space-3);
+  }
+
+  .open-timeline {
+    min-height: auto;
+    min-width: auto;
+    margin-top: var(--space-1);
+    padding: var(--space-1) 0;
+    border: none;
+    background: none;
+    color: var(--action);
+    font-size: var(--text-sm);
   }
 
   /* --- AI transcript (mirrors the old Ask screen) --- */

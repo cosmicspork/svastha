@@ -109,6 +109,11 @@
     ) {
       filter = 'all'
     }
+    // Expand the day-cap so the target day is actually rendered. Search hits and
+    // citations point at any event in the record; one older than the newest
+    // `visibleDays` never mounts, so nothing scrolls and you land at the top.
+    const idx = filteredDays.findIndex((d) => d.entries.some((e) => e.eventIds.includes(id)))
+    if (idx >= 0 && idx >= visibleDays) visibleDays = idx + 1
     const timer = setTimeout(() => focusedEventId.set(null), 4000)
     return () => clearTimeout(timer)
   })
