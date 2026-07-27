@@ -106,7 +106,9 @@ mirroring the web's posture.
   A's vault, by construction rather than by discipline.
 - **Admin commands.** An `admin_cmd` from an enrolled owner administers the node's
   work on *their* vault (design §2): `job_status` (this owner's index sizes, the
-  global OCR counters, and the last reconcile time — all content-free),
+  global OCR counters, the resolved OCR and chat model ids, and the last
+  reconcile time — all content-free; model ids are config, already stamped into
+  proposal provenance),
   `log_tail` (recent lines of the node's own content-free logs), and
   `set_inference_endpoint` (updates the runtime endpoint, persisted so it survives
   a restart — the override takes precedence over the env boot default; still
@@ -150,9 +152,11 @@ image tags.
 | `SVASTHA_RELAY_URL` | **yes** | Relay base URL. Never assumed — the node reaches it outbound. |
 | `SVASTHA_NODE_DATA_DIR` | no | Durable dir for the node identity (default `svastha-node/data`). |
 | `SVASTHA_NODE_CACHE_DIR` | no | Ephemeral decrypted-plaintext dir (default `svastha-node/cache`). |
-| `SVASTHA_NODE_INFERENCE_ENDPOINT` | no | OpenAI-compatible chat-completions endpoint (the **boot default** — a `set_inference_endpoint` admin command overrides it at runtime, persisted). Setting it **enables OCR and cited Q&A**. Must be synchronous — a Batch-API path is rejected (batch outputs are retained server-side). |
-| `SVASTHA_NODE_INFERENCE_MODEL` | when endpoint set | Chat-completions model id (a vision model for OCR) sent in every request. |
-| `SVASTHA_NODE_INFERENCE_API_KEY` | no | Inference API key; sent as a bearer token, never logged. |
+| `SVASTHA_NODE_INFERENCE_ENDPOINT` | no | Shared OpenAI-compatible chat-completions endpoint — the base both roles fall back to (the **boot default** — a `set_inference_endpoint` admin command overrides it at runtime, persisted). Setting it **enables OCR and cited Q&A**. Must be synchronous — a Batch-API path is rejected (batch outputs are retained server-side). |
+| `SVASTHA_NODE_INFERENCE_MODEL` | when an endpoint resolves | Shared model id sent in every request, unless a role overrides it below. |
+| `SVASTHA_NODE_INFERENCE_API_KEY` | no | Shared inference API key; sent as a bearer token, never logged. |
+| `SVASTHA_NODE_OCR_INFERENCE_ENDPOINT` / `_MODEL` / `_API_KEY` | no | Per-role override for **OCR** (reading pages — a vision model). Each falls back to the shared `SVASTHA_NODE_INFERENCE_*` value, so overriding just `_MODEL` is the common case. A role runs only when an endpoint resolves for it (its own or the shared base). |
+| `SVASTHA_NODE_CHAT_INFERENCE_ENDPOINT` / `_MODEL` / `_API_KEY` | no | Per-role override for **chat** (cited Q&A — an instruction model). Same shared fallback. Splitting the models lets one endpoint serve a vision model for OCR and a text model for answers (each does the other's job poorly); the endpoint/API key can split across providers too. |
 | `SVASTHA_NODE_BOOTSTRAP_ADDR` | no | Bootstrap-page bind address, **loopback only** (default `127.0.0.1:7071`). |
 | `SVASTHA_NODE_POLL_INTERVAL_SECS` | no | Fallback pull cadence when the SSE stream is down (default 60). |
 | `SVASTHA_NODE_LABEL` | no | Label shown in the identity code (default `svastha-node`). |

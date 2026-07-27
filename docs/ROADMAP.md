@@ -55,10 +55,6 @@ harvest a PR's "## Deferred" notes into the list.
 
 ## Processing node
 
-- RAG answers — the AI half of Search seals a question to the enrolled node's
-  mailbox, but the node does not yet retrieve-and-answer, so a sent question
-  stays "waiting". Ship the cited-answer path so the Search AI toggle has a
-  backend to light up.
 - Narrative-notes extraction — mine imported `doc-` prose for coded-event
   proposals (follow-up to OCR proposals)
 - Sender-sealed push notification hints — richer lock-screen text needs a
