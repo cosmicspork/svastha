@@ -19,6 +19,15 @@ import {
   type Codec,
 } from '../sync'
 import type { ConditionalBlob } from '../relay'
+import { pullShared } from '../shared'
+
+// Mock the sharing pull so a test can force it to reject; `teardownSharing`
+// (also imported by sync.ts) stays real. Default is a no-op, matching how the
+// real `pullShared` behaves with no accepted shares in this harness.
+vi.mock('../shared', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shared')>()),
+  pullShared: vi.fn(),
+}))
 
 // deleteDb() (not a raw indexedDB.deleteDatabase call) so the module's
 // memoized connection is closed and cleared between tests — same pattern as
@@ -461,6 +470,23 @@ describe('relay reachability + friendly errors', () => {
     const s = storeGet(syncStatus)
     expect(s.reachable).toBe(true)
     expect(s.lastError).toContain('500')
+  })
+
+  it('a sharing sub-step failure surfaces but does not silently abort the vault pull', async () => {
+    // Regression: `pullMailbox`/`pullShared` used to run unguarded after "Online"
+    // was set but before `lastPullAt`. A throw there — swallowed by the callers'
+    // `void pullAll()` — left the UI stuck on "Online, last pull never".
+    vi.mocked(pullShared).mockRejectedValueOnce(new Error('listShared: 500'))
+    syncStatus.update((s) => ({ ...s, lastPullAt: null, lastError: null }))
+    const relay = inMemoryBlobClient()
+    configure(relay, passthroughSealKey())
+    await pullAll()
+    const s = storeGet(syncStatus)
+    // The failure is now visible instead of silent…
+    expect(s.lastError).toContain('500')
+    // …and the core vault pull still counted as completed: `lastPullAt` is
+    // stamped, so the status no longer sticks on "last pull never".
+    expect(s.lastPullAt).not.toBeNull()
   })
 })
 

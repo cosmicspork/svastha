@@ -168,6 +168,11 @@ export async function enrollGrantee(params: EnrollParams): Promise<void> {
   })
 
   if (grantee.kind === 'node') {
-    await putProposer({ ed: grantee.ed, x25519: grantee.x25519, label: grantee.label })
+    // Stamp `kind: 'node'` so the proposer directory can tell the node apart
+    // from caregiver proposers. `nodeProposers` (nodeadmin.ts) filters on this,
+    // and it gates both the Ask surface (`enrolledNode`) and the inbound sender
+    // gate (`isEnrolledNode`) that accepts the node's answers — omitting it left
+    // the node invisible and its replies rejected.
+    await putProposer({ ed: grantee.ed, x25519: grantee.x25519, label: grantee.label, kind: 'node' })
   }
 }

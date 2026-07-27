@@ -13,6 +13,7 @@
 import { writable } from 'svelte/store'
 import { getAll, get, put } from './db'
 import { listProposers, type ProposerRecord } from './proposals'
+import { getGrantMeta } from './grants'
 
 const STORE = 'admin_log'
 const LAST_SEEN_KEY = 'node-last-seen'
@@ -71,7 +72,13 @@ export function sortNewestFirst(entries: AdminLogEntry[]): AdminLogEntry[] {
  * a question/command could have been sent to.
  */
 async function nodeProposers(): Promise<ProposerRecord[]> {
-  return (await listProposers()).filter((p) => p.kind === 'node')
+  const proposers = await listProposers()
+  // A node proposer carries `kind: 'node'`. Installs that enrolled before that
+  // stamp was written (the enroll path omitted it) have a `kind`-less record, so
+  // fall back to the grant metadata, which has always recorded the grantee kind.
+  // This heals an already-enrolled node at read time — no migration, no re-enrol.
+  const meta = await getGrantMeta()
+  return proposers.filter((p) => p.kind === 'node' || meta[p.ed]?.kind === 'node')
 }
 
 /**
