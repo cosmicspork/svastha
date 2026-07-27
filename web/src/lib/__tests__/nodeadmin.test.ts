@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { get as storeGet } from 'svelte/store'
 import { deleteDb } from '../db'
 import { putProposer } from '../proposals'
+import { putGrantMeta } from '../grants'
 import {
   adminLog,
   describeCommand,
@@ -54,6 +55,27 @@ describe('enrolledNode', () => {
     const node = await enrolledNode()
     expect(node?.ed).toBe(NODE)
     expect(node?.x25519).toBe(NODE_X)
+  })
+
+  it('heals a legacy node proposer stored without kind via grant metadata', async () => {
+    // Pre-fix installs wrote the node proposer without `kind`. On its own that
+    // record no longer resolves as a node…
+    await putProposer({ ed: NODE, x25519: NODE_X, label: 'Home node' })
+    expect(await enrolledNode()).toBeNull()
+    // …but the grant metadata always recorded kind:'node', so the directory read
+    // falls back to it and the node resolves — no re-enrol, no migration.
+    await putGrantMeta({
+      ed: NODE,
+      x25519: NODE_X,
+      label: 'Home node',
+      kind: 'node',
+      prefixes: ['ev-', 'att-', 'doc-', 'cur-'],
+      issuedAt: '2026-07-24T10:00:00Z',
+    })
+    expect((await enrolledNode())?.ed).toBe(NODE)
+    // The inbound sender gate heals through the same path, so the node's answers
+    // are accepted again.
+    expect(await isEnrolledNode(NODE)).toBe(true)
   })
 })
 

@@ -160,10 +160,14 @@ describe('enrollGrantee', () => {
       { ed: GRANTEE_ED, scope: { prefixes: NODE_PREFIXES, expires_at: 42 } },
     ])
     // The proposer directory C2's inbox seals replies to (node's X25519 + label).
+    // `kind: 'node'` must be stamped — nodeadmin's `nodeProposers` filters on it
+    // to gate both the Ask surface and the inbound sender gate for the node's
+    // answers; without it the node is invisible and its replies are dropped.
     expect(await getProposer(GRANTEE_ED)).toEqual({
       ed: GRANTEE_ED,
       x25519: GRANTEE_X,
       label: 'My node',
+      kind: 'node',
     })
   })
 })

@@ -604,9 +604,19 @@ export async function pullAll(): Promise<void> {
 
   // Sharing rides the same pull cycle: consume the mailbox (invites + proposal
   // inbox) once, then pull whatever accepted shares have new events, after this
-  // device's own pull/push reconcile above.
-  await pullMailbox()
-  await pullShared()
+  // device's own pull/push reconcile above. A failure here must not abort the
+  // whole pull: callers invoke `pullAll` fire-and-forget (`void pullAll()`), so
+  // an unguarded throw here is swallowed with no UI surface — and because it
+  // lands after `noteContact()` set "Online" but before `lastPullAt` below, it
+  // left the status stuck on "Online, last pull never" with no error. Route it
+  // through `noteFailure` like the per-blob loop, so the core vault pull above
+  // still counts as completed and the sharing error is visible instead of silent.
+  try {
+    await pullMailbox()
+    await pullShared()
+  } catch (err) {
+    noteFailure(err)
+  }
 
   patchStatus({ lastPullAt: new Date().toISOString() })
 }
