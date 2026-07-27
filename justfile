@@ -21,6 +21,10 @@ web-build:
 web-check:
     cd web && bun run check
 
+# regenerate the app icon SVGs and PNGs from src/lib/mark.ts (manual; commit the output)
+web-icons:
+    cd web && bun run icons
+
 # --- rust workspace (core, relay, node) ---
 
 build:
