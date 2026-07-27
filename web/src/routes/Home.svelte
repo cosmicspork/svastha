@@ -1,12 +1,20 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { get, getAll } from '../lib/db'
+  import { get } from '../lib/db'
   import { navigate } from '../lib/router.svelte'
   import { fingerprint } from '../lib/exchange'
   import { allEvents, type StoredEvent } from '../lib/events'
-  import { pendingRecords, type ProposalRecord } from '../lib/proposals'
   import { relativeTime } from '../lib/time'
-  import { BP_SYSTOLIC, BP_DIASTOLIC } from '../lib/codes'
+  import {
+    recentActivity,
+    vitalGlances,
+    recentSymptoms,
+    medicationGlance,
+    type ActivityItem,
+    type VitalGlance,
+    type SymptomGlance,
+    type MedsGlance,
+  } from '../lib/glance'
   import {
     listShares,
     acceptInvite,
@@ -23,11 +31,15 @@
   let showInstallSheet = $state(false)
 
   // Glanceable dashboard stats, computed cheaply from raw events (no curation
-  // load — the full clinical read lives on the Summary page).
+  // load — the full clinical read lives on the Summary page). An empty array or
+  // a zero count hides that card entirely (see markup), and each vital falls
+  // back to its latest reading when there isn't a week of data.
   let entryCount = $state(0)
   let lastLoggedAt = $state<string | null>(null)
-  let latestBp = $state<string | null>(null)
-  let pendingProposals = $state(0)
+  let activity = $state<ActivityItem[]>([])
+  let vitals = $state<VitalGlance[]>([])
+  let symptoms = $state<SymptomGlance[]>([])
+  let meds = $state<MedsGlance>({ count: 0, names: [] })
 
   onMount(async () => {
     const stored = await get<'a' | 'b'>('prefs', 'hue')
@@ -37,13 +49,10 @@
     const events = await allEvents()
     entryCount = events.length
     lastLoggedAt = newestEffectiveAt(events)
-    latestBp = latestBloodPressure(events)
-
-    const proposals = await getAll<ProposalRecord>('proposals')
-    pendingProposals = pendingRecords(proposals).reduce(
-      (n, r) => n + r.drafts.filter((d) => d.status === 'pending').length,
-      0,
-    )
+    activity = recentActivity(events)
+    vitals = vitalGlances(events)
+    symptoms = recentSymptoms(events)
+    meds = medicationGlance(events)
   })
 
   function newestEffectiveAt(events: StoredEvent[]): string | null {
@@ -53,22 +62,6 @@
       if (at && (!newest || at > newest)) newest = at
     }
     return newest
-  }
-
-  function newestQuantity(events: StoredEvent[], code: string): { value: string; at: string | null } | null {
-    let best: { value: string; at: string | null } | null = null
-    for (const { event } of events) {
-      if (event.code?.code !== code || !event.value || !('quantity' in event.value)) continue
-      const at = event.effective_at
-      if (!best || (at && (!best.at || at > best.at))) best = { value: event.value.quantity.value, at }
-    }
-    return best
-  }
-
-  function latestBloodPressure(events: StoredEvent[]): string | null {
-    const sys = newestQuantity(events, BP_SYSTOLIC.code)
-    const dia = newestQuantity(events, BP_DIASTOLIC.code)
-    return sys && dia ? `${sys.value}/${dia.value}` : null
   }
 
   // Separate from the above so a slow install-nudge read never delays the
@@ -147,39 +140,86 @@
 </section>
 
 <section>
-  <h2 class="eyebrow">At a glance</h2>
-  <div class="cards">
-    {#if latestBp}
-      <div class="card" data-testid="glance-bp">
-        <span class="k">Latest BP</span>
-        <span class="v" style:color="var(--cat-vital)">{latestBp}</span>
-      </div>
-    {/if}
-    <div class="card" data-testid="glance-entries">
-      <span class="k">Entries</span>
-      <span class="v">{entryCount}</span>
-    </div>
-    <button class="card tappable" onclick={() => navigate('#/proposals')} data-testid="glance-proposals">
-      <span class="k">Proposals</span>
-      <span class="v" style:color={pendingProposals > 0 ? 'var(--flare)' : undefined}>
-        {pendingProposals}<span class="unit"> waiting</span>
-      </span>
+  <div class="links">
+    <button class="ghost link-btn" onclick={() => navigate('#/correlate')} data-testid="nav-correlate">
+      <span aria-hidden="true">◈</span> Patterns
     </button>
-    <button class="card tappable" onclick={() => navigate('#/share')} data-testid="glance-shared">
-      <span class="k">Shared with you</span>
-      <span class="v">{shares.length}</span>
+    <button class="ghost link-btn" onclick={() => navigate('#/share')} data-testid="nav-share">
+      <span aria-hidden="true">◉</span> Sharing
     </button>
   </div>
 </section>
 
-<section class="links">
-  <button class="ghost link-btn" onclick={() => navigate('#/correlate')} data-testid="nav-correlate">
-    <span aria-hidden="true">◈</span> Patterns
-  </button>
-  <button class="ghost link-btn" onclick={() => navigate('#/share')} data-testid="nav-share">
-    <span aria-hidden="true">◉</span> Sharing
-  </button>
-</section>
+{#if activity.length > 0 || vitals.length > 0 || symptoms.length > 0 || meds.count > 0}
+  <section>
+    <h2 class="eyebrow">At a glance</h2>
+    <div class="cards">
+      {#if activity.length > 0}
+        <div class="card wide" data-testid="glance-activity">
+          <span class="k">Recently logged</span>
+          <ul class="loglist">
+            {#each activity as item (item.id)}
+              <li>
+                <span class="cdot" style:background={`var(--cat-${item.category})`}></span>
+                <span class="llabel">{item.label}</span>
+                {#if item.value}<span class="lvalue data">{item.value}</span>{/if}
+                <span class="lago">{relativeTime(item.atIso)}</span>
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
+
+      {#if vitals.length > 0}
+        <div class="card wide" data-testid="glance-vitals">
+          <span class="k">Vitals</span>
+          <div class="vitals">
+            {#each vitals as v (v.key)}
+              <div class="vit">
+                <span class="vk">{v.label}</span>
+                <span class="vv">
+                  {v.value}{#if v.unit} <span class="vu">{v.unit}</span>{/if}
+                  {#if v.trend}
+                    <span class="trend {v.trend}" aria-hidden="true"
+                      >{v.trend === 'down' ? '↓' : v.trend === 'up' ? '↑' : '→'}</span
+                    >
+                  {/if}
+                </span>
+                <span class="vsub">{v.basis === 'avg' ? '7-day avg' : 'latest'}</span>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      {#if symptoms.length > 0}
+        <button
+          class="card wide tappable"
+          onclick={() => navigate('#/correlate')}
+          data-testid="glance-symptoms"
+        >
+          <span class="k">Recent symptoms · 14 days</span>
+          <span class="chips">
+            {#each symptoms as s (s.label)}
+              <span class="chip">
+                <span class="cdot" style:background="var(--cat-symptom)"></span>{s.label}{#if s.severity !== null}
+                  <span class="sev">{s.severity}</span>{/if}
+              </span>
+            {/each}
+          </span>
+        </button>
+      {/if}
+
+      {#if meds.count > 0}
+        <button class="card tappable" onclick={() => navigate('#/summary')} data-testid="glance-meds">
+          <span class="k">Medications</span>
+          <span class="v">{meds.count}</span>
+          <span class="vsub">{meds.names.join(' · ')}</span>
+        </button>
+      {/if}
+    </div>
+  </section>
+{/if}
 
 {#if showInstallSheet}
   <InstallSheet onclose={dismissAndClose} />
@@ -325,15 +365,144 @@
     line-height: 1;
   }
 
-  .card .v .unit {
-    font-family: var(--font-body);
+  .card.wide {
+    grid-column: 1 / -1;
+  }
+
+  /* Recently logged */
+  .loglist {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .loglist li {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .loglist li:first-child {
+    border-top: none;
+  }
+
+  .cdot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex: none;
+  }
+
+  .llabel {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .lvalue {
     font-size: var(--text-sm);
+  }
+
+  .lago {
+    flex: none;
+    font-size: var(--text-xs);
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  /* Vitals: up to 3 per row, centered; wraps to new centered rows for more. */
+  .vitals {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--space-4);
+  }
+
+  .vit {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1 1 84px;
+    max-width: calc((100% - 2 * var(--space-4)) / 3);
+  }
+
+  .vk {
+    font-family: var(--font-data);
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+  }
+
+  .vv {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 4px;
+    font-family: var(--font-display);
+    font-size: var(--text-xl);
+    line-height: 1.1;
+  }
+
+  .vu {
+    font-family: var(--font-body);
+    font-size: var(--text-xs);
+    color: var(--muted);
+  }
+
+  .trend {
+    font-family: var(--font-data);
+    font-size: var(--text-sm);
+  }
+
+  .trend.down {
+    color: var(--cat-exercise);
+  }
+
+  .trend.up {
+    color: var(--flare);
+  }
+
+  .trend.flat {
+    color: var(--muted);
+  }
+
+  .vsub {
+    font-size: var(--text-xs);
+    color: var(--muted);
+  }
+
+  /* Recent symptoms */
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 4px var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    font-size: var(--text-sm);
+  }
+
+  .sev {
+    font-family: var(--font-data);
+    font-size: var(--text-xs);
     color: var(--muted);
   }
 
   .links {
     display: flex;
     gap: var(--space-2);
+    margin-top: var(--space-3);
   }
 
   .link-btn {
