@@ -13,7 +13,8 @@
   // Hidden while already on the search screen.
   const showSearch = $derived(route.path !== '/search')
   function openSearch(): void {
-    navigate(route.path === '/person/:ed' ? `#/search?person=${route.params.ed}` : '#/search')
+    const person = route.path.startsWith('/person/') ? route.params.ed : undefined
+    navigate(person ? `#/search?person=${person}` : '#/search')
   }
 
   let sheetOpen = $state(false)
