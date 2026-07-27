@@ -1,8 +1,8 @@
 <script lang="ts">
   import { CATEGORY_META } from '../lib/category'
-  import { shortenSystem } from '../lib/codes'
-  import { formatTime, formatDay, dayKey } from '../lib/time'
+  import { formatTime } from '../lib/time'
   import type { TimelineEntry } from '../lib/timeline'
+  import EventDetail from './EventDetail.svelte'
   import Menu, { type MenuItem } from './Menu.svelte'
   import TagEditor from './TagEditor.svelte'
 
@@ -78,15 +78,8 @@
   function isLongNote(text: string): boolean {
     return text.split('\n').length > 3 || text.length > 200
   }
-  // First 8 + last 4 hex chars: enough to eyeball-match against another
-  // device without printing the full 64-char sha256 inline.
-  function shortenSha(sha: string): string {
-    return sha.length <= 14 ? sha : `${sha.slice(0, 8)}…${sha.slice(-4)}`
-  }
   const stubId = $derived(`stub-${primaryEventId}`)
   const detail = $derived(entry.detail)
-  const humanKind = $derived(detail.kind.replace(/_/g, ' '))
-  const recordedDay = $derived(formatDay(dayKey(entry.effective_at)))
   const recordedTime = $derived(formatTime(entry.effective_at))
 
   // The overflow menu: a discoverable, screen-reader-friendly second entry
@@ -188,84 +181,37 @@
        animates); collapsed to 0fr until open. -->
   <div class="stub-wrap" class:open={expanded}>
     <div class="stub-inner">
-      <dl
+      <EventDetail
         id={stubId}
-        class="stub"
-        style:border-left-color={`var(--cat-${entry.category})`}
-        data-testid="spine-entry-stub"
+        testid="spine-entry-stub"
+        effectiveAt={entry.effective_at}
+        kind={detail.kind}
+        code={detail.code}
+        value={entry.value ?? ''}
+        source={detail.source}
+        sourceDoc={detail.sourceDoc}
+        category={entry.category}
+        {onOpenSourceDoc}
       >
-        <div class="stub-row">
-          <dt>Recorded</dt>
-          <dd>
-            {recordedDay}{#if recordedTime}, {recordedTime}{:else}
-              <em class="muted">no time in source</em>{/if}
-          </dd>
-        </div>
-        <div class="stub-row">
-          <dt>Kind</dt>
-          <dd>{humanKind}</dd>
-        </div>
-        {#if detail.code}
-          <div class="stub-row">
-            <dt>Code</dt>
-            <dd class="code data">
-              {shortenSystem(detail.code.system)}
-              {detail.code.code}
-              {#if detail.code.display}{detail.code.display}{:else}<em class="muted"
-                  >no display name in source</em
-                >{/if}
-            </dd>
-          </div>
-        {/if}
-        {#if entry.value}
-          <div class="stub-row">
-            <dt>Result</dt>
-            <dd class="data">{entry.value}</dd>
-          </div>
-        {/if}
-        {#if detail.source}
-          <div class="stub-row">
-            <dt>Source</dt>
-            <dd>{detail.source}</dd>
-          </div>
-        {/if}
-        {#if detail.sourceDoc}
-          <div class="stub-row">
-            <dt>Document</dt>
-            {#if onOpenSourceDoc}
-              <dd class="doc-cell">
+        {#snippet children()}
+          {#each entry.notes as note, i (note.eventIds[0])}
+            <div class="note" data-testid="spine-entry-note">
+              <p class="note-title">{note.label}</p>
+              <p class="note-body" class:clamped={!expandedNotes.has(i)}>{note.text}</p>
+              {#if isLongNote(note.text)}
                 <button
                   type="button"
-                  class="source-doc tonal"
-                  onclick={onOpenSourceDoc}
-                  data-testid="spine-entry-source-doc"
+                  class="read-more"
+                  onclick={() => toggleNote(i)}
+                  data-testid="spine-entry-note-readmore"
                 >
-                  View source document
+                  {expandedNotes.has(i) ? 'Read less' : 'Read more'}
                 </button>
-                <span class="doc data muted">{shortenSha(detail.sourceDoc)}</span>
-              </dd>
-            {:else}
-              <dd class="doc data">{detail.sourceDoc}</dd>
-            {/if}
-          </div>
-        {/if}
-        {#each entry.notes as note, i (note.eventIds[0])}
-          <div class="note" data-testid="spine-entry-note">
-            <p class="note-title">{note.label}</p>
-            <p class="note-body" class:clamped={!expandedNotes.has(i)}>{note.text}</p>
-            {#if isLongNote(note.text)}
-              <button
-                type="button"
-                class="read-more"
-                onclick={() => toggleNote(i)}
-                data-testid="spine-entry-note-readmore"
-              >
-                {expandedNotes.has(i) ? 'Read less' : 'Read more'}
-              </button>
-            {/if}
-          </div>
-        {/each}
-      </dl>
+              {/if}
+            </div>
+          {/each}
+        {/snippet}
+      </EventDetail>
     </div>
   </div>
   {#if editingTags}
@@ -451,59 +397,6 @@
   .stub-inner {
     min-height: 0;
     overflow: hidden;
-  }
-
-  .stub {
-    margin: var(--space-1) 0 var(--space-3);
-    padding: var(--space-3);
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-    background: color-mix(in srgb, var(--surface) 55%, var(--bg));
-    border: 1px solid var(--border);
-    /* left rule is the category hue (color set inline); the widened side only */
-    border-left-width: 2px;
-    border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
-    font-family: var(--font-body);
-  }
-
-  .stub-row {
-    display: flex;
-    gap: var(--space-3);
-  }
-
-  .stub dt {
-    flex: none;
-    width: 6rem;
-    font-size: var(--text-xs);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--muted);
-  }
-
-  .stub dd {
-    margin: 0;
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-
-  .doc-cell {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: var(--space-1);
-  }
-
-  .source-doc {
-    min-height: auto;
-    min-width: auto;
-    padding: var(--space-1) var(--space-3);
-    color: var(--action);
-    font-size: var(--text-sm);
-  }
-
-  .stub .data {
-    font-size: var(--text-sm);
   }
 
   /* A folded visit note (or a standalone note's own prose): a full-width block,

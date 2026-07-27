@@ -5,6 +5,7 @@ import {
   prettyTextForDoc,
   getProvenance,
   provenanceBytes,
+  friendlySource,
   MAX_RENDERED_TEXT_BYTES,
 } from '../provenance'
 import type { ProvenanceRecord } from '../provenance'
@@ -85,5 +86,30 @@ describe('getProvenance / provenanceBytes', () => {
   it('returns undefined/null on a miss (never synced to this device)', async () => {
     expect(await getProvenance('b'.repeat(64))).toBeUndefined()
     expect(await provenanceBytes('b'.repeat(64))).toBeNull()
+  })
+})
+
+describe('friendlySource', () => {
+  it('names self-logged events', () => {
+    expect(friendlySource('self')).toBe('Logged by you')
+  })
+
+  it('names imports by their document, dropping the extension', () => {
+    expect(friendlySource('import:Mercy Health.xml')).toBe('Imported from Mercy Health')
+    expect(friendlySource('import:bundle.json')).toBe('Imported from bundle')
+  })
+
+  it('handles an import with no name', () => {
+    expect(friendlySource('import:')).toBe('Imported')
+  })
+
+  it('falls back for empty or unknown sources', () => {
+    expect(friendlySource('')).toBe('Unknown source')
+    expect(friendlySource(null)).toBe('Unknown source')
+    expect(friendlySource(undefined)).toBe('Unknown source')
+  })
+
+  it('shows an unrecognised source verbatim', () => {
+    expect(friendlySource('node:abc')).toBe('node:abc')
   })
 })
