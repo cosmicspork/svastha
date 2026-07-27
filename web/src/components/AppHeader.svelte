@@ -136,9 +136,15 @@
     color: var(--muted);
   }
 
-  .icon-btn:hover {
-    border-color: transparent;
-    color: var(--text);
+  /* Only real (mouse/trackpad) pointers get the hover brighten. On touch, iOS
+     keeps :hover stuck on the last-tapped control, so tapping the cog into
+     Settings and back left the cog brighter than the bell and search. Gating on
+     the hover media feature keeps touch neutral and all three icons equal. */
+  @media (hover: hover) {
+    .icon-btn:hover {
+      border-color: transparent;
+      color: var(--text);
+    }
   }
 
   .badge {
