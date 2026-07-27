@@ -98,13 +98,17 @@ pub fn run(config: Config, logs: LogBuffer) -> Result<()> {
     // and can be reconfigured live by an admin command. The journal is the one
     // durable state besides the identity — content-free by construction (see
     // `journal`); it lives in the data dir so idempotence survives a restart.
-    let mut inference = InferenceRuntime::load(config.inference.clone(), &config.data_dir);
+    let mut inference = InferenceRuntime::load(
+        config.ocr_inference.clone(),
+        config.chat_inference.clone(),
+        &config.data_dir,
+    );
     let mut journal = Journal::load(&config.data_dir);
-    if inference.client().is_some() {
-        tracing::info!("inference enabled: endpoint configured (OCR + cited Q&A)");
-    } else {
-        tracing::info!("inference disabled: no endpoint configured (admin can set one)");
-    }
+    tracing::info!(
+        ocr = inference.ocr_client().is_some(),
+        chat = inference.chat_client().is_some(),
+        "inference roles configured (each runs only when its endpoint is set; admin can set one)"
+    );
 
     spawn_bootstrap(&config, &code, &identity, state.clone());
 
@@ -218,7 +222,7 @@ fn reconcile(
     // available — a question the node cannot yet answer waits in the mailbox
     // rather than getting a fake reply.
     if drain_mailbox {
-        if let Some(client_inf) = inference.client() {
+        if let Some(client_inf) = inference.chat_client() {
             match chat::run(client, state, client_inf, journal) {
                 Ok(r) if r.answered + r.cant_answer + r.dropped + r.deferred + r.ignored > 0 => {
                     tracing::info!(
@@ -239,7 +243,7 @@ fn reconcile(
     // OCR the newly-synced pages into proposals (design §7). Idempotent across
     // ticks and restarts via the journal, so running it on every reconcile is
     // cheap — an already-processed page short-circuits.
-    if let Some(client_inf) = inference.client() {
+    if let Some(client_inf) = inference.ocr_client() {
         match ocr::run(client, cache, state, client_inf, journal) {
             Ok(r)
                 if r.proposals + r.empties + r.failed + r.resolved > 0

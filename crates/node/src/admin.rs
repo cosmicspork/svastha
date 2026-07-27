@@ -188,14 +188,14 @@ fn job_status_detail(
         .last_reconcile()
         .map(|s| s.to_string())
         .unwrap_or_else(|| "never".to_string());
-    let inference = if inference.endpoint().is_some() {
-        "configured"
-    } else {
-        "none"
-    };
+    // Per-role model id (config, not record content — already stamped into
+    // provenance and shown in the PWA), or "none" when that role has no endpoint.
+    let ocr = inference.ocr_client().map(|c| c.model()).unwrap_or("none");
+    let chat = inference.chat_client().map(|c| c.model()).unwrap_or("none");
     format!(
         "vault: events={events} attachments={attachments} docs={docs} curation={curation} | \
-         ocr: queued={} processed={} failed={} | inference: {inference} | last_reconcile={last}",
+         ocr: queued={} processed={} failed={} | inference: ocr-model={ocr} chat-model={chat} | \
+         last_reconcile={last}",
         jobs.queued, jobs.processed, jobs.failed
     )
 }

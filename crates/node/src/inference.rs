@@ -156,29 +156,38 @@ impl InferenceClient {
     }
 }
 
-/// The runtime inference target, mutable by the `set_inference_endpoint` admin
-/// command (design §9). It owns the live [`InferenceClient`] the OCR and RAG
-/// passes use, and resolves the **effective endpoint** from two sources:
+/// The runtime inference target for both roles, mutable by the
+/// `set_inference_endpoint` admin command (design §9). It owns the live
+/// [`InferenceClient`]s the OCR (vision) and chat (RAG) passes use — each with
+/// its own model and API key from the boot config — and resolves the effective
+/// endpoint per role.
 ///
 /// **Precedence: a persisted runtime override wins over the env boot default.**
-/// The env (`SVASTHA_NODE_INFERENCE_ENDPOINT`) is only the *boot* default; once an
-/// owner sets an endpoint over the mailbox it is written to the data dir and
-/// re-read at boot, so the override survives a restart and takes precedence. Only
-/// the *endpoint* is overridable — the model and API key always come from the boot
-/// config (the `admin_cmd` carries only an endpoint), so an override needs a boot
-/// config to borrow them from: without one there is no model, and setting an
-/// endpoint alone is rejected.
+/// The env is only the *boot* default; once an owner sets an endpoint over the
+/// mailbox it is written to the data dir and re-read at boot, so the override
+/// survives a restart and takes precedence. The `admin_cmd` carries only a single
+/// endpoint, so the override is **node-wide**: it retargets both roles' endpoints
+/// at once, while each role keeps its own boot model and API key. An override
+/// needs at least one boot role config to borrow a model from — setting an
+/// endpoint on a node with no inference model configured is rejected. (Splitting
+/// the two roles across *different* endpoints is a boot-env choice; a per-role
+/// live override would need a wider admin command.)
 pub struct InferenceRuntime {
-    /// The env boot config (model + API key + boot endpoint), or `None` if the
-    /// operator configured no inference at boot.
-    boot: Option<InferenceConfig>,
-    /// Where the endpoint override persists (data dir).
+    /// OCR-role boot config (vision model + key + endpoint), or `None`.
+    ocr_boot: Option<InferenceConfig>,
+    /// Chat-role boot config (text model + key + endpoint), or `None`.
+    chat_boot: Option<InferenceConfig>,
+    /// Where the node-wide endpoint override persists (data dir).
     override_path: PathBuf,
-    /// The live client for the effective endpoint, or `None` when no inference is
-    /// usable (no boot config to supply a model).
-    current: Option<InferenceClient>,
-    /// The effective endpoint the current client targets (for status echoes).
-    current_endpoint: Option<String>,
+    /// Live OCR client for the effective endpoint, or `None` when OCR inference
+    /// is not usable (no OCR boot config to supply a model).
+    ocr_current: Option<InferenceClient>,
+    /// Live chat client for the effective endpoint, or `None` when chat inference
+    /// is not usable (no chat boot config to supply a model).
+    chat_current: Option<InferenceClient>,
+    /// The effective endpoint each live client targets (for status echoes).
+    ocr_endpoint: Option<String>,
+    chat_endpoint: Option<String>,
 }
 
 /// The persisted endpoint override — a single URL. Config, not record content, so
@@ -191,44 +200,63 @@ struct EndpointOverride {
 const OVERRIDE_FILE: &str = "inference-endpoint.json";
 
 impl InferenceRuntime {
-    /// Build the runtime from the boot config and the data dir. Reads any
-    /// persisted override and resolves the effective endpoint (override over env).
-    pub fn load(boot: Option<InferenceConfig>, data_dir: &Path) -> Self {
+    /// Build the runtime from the two role boot configs and the data dir. Reads
+    /// any persisted override and resolves each role's effective endpoint.
+    pub fn load(
+        ocr_boot: Option<InferenceConfig>,
+        chat_boot: Option<InferenceConfig>,
+        data_dir: &Path,
+    ) -> Self {
         let override_path = data_dir.join(OVERRIDE_FILE);
         let overridden = read_override(&override_path);
         let mut rt = Self {
-            boot,
+            ocr_boot,
+            chat_boot,
             override_path,
-            current: None,
-            current_endpoint: None,
+            ocr_current: None,
+            chat_current: None,
+            ocr_endpoint: None,
+            chat_endpoint: None,
         };
         rt.rebuild(overridden);
         rt
     }
 
-    /// The live client, if inference is usable. `None` means no endpoint is
-    /// configured (chat and OCR simply do not run — a question waits rather than
-    /// getting a fake answer, mirroring the web's honest waiting state).
-    pub fn client(&self) -> Option<&InferenceClient> {
-        self.current.as_ref()
+    /// The live OCR (vision) client, if OCR inference is usable. `None` means the
+    /// OCR pass does not run (a page waits rather than getting a fake extraction).
+    pub fn ocr_client(&self) -> Option<&InferenceClient> {
+        self.ocr_current.as_ref()
     }
 
-    /// The effective endpoint URL, for the `job_status` echo. `None` when unset.
-    pub fn endpoint(&self) -> Option<&str> {
-        self.current_endpoint.as_deref()
+    /// The live chat (RAG) client, if chat inference is usable. `None` means the
+    /// chat pass does not run (a question waits rather than getting a fake answer,
+    /// mirroring the web's honest waiting state).
+    pub fn chat_client(&self) -> Option<&InferenceClient> {
+        self.chat_current.as_ref()
+    }
+
+    /// The effective OCR endpoint URL, for the `job_status` echo. `None` when unset.
+    pub fn ocr_endpoint(&self) -> Option<&str> {
+        self.ocr_endpoint.as_deref()
+    }
+
+    /// The effective chat endpoint URL, for the `job_status` echo. `None` when unset.
+    pub fn chat_endpoint(&self) -> Option<&str> {
+        self.chat_endpoint.as_deref()
     }
 
     /// Apply a `set_inference_endpoint` command: validate the endpoint against the
     /// same design-§8 hard constraints boot uses (synchronous, non-batch), then
-    /// swap the live client and persist the override. Returns a human-readable
-    /// detail on success, or the validation/precondition message to send back as
-    /// `ok: false` — never a panic, so a bad value just fails the command.
+    /// swap **both** live clients (node-wide) and persist the override. Returns a
+    /// human-readable detail on success, or the validation/precondition message to
+    /// send back as `ok: false` — never a panic, so a bad value just fails the
+    /// command.
     pub fn set_endpoint(&mut self, endpoint: &str) -> Result<String, String> {
         let endpoint = endpoint.trim().to_string();
         validate_inference_endpoint(&endpoint)?;
-        // The command carries only an endpoint; the model/API key come from the
-        // boot config, so without one there is nothing to run against.
-        if self.boot.is_none() {
+        // The command carries only an endpoint; each role's model/API key come
+        // from its boot config, so without any role there is nothing to run.
+        if self.ocr_boot.is_none() && self.chat_boot.is_none() {
             return Err(
                 "no inference model configured at boot (SVASTHA_NODE_INFERENCE_MODEL); \
                  an endpoint alone cannot run"
@@ -241,22 +269,16 @@ impl InferenceRuntime {
         Ok(format!("inference endpoint updated to {endpoint}"))
     }
 
-    /// Rebuild the live client for the given override (or the boot default when
-    /// `None`). The model and key always come from the boot config.
+    /// Rebuild both live clients for the given node-wide override (or each role's
+    /// boot endpoint when `None`). The model and key always come from the role's
+    /// own boot config.
     fn rebuild(&mut self, overridden: Option<String>) {
-        let Some(boot) = &self.boot else {
-            self.current = None;
-            self.current_endpoint = None;
-            return;
-        };
-        let endpoint = overridden.unwrap_or_else(|| boot.endpoint.clone());
-        let config = InferenceConfig {
-            endpoint: endpoint.clone(),
-            api_key: boot.api_key.clone(),
-            model: boot.model.clone(),
-        };
-        self.current = Some(InferenceClient::new(&config));
-        self.current_endpoint = Some(endpoint);
+        let (ocr_current, ocr_endpoint) = build_client(&self.ocr_boot, overridden.as_deref());
+        let (chat_current, chat_endpoint) = build_client(&self.chat_boot, overridden.as_deref());
+        self.ocr_current = ocr_current;
+        self.ocr_endpoint = ocr_endpoint;
+        self.chat_current = chat_current;
+        self.chat_endpoint = chat_endpoint;
     }
 
     fn persist_override(&self, endpoint: &str) -> std::io::Result<()> {
@@ -288,6 +310,27 @@ fn read_override(path: &Path) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Build a role's live client: the effective endpoint is the node-wide override
+/// when set, else the role's own boot endpoint; the model and API key always come
+/// from the boot config. Returns `(None, None)` for a role with no boot config.
+fn build_client(
+    boot: &Option<InferenceConfig>,
+    overridden: Option<&str>,
+) -> (Option<InferenceClient>, Option<String>) {
+    let Some(boot) = boot else {
+        return (None, None);
+    };
+    let endpoint = overridden
+        .map(str::to_string)
+        .unwrap_or_else(|| boot.endpoint.clone());
+    let config = InferenceConfig {
+        endpoint: endpoint.clone(),
+        api_key: boot.api_key.clone(),
+        model: boot.model.clone(),
+    };
+    (Some(InferenceClient::new(&config)), Some(endpoint))
 }
 
 /// Resolve the configured base (e.g. `https://host/v1`) to the chat-completions
@@ -366,48 +409,89 @@ mod tests {
         }
     }
 
-    #[test]
-    fn runtime_uses_boot_endpoint_with_no_override() {
-        let dir = tempfile::tempdir().unwrap();
-        let rt = InferenceRuntime::load(Some(boot("https://boot/v1")), dir.path());
-        assert_eq!(rt.endpoint(), Some("https://boot/v1"));
-        assert!(rt.client().is_some());
+    /// A boot config with an explicit model, to prove per-role model routing.
+    fn boot_model(endpoint: &str, model: &str) -> InferenceConfig {
+        InferenceConfig {
+            endpoint: endpoint.to_string(),
+            api_key: None,
+            model: model.to_string(),
+        }
     }
 
     #[test]
-    fn set_endpoint_overrides_and_persists_over_the_boot_default() {
+    fn each_role_uses_its_own_boot_endpoint_and_model() {
         let dir = tempfile::tempdir().unwrap();
-        let mut rt = InferenceRuntime::load(Some(boot("https://boot/v1")), dir.path());
-        rt.set_endpoint("https://override/v1").unwrap();
-        assert_eq!(rt.endpoint(), Some("https://override/v1"));
-
-        // A restart (fresh load from the same dir) keeps the override — it wins
-        // over the env boot default.
-        let rt2 = InferenceRuntime::load(Some(boot("https://boot/v1")), dir.path());
-        assert_eq!(
-            rt2.endpoint(),
-            Some("https://override/v1"),
-            "persisted override takes precedence over the boot default"
+        let rt = InferenceRuntime::load(
+            Some(boot_model("https://vision/v1", "vision-model")),
+            Some(boot_model("https://chat/v1", "chat-model")),
+            dir.path(),
         );
+        assert_eq!(rt.ocr_endpoint(), Some("https://vision/v1"));
+        assert_eq!(rt.chat_endpoint(), Some("https://chat/v1"));
+        assert_eq!(rt.ocr_client().map(|c| c.model()), Some("vision-model"));
+        assert_eq!(rt.chat_client().map(|c| c.model()), Some("chat-model"));
+    }
+
+    #[test]
+    fn a_role_with_no_boot_config_is_disabled_while_the_other_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        // Chat-only: OCR has no boot config, so its pass never runs.
+        let rt = InferenceRuntime::load(None, Some(boot("https://chat/v1")), dir.path());
+        assert!(rt.ocr_client().is_none());
+        assert!(rt.chat_client().is_some());
+    }
+
+    #[test]
+    fn set_endpoint_retargets_both_roles_but_keeps_per_role_models() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut rt = InferenceRuntime::load(
+            Some(boot_model("https://vision/v1", "vision-model")),
+            Some(boot_model("https://chat/v1", "chat-model")),
+            dir.path(),
+        );
+        rt.set_endpoint("https://override/v1").unwrap();
+        // The node-wide override retargets both endpoints…
+        assert_eq!(rt.ocr_endpoint(), Some("https://override/v1"));
+        assert_eq!(rt.chat_endpoint(), Some("https://override/v1"));
+        // …while each role keeps its own model and API key.
+        assert_eq!(rt.ocr_client().map(|c| c.model()), Some("vision-model"));
+        assert_eq!(rt.chat_client().map(|c| c.model()), Some("chat-model"));
+
+        // A restart (fresh load from the same dir) keeps the override.
+        let rt2 = InferenceRuntime::load(
+            Some(boot("https://vision/v1")),
+            Some(boot("https://chat/v1")),
+            dir.path(),
+        );
+        assert_eq!(rt2.ocr_endpoint(), Some("https://override/v1"));
+        assert_eq!(rt2.chat_endpoint(), Some("https://override/v1"));
     }
 
     #[test]
     fn set_endpoint_rejects_a_batch_path_without_swapping() {
         let dir = tempfile::tempdir().unwrap();
-        let mut rt = InferenceRuntime::load(Some(boot("https://boot/v1")), dir.path());
+        let mut rt = InferenceRuntime::load(
+            Some(boot("https://boot/v1")),
+            Some(boot("https://boot/v1")),
+            dir.path(),
+        );
         let err = rt.set_endpoint("https://api/v1/batch").unwrap_err();
         assert!(err.contains("Batch"), "batch rejection message surfaced");
         // Rejected value never becomes live.
-        assert_eq!(rt.endpoint(), Some("https://boot/v1"));
+        assert_eq!(rt.ocr_endpoint(), Some("https://boot/v1"));
+        assert_eq!(rt.chat_endpoint(), Some("https://boot/v1"));
     }
 
     #[test]
-    fn set_endpoint_without_a_boot_model_is_refused() {
+    fn set_endpoint_without_any_boot_model_is_refused() {
         let dir = tempfile::tempdir().unwrap();
-        let mut rt = InferenceRuntime::load(None, dir.path());
-        assert!(rt.client().is_none());
+        let mut rt = InferenceRuntime::load(None, None, dir.path());
+        assert!(rt.ocr_client().is_none() && rt.chat_client().is_none());
         let err = rt.set_endpoint("https://override/v1").unwrap_err();
         assert!(err.contains("model"), "explains the missing boot model");
-        assert!(rt.client().is_none(), "still unusable");
+        assert!(
+            rt.ocr_client().is_none() && rt.chat_client().is_none(),
+            "still unusable"
+        );
     }
 }
