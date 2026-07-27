@@ -120,6 +120,15 @@ optional node image.
 docker compose up -d          # relay on :8080, data in a named volume
 ```
 
+Two things to get right once it sits behind a proxy, CDN, or TLS terminator.
+Authenticated requests carry custom `svastha-*` headers, so everything except
+`GET /v0/info` is CORS-*preflighted*; an edge that doesn't answer the `OPTIONS`
+preflight lets connect succeed and sync fail (the PWA reports the relay
+"Unreachable"). The relay's own CORS layer is already permissive — the fix
+belongs in front of it. And Web Push stays off until you supply a VAPID keypair
+(`SVASTHA_RELAY_VAPID_PRIVATE`/`_PUBLIC`/`_SUBJECT`); without one `/v0/push/key`
+answers `503` and the PWA says the relay doesn't offer push notifications.
+
 **Processing node** — trusted; opt in deliberately:
 
 ```bash

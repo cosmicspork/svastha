@@ -10,13 +10,6 @@ harvest a PR's "## Deferred" notes into the list.
 - Multi-relay replication — client-driven; relays stay dumb replicas, no
   inter-relay protocol (contract enablers — envelope message ids, mergeable
   epoch ids — land with the protocol wave)
-- Relay reachability / CORS preflight in production — authenticated calls send
-  custom `svastha-*` headers, so every non-`/v0/info` request is CORS
-  *preflighted*. A deployment whose edge (proxy/CDN/TLS terminator) doesn't
-  answer the `OPTIONS` preflight makes connect succeed (header-less
-  `GET /v0/info`) while sync fails with a bare `TypeError: Load failed`. The
-  relay's own `CorsLayer::permissive()` is correct — the fix is in front of it.
-  The PWA now surfaces this honestly (Sync shows "Unreachable", not "Online").
 
 ## Sharing
 
@@ -59,12 +52,6 @@ harvest a PR's "## Deferred" notes into the list.
   proposals (follow-up to OCR proposals)
 - Sender-sealed push notification hints — richer lock-screen text needs a
   service-worker-accessible key custody decision first
-
-## Relay operations
-
-- Web Push (VAPID) on the deployment — `GET /v0/push/key` answers `503` until
-  the operator configures VAPID keys, so the PWA correctly reports "This relay
-  doesn't offer push notifications". Configure it to enable lock-screen alerts.
 
 ## Intentionally not doing
 
