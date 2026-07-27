@@ -31,8 +31,19 @@ services:
       # Studio, vLLM, or a cloud endpoint you explicitly choose) — enrollment
       # and sync work either way. Uncomment and fill in to enable them:
       # SVASTHA_NODE_INFERENCE_ENDPOINT: "https://your-inference-endpoint/v1"
-      # SVASTHA_NODE_INFERENCE_MODEL: "your-vision-model"
+      # SVASTHA_NODE_INFERENCE_MODEL: "your-model"
       # SVASTHA_NODE_INFERENCE_API_KEY: "your-api-key"
+      #
+      # OCR (reading pages) and chat (answering questions) run as separate
+      # roles. The vars above are the shared default for both; set a per-role
+      # model to use, say, a vision model for OCR and an instruction model for
+      # chat (a vision model answers questions poorly, and vice versa). Each
+      # role falls back to the shared value, so overriding just the models is
+      # enough — one endpoint, two models:
+      # SVASTHA_NODE_OCR_INFERENCE_MODEL: "your-vision-model"
+      # SVASTHA_NODE_CHAT_INFERENCE_MODEL: "your-chat-model"
+      # A role can also take its own endpoint/API key to split across providers:
+      # SVASTHA_NODE_CHAT_INFERENCE_ENDPOINT / _API_KEY (and the OCR_ variants).
     volumes:
       # Durable: the node's disposable identity keypair, nothing else.
       - node-data:/data

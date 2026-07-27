@@ -600,16 +600,15 @@ fn a_handled_question_is_not_re_answered_after_a_restart() {
 
 // ---- admin tests ----
 
-/// A runtime whose boot config points at `endpoint` (a valid synchronous URL).
+/// A runtime whose boot config points both roles at `endpoint` (a valid
+/// synchronous URL) — the single-endpoint shape these admin tests exercise.
 fn runtime(dir: &std::path::Path, endpoint: &str) -> InferenceRuntime {
-    InferenceRuntime::load(
-        Some(InferenceConfig {
-            endpoint: endpoint.to_string(),
-            api_key: None,
-            model: "chat-test".to_string(),
-        }),
-        dir,
-    )
+    let boot = InferenceConfig {
+        endpoint: endpoint.to_string(),
+        api_key: None,
+        model: "chat-test".to_string(),
+    };
+    InferenceRuntime::load(Some(boot.clone()), Some(boot), dir)
 }
 
 #[test]
@@ -696,7 +695,10 @@ fn admin_set_inference_endpoint_accepts_valid_and_rejects_batch() {
     );
     let mut journal = h.journal();
     admin::run(&h.node_client, &h.state, &mut rt, &logs, &mut journal).unwrap();
-    assert_eq!(rt.endpoint(), Some("https://new-inference.internal/v1"));
+    assert_eq!(
+        rt.chat_endpoint(),
+        Some("https://new-inference.internal/v1")
+    );
 
     let ok_reply = read_admin_replies(&owner.client, &owner.id).pop().unwrap();
     assert!(ok_reply.ok, "valid endpoint accepted");
@@ -719,7 +721,10 @@ fn admin_set_inference_endpoint_accepts_valid_and_rejects_batch() {
     assert!(!bad_reply.ok, "batch endpoint rejected");
     assert!(bad_reply.detail.as_deref().unwrap().contains("Batch"));
     // The rejected value never became live.
-    assert_eq!(rt.endpoint(), Some("https://new-inference.internal/v1"));
+    assert_eq!(
+        rt.chat_endpoint(),
+        Some("https://new-inference.internal/v1")
+    );
 }
 
 #[test]

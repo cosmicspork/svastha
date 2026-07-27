@@ -8,9 +8,15 @@
 //! `docs/ARCHITECTURE.md`, "Self-hosting"). Everything else has a safe default.
 //!
 //! The inference endpoint, model, and API key are read and *validated* here.
-//! Setting the endpoint **enables OCR** (D2); a misconfiguration fails at boot
-//! rather than at first inference. [`validate_inference_endpoint`] is the design
-//! §8 hard-constraint hook (synchronous, zero-retention endpoints only).
+//! Inference is split into two independent **roles** — OCR (vision extraction)
+//! and chat (RAG answers) — so an operator can point each at a different model
+//! (a vision model reads pages badly answers questions; a chat model the reverse).
+//! Each role resolves its endpoint/model/API key from role-specific env vars,
+//! each **falling back to the shared base** (`SVASTHA_NODE_INFERENCE_*`), so a
+//! single-model setup keeps working unchanged. A role is enabled when it resolves
+//! both an endpoint and a model; a misconfiguration fails at boot rather than at
+//! first inference. [`validate_inference_endpoint`] is the design §8
+//! hard-constraint hook (synchronous, zero-retention endpoints only).
 
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
@@ -31,11 +37,29 @@ pub const ENV_INFERENCE_ENDPOINT: &str = "SVASTHA_NODE_INFERENCE_ENDPOINT";
 /// Optional inference API key. Sent as an `Authorization: Bearer` header; never
 /// logged.
 pub const ENV_INFERENCE_API_KEY: &str = "SVASTHA_NODE_INFERENCE_API_KEY";
-/// The chat-completions model id (e.g. a vision model). **Required whenever
-/// [`ENV_INFERENCE_ENDPOINT`] is set** — an OpenAI-compatible request carries a
+/// The chat-completions model id (e.g. a vision model). **Required whenever an
+/// endpoint resolves for a role** — an OpenAI-compatible request carries a
 /// `model` field, and leaving it to an endpoint default is too surprising for a
-/// pipeline that writes proposals into someone's medical record.
+/// pipeline that writes proposals into someone's medical record. This is the
+/// shared base; a role-specific model (below) overrides it.
 pub const ENV_INFERENCE_MODEL: &str = "SVASTHA_NODE_INFERENCE_MODEL";
+
+// Per-role overrides. Each falls back to the shared base above when unset, so a
+// single-model deployment needs only the base three vars. Set a role's model to
+// run OCR and chat on different models (the common case: one endpoint, two model
+// ids); set a role's endpoint/key too to split them across providers entirely.
+/// OCR (vision) endpoint override; falls back to [`ENV_INFERENCE_ENDPOINT`].
+pub const ENV_OCR_ENDPOINT: &str = "SVASTHA_NODE_OCR_INFERENCE_ENDPOINT";
+/// OCR (vision) model override; falls back to [`ENV_INFERENCE_MODEL`].
+pub const ENV_OCR_MODEL: &str = "SVASTHA_NODE_OCR_INFERENCE_MODEL";
+/// OCR (vision) API-key override; falls back to [`ENV_INFERENCE_API_KEY`].
+pub const ENV_OCR_API_KEY: &str = "SVASTHA_NODE_OCR_INFERENCE_API_KEY";
+/// Chat (RAG) endpoint override; falls back to [`ENV_INFERENCE_ENDPOINT`].
+pub const ENV_CHAT_ENDPOINT: &str = "SVASTHA_NODE_CHAT_INFERENCE_ENDPOINT";
+/// Chat (RAG) model override; falls back to [`ENV_INFERENCE_MODEL`].
+pub const ENV_CHAT_MODEL: &str = "SVASTHA_NODE_CHAT_INFERENCE_MODEL";
+/// Chat (RAG) API-key override; falls back to [`ENV_INFERENCE_API_KEY`].
+pub const ENV_CHAT_API_KEY: &str = "SVASTHA_NODE_CHAT_INFERENCE_API_KEY";
 /// Optional bind address for the bootstrap page. **Loopback only** (validated).
 pub const ENV_BOOTSTRAP_ADDR: &str = "SVASTHA_NODE_BOOTSTRAP_ADDR";
 /// Optional fallback poll interval (seconds) for when the SSE stream is down.
@@ -63,10 +87,16 @@ pub enum ConfigError {
     BadBootstrapAddr(String),
     #[error("{ENV_POLL_INTERVAL_SECS} must be a positive integer, got: {0}")]
     BadPollInterval(String),
-    #[error("{ENV_INFERENCE_ENDPOINT} is invalid: {0}")]
-    BadInferenceEndpoint(String),
-    #[error("{ENV_INFERENCE_MODEL} is required when {ENV_INFERENCE_ENDPOINT} is set (an OpenAI-compatible request carries a model id)")]
-    MissingInferenceModel,
+    #[error("{endpoint_var} is invalid: {detail}")]
+    BadInferenceEndpoint {
+        endpoint_var: &'static str,
+        detail: String,
+    },
+    #[error("{model_var} (or {ENV_INFERENCE_MODEL}) is required for the {role} role once its endpoint resolves (an OpenAI-compatible request carries a model id)")]
+    MissingInferenceModel {
+        role: &'static str,
+        model_var: &'static str,
+    },
 }
 
 /// The inference target (OpenAI-compatible chat completions). Present exactly
@@ -90,8 +120,12 @@ pub struct Config {
     pub data_dir: PathBuf,
     /// Ephemeral dir for decrypted plaintext.
     pub cache_dir: PathBuf,
-    /// Inference target, validated if present; unused until D2/D3.
-    pub inference: Option<InferenceConfig>,
+    /// Vision inference target for OCR (D2), validated if present. Resolves the
+    /// OCR-role env vars over the shared base.
+    pub ocr_inference: Option<InferenceConfig>,
+    /// Text inference target for RAG chat (D3), validated if present. Resolves
+    /// the chat-role env vars over the shared base.
+    pub chat_inference: Option<InferenceConfig>,
     /// Loopback-only bootstrap-page bind address.
     pub bootstrap_addr: String,
     /// Fallback pull cadence when the SSE poke stream is unavailable.
@@ -115,30 +149,20 @@ impl Config {
         let data_dir = env_path(ENV_DATA_DIR, DEFAULT_DATA_DIR);
         let cache_dir = env_path(ENV_CACHE_DIR, DEFAULT_CACHE_DIR);
 
-        let inference = match std::env::var(ENV_INFERENCE_ENDPOINT)
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-        {
-            Some(endpoint) => {
-                let endpoint = endpoint.trim().to_string();
-                validate_inference_endpoint(&endpoint)
-                    .map_err(ConfigError::BadInferenceEndpoint)?;
-                let api_key = std::env::var(ENV_INFERENCE_API_KEY)
-                    .ok()
-                    .filter(|s| !s.trim().is_empty());
-                let model = std::env::var(ENV_INFERENCE_MODEL)
-                    .ok()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .ok_or(ConfigError::MissingInferenceModel)?;
-                Some(InferenceConfig {
-                    endpoint,
-                    api_key,
-                    model,
-                })
-            }
-            None => None,
-        };
+        let ocr_inference = resolve_role(
+            "OCR",
+            ENV_OCR_ENDPOINT,
+            ENV_OCR_MODEL,
+            ENV_OCR_API_KEY,
+            &env_nonempty,
+        )?;
+        let chat_inference = resolve_role(
+            "chat",
+            ENV_CHAT_ENDPOINT,
+            ENV_CHAT_MODEL,
+            ENV_CHAT_API_KEY,
+            &env_nonempty,
+        )?;
 
         let bootstrap_addr = std::env::var(ENV_BOOTSTRAP_ADDR)
             .ok()
@@ -172,12 +196,57 @@ impl Config {
             relay_url,
             data_dir,
             cache_dir,
-            inference,
+            ocr_inference,
+            chat_inference,
             bootstrap_addr,
             poll_interval,
             label,
         })
     }
+}
+
+/// A trimmed, non-empty environment variable, or `None`.
+fn env_nonempty(var: &str) -> Option<String> {
+    std::env::var(var)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Resolve one inference role (OCR or chat) from its role-specific env vars,
+/// each falling back to the shared base (`SVASTHA_NODE_INFERENCE_*`). Returns
+/// `None` when no endpoint resolves for the role (that role's pass simply does
+/// not run), or an error when an endpoint resolves but is invalid or has no
+/// model — the same fail-fast the single-config path used, now per role.
+fn resolve_role(
+    role: &'static str,
+    endpoint_var: &'static str,
+    model_var: &'static str,
+    api_key_var: &'static str,
+    lookup: &dyn Fn(&str) -> Option<String>,
+) -> Result<Option<InferenceConfig>, ConfigError> {
+    // Blame the actual source var in errors, so the fix is unambiguous whether
+    // the value came from the role override or the shared base.
+    let (endpoint, endpoint_src) = match lookup(endpoint_var) {
+        Some(e) => (e, endpoint_var),
+        None => match lookup(ENV_INFERENCE_ENDPOINT) {
+            Some(e) => (e, ENV_INFERENCE_ENDPOINT),
+            None => return Ok(None),
+        },
+    };
+    validate_inference_endpoint(&endpoint).map_err(|detail| ConfigError::BadInferenceEndpoint {
+        endpoint_var: endpoint_src,
+        detail,
+    })?;
+    let api_key = lookup(api_key_var).or_else(|| lookup(ENV_INFERENCE_API_KEY));
+    let model = lookup(model_var)
+        .or_else(|| lookup(ENV_INFERENCE_MODEL))
+        .ok_or(ConfigError::MissingInferenceModel { role, model_var })?;
+    Ok(Some(InferenceConfig {
+        endpoint,
+        api_key,
+        model,
+    }))
 }
 
 fn env_path(var: &str, default: &str) -> PathBuf {
@@ -268,6 +337,114 @@ mod tests {
         assert!(matches!(
             validate_loopback("0.0.0.0:7071"),
             Err(ConfigError::NonLoopbackBootstrap(_))
+        ));
+    }
+
+    // --- per-role inference resolution ---
+    //
+    // `resolve_role` takes a lookup fn rather than reading `std::env` directly,
+    // so these exercise the fallback logic without racing the process env (cargo
+    // runs tests in parallel threads).
+
+    fn lookup_from(pairs: &[(&'static str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let map: std::collections::HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        move |k| map.get(k).cloned()
+    }
+
+    fn ocr(l: &dyn Fn(&str) -> Option<String>) -> Result<Option<InferenceConfig>, ConfigError> {
+        resolve_role("OCR", ENV_OCR_ENDPOINT, ENV_OCR_MODEL, ENV_OCR_API_KEY, l)
+    }
+    fn chat(l: &dyn Fn(&str) -> Option<String>) -> Result<Option<InferenceConfig>, ConfigError> {
+        resolve_role(
+            "chat",
+            ENV_CHAT_ENDPOINT,
+            ENV_CHAT_MODEL,
+            ENV_CHAT_API_KEY,
+            l,
+        )
+    }
+
+    #[test]
+    fn both_roles_fall_back_to_the_shared_base() {
+        // Only the base three vars set → both roles resolve identically, exactly
+        // the pre-split single-model deployment.
+        let l = lookup_from(&[
+            (ENV_INFERENCE_ENDPOINT, "https://base/v1"),
+            (ENV_INFERENCE_MODEL, "base-model"),
+            (ENV_INFERENCE_API_KEY, "k"),
+        ]);
+        let o = ocr(&l).unwrap().unwrap();
+        let c = chat(&l).unwrap().unwrap();
+        assert_eq!(
+            (o.endpoint.as_str(), o.model.as_str()),
+            ("https://base/v1", "base-model")
+        );
+        assert_eq!(
+            (c.endpoint.as_str(), c.model.as_str()),
+            ("https://base/v1", "base-model")
+        );
+        assert_eq!(
+            c.api_key.as_deref(),
+            Some("k"),
+            "key falls back to base too"
+        );
+    }
+
+    #[test]
+    fn a_role_model_override_wins_over_the_base_model() {
+        // The headline case: one endpoint, a vision model for OCR and a chat model
+        // for RAG.
+        let l = lookup_from(&[
+            (ENV_INFERENCE_ENDPOINT, "https://base/v1"),
+            (ENV_INFERENCE_MODEL, "vision-model"),
+            (ENV_CHAT_MODEL, "chat-model"),
+        ]);
+        assert_eq!(ocr(&l).unwrap().unwrap().model, "vision-model");
+        let c = chat(&l).unwrap().unwrap();
+        assert_eq!(c.model, "chat-model");
+        assert_eq!(c.endpoint, "https://base/v1", "endpoint still shared");
+    }
+
+    #[test]
+    fn a_role_endpoint_override_splits_it_from_the_base() {
+        let l = lookup_from(&[
+            (ENV_INFERENCE_ENDPOINT, "https://base/v1"),
+            (ENV_INFERENCE_MODEL, "base-model"),
+            (ENV_CHAT_ENDPOINT, "https://chat-host/v1"),
+            (ENV_CHAT_MODEL, "chat-model"),
+        ]);
+        assert_eq!(ocr(&l).unwrap().unwrap().endpoint, "https://base/v1");
+        assert_eq!(chat(&l).unwrap().unwrap().endpoint, "https://chat-host/v1");
+    }
+
+    #[test]
+    fn a_role_with_no_endpoint_anywhere_is_disabled() {
+        let l = lookup_from(&[(ENV_INFERENCE_MODEL, "m")]); // model but no endpoint
+        assert!(ocr(&l).unwrap().is_none());
+        assert!(chat(&l).unwrap().is_none());
+    }
+
+    #[test]
+    fn an_endpoint_with_no_model_is_a_boot_error() {
+        let l = lookup_from(&[(ENV_INFERENCE_ENDPOINT, "https://base/v1")]);
+        assert!(matches!(
+            chat(&l),
+            Err(ConfigError::MissingInferenceModel { role: "chat", .. })
+        ));
+    }
+
+    #[test]
+    fn a_batch_role_endpoint_is_rejected_at_resolve() {
+        let l = lookup_from(&[
+            (ENV_OCR_ENDPOINT, "https://api/v1/batch"),
+            (ENV_OCR_MODEL, "m"),
+        ]);
+        assert!(matches!(
+            ocr(&l),
+            Err(ConfigError::BadInferenceEndpoint { endpoint_var, .. }) if endpoint_var == ENV_OCR_ENDPOINT
         ));
     }
 }
