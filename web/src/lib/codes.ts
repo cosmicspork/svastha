@@ -2,6 +2,12 @@
 // and `display` is part of the canonical content (see core's `put_opt_code`),
 // so every string here is id-affecting: changing one later makes "the same"
 // reading hash to a new event id. Treat entries as append-only.
+//
+// SNOMED entries deliberately carry no `display`: their names come from the
+// offline dictionary at render time (see dictionary.ts, code-names.ts), which
+// ships the Global Patient Set under its own license rather than embedding
+// terminology text here. A code with no display can never drift, so the
+// append-only rule above binds only what still carries one.
 
 export interface Code {
   system: string
@@ -82,8 +88,8 @@ function loinc(code: string, display: string): Code {
   return { system: LOINC, code, display }
 }
 
-function snomed(code: string, display: string): Code {
-  return { system: SNOMED, code, display }
+function snomed(code: string): Code {
+  return { system: SNOMED, code }
 }
 
 function ucum(code: string): Code {
@@ -205,35 +211,31 @@ export interface SymptomDef {
 
 /** Starter set of common self-reported symptoms; free text covers the rest. */
 export const SYMPTOMS: SymptomDef[] = [
-  { key: 'headache', label: 'Headache', snomed: snomed('25064002', 'Headache') },
-  { key: 'fatigue', label: 'Fatigue', snomed: snomed('84229001', 'Fatigue') },
-  { key: 'nausea', label: 'Nausea', snomed: snomed('422587007', 'Nausea') },
-  { key: 'dizziness', label: 'Dizziness', snomed: snomed('404640003', 'Dizziness') },
-  { key: 'abdominal-pain', label: 'Abdominal pain', snomed: snomed('21522001', 'Abdominal pain') },
-  { key: 'joint-pain', label: 'Joint pain', snomed: snomed('57676002', 'Joint pain') },
-  { key: 'back-pain', label: 'Back pain', snomed: snomed('22253000', 'Back pain') },
-  { key: 'anxiety', label: 'Anxiety', snomed: snomed('48694002', 'Anxiety') },
-  { key: 'insomnia', label: 'Insomnia', snomed: snomed('193462001', 'Insomnia') },
-  { key: 'bloating', label: 'Bloating', snomed: snomed('116289008', 'Abdominal bloating') },
-  { key: 'itching', label: 'Itching', snomed: snomed('418290006', 'Itching') },
-  { key: 'palpitations', label: 'Palpitations', snomed: snomed('80313002', 'Palpitations') },
-  {
-    key: 'short-of-breath',
-    label: 'Shortness of breath',
-    snomed: snomed('267036007', 'Dyspnea'),
-  },
-  { key: 'muscle-cramp', label: 'Muscle cramp', snomed: snomed('55300003', 'Muscle cramp') },
-  { key: 'rash', label: 'Rash', snomed: snomed('271807003', 'Eruption of skin') },
+  { key: 'headache', label: 'Headache', snomed: snomed('25064002') },
+  { key: 'fatigue', label: 'Fatigue', snomed: snomed('84229001') },
+  { key: 'nausea', label: 'Nausea', snomed: snomed('422587007') },
+  { key: 'dizziness', label: 'Dizziness', snomed: snomed('404640003') },
+  { key: 'abdominal-pain', label: 'Abdominal pain', snomed: snomed('21522001') },
+  { key: 'joint-pain', label: 'Joint pain', snomed: snomed('57676002') },
+  { key: 'back-pain', label: 'Back pain', snomed: snomed('22253000') },
+  { key: 'anxiety', label: 'Anxiety', snomed: snomed('48694002') },
+  { key: 'insomnia', label: 'Insomnia', snomed: snomed('193462001') },
+  { key: 'bloating', label: 'Bloating', snomed: snomed('116289008') },
+  { key: 'itching', label: 'Itching', snomed: snomed('418290006') },
+  { key: 'palpitations', label: 'Palpitations', snomed: snomed('80313002') },
+  { key: 'short-of-breath', label: 'Shortness of breath', snomed: snomed('267036007') },
+  { key: 'muscle-cramp', label: 'Muscle cramp', snomed: snomed('55300003') },
+  { key: 'rash', label: 'Rash', snomed: snomed('271807003') },
   {
     key: 'menstrual-cramps',
     label: 'Menstrual cramps',
-    snomed: snomed('266599000', 'Dysmenorrhea'),
+    snomed: snomed('266599000'),
     cycleRelevant: true,
   },
   {
     key: 'breast-tenderness',
     label: 'Breast tenderness',
-    snomed: snomed('55222007', 'Breast tenderness'),
+    snomed: snomed('55222007'),
     cycleRelevant: true,
   },
 ]

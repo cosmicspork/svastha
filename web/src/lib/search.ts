@@ -27,30 +27,43 @@ export interface SearchHit {
 
 type Ev = StoredEvent['event']
 
-function codeSearchText(code: Code | null | undefined, index: Map<string, string>): string {
+function codeSearchText(
+  code: Code | null | undefined,
+  index: Map<string, string>,
+  dictionary: Map<string, string>,
+): string {
   if (!code) return ''
-  const display = code.display ?? resolveDisplay(index, code) ?? ''
+  const display = code.display ?? resolveDisplay(index, code, dictionary) ?? ''
   return `${display} ${shortenSystem(code.system)} ${code.code}`
 }
 
-function valueSearchText(value: Ev['value'], index: Map<string, string>): string {
+function valueSearchText(
+  value: Ev['value'],
+  index: Map<string, string>,
+  dictionary: Map<string, string>,
+): string {
   if (!value) return ''
   if ('text' in value) return value.text
-  if ('coded' in value) return codeSearchText(value.coded, index)
+  if ('coded' in value) return codeSearchText(value.coded, index, dictionary)
   if ('quantity' in value) return `${value.quantity.value} ${value.quantity.unit?.code ?? ''}`
   return ''
 }
 
 /** Everything about an event a user might search by, lowercased into one blob. */
-function haystack(ev: Ev, index: Map<string, string>): string {
+function haystack(ev: Ev, index: Map<string, string>, dictionary: Map<string, string>): string {
   const category = CATEGORY_META[categorize(ev)].label
-  return [codeSearchText(ev.code, index), valueSearchText(ev.value, index), ev.kind, category]
+  return [
+    codeSearchText(ev.code, index, dictionary),
+    valueSearchText(ev.value, index, dictionary),
+    ev.kind,
+    category,
+  ]
     .join(' ')
     .toLowerCase()
 }
 
-function labelFor(ev: Ev, index: Map<string, string>): string {
-  const resolved = ev.code?.display ?? resolveDisplay(index, ev.code)
+function labelFor(ev: Ev, index: Map<string, string>, dictionary: Map<string, string>): string {
+  const resolved = ev.code?.display ?? resolveDisplay(index, ev.code, dictionary)
   if (resolved) return resolved
   if (ev.value && 'text' in ev.value && ev.value.text.trim()) return ev.value.text
   return CATEGORY_META[categorize(ev)].label
@@ -65,6 +78,11 @@ function labelFor(ev: Ev, index: Map<string, string>): string {
 export function searchEvents(
   events: StoredEvent[],
   query: string,
+  // The offline code dictionary (see dictionary.ts), same as buildTimeline
+  // takes. Empty by default (feature off). Without it, a code that carries no
+  // display of its own — every quick-logged symptom since SNOMED names moved to
+  // the dictionary — would be findable only by its raw code.
+  dictionary: Map<string, string> = new Map(),
 ): { hits: SearchHit[]; truncated: boolean } {
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
   if (terms.length === 0) return { hits: [], truncated: false }
@@ -73,10 +91,11 @@ export function searchEvents(
   const matched: SearchHit[] = []
   for (const e of events) {
     const ev = e.event
-    if (!terms.every((t) => haystack(ev, index).includes(t))) continue
+    const blob = haystack(ev, index, dictionary)
+    if (!terms.every((t) => blob.includes(t))) continue
     matched.push({
       event: e,
-      label: labelFor(ev, index),
+      label: labelFor(ev, index, dictionary),
       coding: ev.code ? `${shortenSystem(ev.code.system)} ${ev.code.code}` : '',
       category: CATEGORY_META[categorize(ev)].label,
     })

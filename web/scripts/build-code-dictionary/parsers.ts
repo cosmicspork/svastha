@@ -196,6 +196,47 @@ export function parseIcd10Order(text: string): CodeMap {
   return out
 }
 
+/** SNOMED CT Global Patient Set freeset (tab-delimited, one header row) ->
+ * `{ "<ConceptID>": "<preferred term>" }`. Columns: ConceptID, Active, FSN,
+ * USPreferredTerm.
+ *
+ * The preferred term is what a person reads ("Headache"); the FSN carries a
+ * disambiguating hierarchy tag ("Headache (finding)") and is only the fallback
+ * for a concept whose PT column is empty.
+ *
+ * Inactive concepts are kept. They are ~12% of the release and are exactly what
+ * an old imported document cites — an append-only vault has to name codes that
+ * the terminology has since retired. Keeping every row also means we ship the
+ * release whole, which is the cleanest footing under its no-derivatives license
+ * (see SOURCES.md). */
+export function parseSnomedGps(text: string): CodeMap {
+  const lines = normalizeLines(text).filter((l) => l.length > 0)
+  if (lines.length === 0) return {}
+  const header = lines[0].split('\t').map((h) => h.trim().toLowerCase())
+
+  const codeIdx = header.indexOf('conceptid')
+  const ptIdx = header.indexOf('uspreferredterm')
+  const fsnIdx = header.indexOf('fsn')
+  if (codeIdx === -1 || ptIdx === -1) {
+    throw new Error(
+      `SNOMED GPS: could not find ConceptID/USPreferredTerm columns in header: ${header.join(', ')}`,
+    )
+  }
+
+  const out: CodeMap = {}
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split('\t')
+    const code = (cols[codeIdx] ?? '').trim()
+    // Verbatim but for whitespace padding — the GPS ships under CC BY-ND, so
+    // the term text is reproduced, never reworded.
+    const pt = (cols[ptIdx] ?? '').trim()
+    const fsn = fsnIdx === -1 ? '' : (cols[fsnIdx] ?? '').trim()
+    const name = pt || fsn
+    if (code && name) out[code] = name
+  }
+  return out
+}
+
 /** CVX (CDC IIS `cvx.txt`, pipe-delimited, no header) ->
  * `{ "<CVX code>": "<short description>" }`. Columns: 0 code, 1 short
  * description, 2 full vaccine name, 3 notes, 4 status, 5 non-vaccine, 6 date. */

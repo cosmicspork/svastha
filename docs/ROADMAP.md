@@ -29,8 +29,7 @@ harvest a PR's "## Deferred" notes into the list.
   concept by its HL7 OID (`urn:oid:2.16.840.1.113883.6.88`) rather than the
   canonical URL, so stored events resolve labels/dictionary only because the
   PWA now folds known OIDs at render time (`codes.ts` `canonicalSystem`). Doing
-  it once at import would make stored events self-describing (SNOMED names still
-  fall through — see "Intentionally not doing").
+  it once at import would make stored events self-describing.
 
 ## Web
 
@@ -63,7 +62,8 @@ harvest a PR's "## Deferred" notes into the list.
   unrevocable forever). Caregivers are revocable grantee-proposers.
 - **Ordered-prescriptions import** — ordered is not taken; importing orders
   would fabricate a medication history. Test-locked exclusion.
-- **SNOMED CT / CPT names in the offline dictionary** — licensing; those
-  systems fall through to the earlier display layers.
+- **CPT names in the offline dictionary** — the AMA licenses codes and
+  descriptors for royalties with no free tier and no equivalent of SNOMED's
+  Global Patient Set; CPT falls through to the earlier display layers.
 - **Code-less negative statements** ("No known drug allergies") — the app
   says "None recorded", never a clinical negative the vault can't back.

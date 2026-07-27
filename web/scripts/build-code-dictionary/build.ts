@@ -46,6 +46,7 @@ import {
   parseLoincFullTable,
   parseLoincFullTableTop2000,
   parseRxnormConso,
+  parseSnomedGps,
   type CodeMap,
 } from './parsers.ts'
 import { downloadLoincRelease, extractLoincCsv, fetchLoincMeta, loincBasicAuth, type LoincApiMeta } from './loinc-api.ts'
@@ -87,6 +88,27 @@ const LOINC_ATTRIBUTION =
   'Regenstrief Institute, Inc. and the Logical Observation Identifiers Names and Codes (LOINC) ' +
   'Committee and is available at no cost under the license at http://loinc.org/license. LOINC® ' +
   'is a registered United States trademark of Regenstrief Institute, Inc.'
+
+const SNOMED_SYSTEM = 'http://snomed.info/sct'
+
+// The GPS ships under CC BY-ND with its own notice file (see
+// SNOMED_GPS_NOTICE.txt beside the data), so the attribution has to name the
+// licensor and the license; the dependent International Edition version is
+// appended from the source filename below.
+const SNOMED_GPS_ATTRIBUTION =
+  'This material includes SNOMED Clinical Terms® (SNOMED CT®) from the SNOMED International ' +
+  'Global Patient Set, © International Health Terminology Standards Development Organisation, ' +
+  'used under the Creative Commons Attribution-NoDerivatives 4.0 International Public License ' +
+  '(https://creativecommons.org/licenses/by-nd/4.0/). SNOMED CT® was originally created by the ' +
+  'College of American Pathologists. SNOMED® and SNOMED CT® are registered trademarks of ' +
+  'SNOMED International.'
+
+/** The dependent International Edition version stamped into a GPS filename
+ * (`SnomedINTL_GPSRelease_PRODUCTION_20260101T120000Z.txt` -> `20260101`), so
+ * the manifest records which release a copy came from. */
+function gpsRelease(path: string): string | undefined {
+  return /_(\d{8})T\d{6}Z/.exec(path)?.[1]
+}
 
 /** One entry per system: how to find its source, parse it, and where to write
  * it. `source` is a matcher against the filenames in sources/ so a dated
@@ -138,6 +160,14 @@ const SPECS: Spec[] = [
     attribution: 'CVX vaccine codes courtesy of the U.S. CDC.',
     source: 'cvx',
     parse: parseCvx,
+  },
+  {
+    system: 'http://snomed.info/sct',
+    label: 'SNOMED CT',
+    out: 'snomed.json',
+    attribution: SNOMED_GPS_ATTRIBUTION,
+    source: 'gpsrelease',
+    parse: parseSnomedGps,
   },
 ]
 
@@ -312,6 +342,7 @@ async function main(): Promise<void> {
     let starter = false
     let loincRelease: string | undefined
     let loincTop2000 = false
+    let snomedRelease: string | undefined
 
     // A system whose source isn't on this machine keeps its committed file and
     // manifest entry — regenerating one dictionary must never drop the others.
@@ -337,6 +368,7 @@ async function main(): Promise<void> {
         console.warn(`! skipping ${spec.label}: no source matching "${spec.source}" in sources/`)
         continue
       }
+      if (spec.system === SNOMED_SYSTEM) snomedRelease = gpsRelease(srcPath)
       map = spec.parse(readFileSync(srcPath, 'utf8'))
     }
 
@@ -346,7 +378,9 @@ async function main(): Promise<void> {
     const attribution =
       spec.system === 'http://loinc.org' && !starter && loincRelease
         ? `${spec.attribution} ${loincTop2000 ? 'Top 2000+ subset of release' : 'Release'} ${loincRelease}.`
-        : spec.attribution
+        : spec.system === SNOMED_SYSTEM && snomedRelease
+          ? `${spec.attribution} Dependent International Edition version ${snomedRelease}.`
+          : spec.attribution
     files.push({
       system: spec.system,
       path: spec.out,

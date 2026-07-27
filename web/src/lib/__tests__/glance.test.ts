@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { StoredEvent } from '../events'
-import { BP_SYSTOLIC, BP_DIASTOLIC, VITALS, SYMPTOMS } from '../codes'
+import { BP_SYSTOLIC, BP_DIASTOLIC, VITALS, SNOMED, SYMPTOMS } from '../codes'
 import { recentActivity, vitalGlances, recentSymptoms, medicationGlance } from '../glance'
+
+// A coded symptom that isn't one of the app's own quick-log codes (so no
+// built-in label covers it) and carries no display — the case the offline
+// dictionary exists for.
+const IMPORTED = { system: SNOMED, code: '386661006' }
+const DICT = new Map([[`${SNOMED}|${IMPORTED.code}`, 'Fever']])
 
 const HR = VITALS.find((v) => v.key === 'hr')!.loinc
 const NOW = Date.parse('2026-07-27T12:00:00Z')
@@ -79,6 +85,20 @@ describe('recentSymptoms', () => {
       evt({ code: SYMPTOMS[0].snomed, value: qty('7'), at: iso(3) }),
     ]
     expect(recentSymptoms(events, NOW, 14)).toEqual([{ label: 'Headache', severity: 7 }])
+  })
+
+  it('names an imported coded symptom through the dictionary', () => {
+    const events = [evt({ code: IMPORTED, value: qty('4'), at: iso(1) })]
+    expect(recentSymptoms(events, NOW, 14)[0].label).not.toBe('Fever')
+    expect(recentSymptoms(events, NOW, 14, 5, DICT)).toEqual([{ label: 'Fever', severity: 4 }])
+  })
+
+  it('rows stay distinct per code even when nothing can name them', () => {
+    const events = [
+      evt({ code: IMPORTED, value: qty('3'), at: iso(1) }),
+      evt({ code: { system: SNOMED, code: '271737000' }, value: qty('6'), at: iso(2) }),
+    ]
+    expect(recentSymptoms(events, NOW, 14)).toHaveLength(2)
   })
 })
 

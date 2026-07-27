@@ -34,6 +34,7 @@ codes a vault holds.
 | RxNorm | `RXNCONSO.RRF` in `sources/` (from the prescribable zip) | unauthenticated | no license required |
 | ICD-10-CM | `icd10cm-order-2026.txt` in `sources/` | unauthenticated | U.S. public domain |
 | CVX | `cvx.txt` in `sources/` | unauthenticated | U.S. CDC, public |
+| SNOMED CT | GPS freeset `.txt` in `sources/` (see below) | registration, no license | CC BY-ND 4.0, **mandatory attribution + notice file** |
 
 ### LOINC — full release table
 
@@ -142,8 +143,44 @@ so the file exists and the loader is testable. The manifest marks it
   `parseCvx`'s delimiter if the format differs).
 - Courtesy attribution: U.S. CDC.
 
+### SNOMED CT — Global Patient Set (registration, no license)
+
+The full International Edition needs an affiliate license with per-territory
+reporting and can't be sublicensed, so it isn't bundleable. The **Global Patient
+Set** is a different track: since March 2026 it covers all International Edition
+content — concept id, FSN, preferred term, active flag — under CC BY-ND 4.0,
+free worldwide, with no affiliate license and no reporting obligation.
+
+- Register at <https://gps.snomed.org> (contact and prospective-use details;
+  not an MLDS account, and deliberately not the affiliate track — going through
+  MLDS or UMLS/UTS instead would attach obligations this project is avoiding).
+- Take the **TSV freeset**, `SnomedINTL_GPSRelease_PRODUCTION_<stamp>.zip`, not
+  the RF2 refset package. Unzip and copy the `.txt` into `sources/`; the
+  generator matches any filename containing `GPSRelease`.
+- Released annually. The build reads the dependent International Edition version
+  out of the filename and records it in the manifest's attribution.
+- `parseSnomedGps` keeps **every** row, active and inactive: retired concepts
+  are what old imported documents cite, and shipping the release whole is also
+  the cleanest footing under a no-derivatives license. It stores the preferred
+  term ("Headache"), not the FSN ("Headache (finding)"), falling back to the FSN
+  only when a row has no preferred term.
+
+**License compliance (CC BY-ND 4.0):**
+
+- **`web/public/dict/SNOMED_GPS_NOTICE.txt`** — the release's own `Readme.txt`,
+  verbatim. It carries the copyright line, the license grant, the partner-
+  organization attributions, and its own instruction that the notice not be
+  removed or modified.
+- The manifest's SNOMED entry carries the full attribution string, which the app
+  shows in Settings → Code dictionary alongside every other source's.
+- Reformatting TSV to JSON is a format change, which CC 4.0 §2(a)(4) says never
+  produces adapted material. Keeping every row avoids the subsetting question
+  entirely — if a future change wants to filter the set, re-read the license
+  first.
+
 ## Excluded on purpose
 
-- **SNOMED CT** — affiliate licensing with per-territory reporting; not viable
-  to bundle. SNOMED-coded events fall through to the existing raw-code fallback.
-- **CPT** — AMA paid license (even short descriptions). Excluded.
+- **CPT** — the AMA licenses the codes and descriptors for royalties by product
+  and user type, with no free tier for redistribution and no equivalent of the
+  GPS. Permanently excluded; CPT-coded events fall through to the raw-code
+  fallback.

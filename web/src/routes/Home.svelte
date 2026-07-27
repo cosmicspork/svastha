@@ -25,6 +25,7 @@
   } from '../lib/shared'
   import InstallSheet from '../components/InstallSheet.svelte'
   import { shouldNudgeInstall, dismissInstallNudge } from '../lib/install'
+  import { loadDictionaryIndex } from '../lib/dictionary'
 
   let hue = $state<'a' | 'b'>('a')
   let shares = $state<Share[]>([])
@@ -51,7 +52,9 @@
     lastLoggedAt = newestEffectiveAt(events)
     activity = recentActivity(events)
     vitals = vitalGlances(events)
-    symptoms = recentSymptoms(events)
+    // Symptom rows are named through the dictionary; hydrated per mount rather
+    // than reactively, since the card is computed once here anyway.
+    symptoms = recentSymptoms(events, Date.now(), 14, 5, await loadDictionaryIndex())
     meds = medicationGlance(events)
   })
 
