@@ -1,5 +1,20 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import { navigate } from '../lib/router.svelte'
+  import { getAll } from '../lib/db'
+  import { pendingRecords, type ProposalRecord } from '../lib/proposals'
+
+  // Proposals arrive as notifications; this is the deliberate always-there entry
+  // point (the dashboard no longer carries a Proposals card). The badge is the
+  // pending draft count.
+  let pendingProposals = $state(0)
+  onMount(async () => {
+    const proposals = await getAll<ProposalRecord>('proposals')
+    pendingProposals = pendingRecords(proposals).reduce(
+      (n, r) => n + r.drafts.filter((d) => d.status === 'pending').length,
+      0,
+    )
+  })
 </script>
 
 <h1>Settings</h1>
@@ -50,6 +65,18 @@
     <span class="hub-text">
       <span class="hub-title">Notifications</span>
       <span class="hub-sub muted">Lock-screen alerts when something's waiting</span>
+    </span>
+    <span class="hub-chevron" aria-hidden="true">›</span>
+  </button>
+
+  <button class="hub-row" onclick={() => navigate('#/proposals')} data-testid="settings-row-proposals">
+    <span class="hub-glyph" aria-hidden="true">◇</span>
+    <span class="hub-text">
+      <span class="hub-title"
+        >Proposals{#if pendingProposals > 0}
+          <span class="badge" data-testid="settings-proposals-badge">{pendingProposals}</span>{/if}</span
+      >
+      <span class="hub-sub muted">Review suggested entries before they're signed in</span>
     </span>
     <span class="hub-chevron" aria-hidden="true">›</span>
   </button>
@@ -121,5 +148,15 @@
     flex: none;
     color: var(--muted);
     font-size: var(--text-lg);
+  }
+
+  .badge {
+    font-family: var(--font-data);
+    font-size: var(--text-xs);
+    background: var(--flare);
+    color: var(--bg);
+    border-radius: var(--radius-full);
+    padding: 0 var(--space-2);
+    margin-left: var(--space-1);
   }
 </style>
