@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { navigate, route } from '../lib/router.svelte'
+  import { navigate, back, route } from '../lib/router.svelte'
   import { unreadCount } from '../lib/notifications'
   import NotificationSheet from './NotificationSheet.svelte'
   import UpdateSheet from './UpdateSheet.svelte'
@@ -62,7 +62,7 @@
     {#if showBack}
       <button
         class="icon-btn"
-        onclick={() => navigate('#/')}
+        onclick={back}
         aria-label="Back"
         data-testid="nav-back"
       >
