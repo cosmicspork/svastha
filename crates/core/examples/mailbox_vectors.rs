@@ -67,7 +67,6 @@ fn valid_vector(
     })
 }
 
-/// Flip the first byte of a hex-string field in an envelope value.
 fn flip_first_byte(hex_str: &str) -> String {
     let mut bytes = hex::decode(hex_str).unwrap();
     bytes[0] ^= 0x01;
@@ -145,7 +144,6 @@ fn main() {
         &proposal_body,
     );
 
-    // Tampered signature: a valid envelope whose signature has one byte flipped.
     let mut tampered_sig = key_handoff["envelope"].clone();
     tampered_sig["signature"] = json!(flip_first_byte(tampered_sig["signature"].as_str().unwrap()));
     let tampered_sig = json!({

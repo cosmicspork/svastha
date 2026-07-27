@@ -22,7 +22,6 @@ import { deriveKdfBytes, DEFAULT_ITERATIONS, SALT_LEN } from './kdf'
 
 export { deriveKdfBytes, DEFAULT_ITERATIONS }
 
-// --- store keys ---
 const V1 = { mnemonic: 'mnemonic', vaultkey: 'vaultkey', check: 'check' } as const
 // v2 canonicals are sealed under MK and live at *new* keys so migration never
 // overwrites a v1 record (see `enrollPasskey`).
@@ -91,8 +90,6 @@ export class PasskeyUnlockError extends Error {
     this.name = 'PasskeyUnlockError'
   }
 }
-
-// --- primitives ---
 
 /** Seal under a raw 32-byte key, returning hex ciphertext. */
 function sealBytes(key32: Uint8Array, aad: Uint8Array, plaintext: Uint8Array): string {

@@ -398,7 +398,6 @@ describe('chat_msg routing', () => {
     expect(turns[0]).toMatchObject({ id: 'ans-1', role: 'node', citations: ['ev-a', 'ev-b'] })
     // An answer is terminal — the item is deleted once stored.
     expect(client.deleted).toContain('item-c')
-    // Last-seen advanced.
     expect(await getNodeLastSeen()).toBeTruthy()
   })
 
@@ -495,7 +494,7 @@ describe('admin_reply routing', () => {
     expect(result.dropped).toBe(1)
     expect(result.adminReplies).toBe(0)
     const log = await listAdminLog()
-    expect(log[0].reply).toBeUndefined() // the real command stays unanswered
+    expect(log[0].reply).toBeUndefined()
   })
 })
 

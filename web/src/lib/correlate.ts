@@ -153,7 +153,6 @@ export function lanes(events: StoredEvent[], fromIso: string, toIso: string): La
       const day = dayKey(event.effective_at)
       const cur = cycleByDay.get(day) ?? { atIso: event.effective_at, level: null }
       if (flowLevel !== null && (cur.level === null || flowLevel >= cur.level)) {
-        // The day's strongest flow reading sets the level and dates the cell.
         cur.atIso = event.effective_at
         cur.level = flowLevel
       } else if (cur.level === null) {

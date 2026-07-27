@@ -425,7 +425,6 @@ function pickEncounterForNote(note: Built, encounters: Built[]): Built | undefin
     )
     if (owned) return owned
   }
-  // (b) else: nest only when exactly one encounter shares the note's day.
   const sameDay = encounters.filter((e) => dayKey(e.entry.effective_at) === day)
   return sameDay.length === 1 ? sameDay[0] : undefined
 }

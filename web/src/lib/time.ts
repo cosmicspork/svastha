@@ -4,7 +4,6 @@
 // `canonical_content`), so two call sites that format the same instant
 // differently would silently mint two different ids for "the same" fact.
 
-/** Zero-pad to two digits. */
 function pad2(n: number): string {
   return String(n).padStart(2, '0')
 }

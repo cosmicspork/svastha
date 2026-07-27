@@ -206,7 +206,6 @@
   {/if}
 </div>
 
-<!-- Composer, pinned to the bottom of the viewport like a chat bar. -->
 <div class="composer" class:ai={aiOn}>
   <div class="bar">
     {#if aiOn}
@@ -402,7 +401,6 @@
     font-size: var(--text-sm);
   }
 
-  /* --- composer --- */
   .composer {
     position: fixed;
     left: 0;

@@ -119,14 +119,14 @@ describe('parseShareFragment', () => {
   })
 
   it('rejects the wrong number of dot-separated segments', () => {
-    expect(parseShareFragment(`#/s/${TOKEN}.${b64url(KEY)}`)).toBeNull() // 2
-    expect(parseShareFragment(`#/s/${TOKEN}.${b64url(KEY)}.${b64urlStr(RELAY)}.extra`)).toBeNull() // 4
+    expect(parseShareFragment(`#/s/${TOKEN}.${b64url(KEY)}`)).toBeNull()
+    expect(parseShareFragment(`#/s/${TOKEN}.${b64url(KEY)}.${b64urlStr(RELAY)}.extra`)).toBeNull()
   })
 
   it('rejects a token of the wrong length or charset', () => {
     expect(parseShareFragment(link('short'))).toBeNull()
     expect(parseShareFragment(link('abcdefghijklmnopqrstuvwxy.'))).toBeNull() // dot in token slot splits wrong
-    expect(parseShareFragment(link('abcdefghij!lmnopqrstuvwxyz'))).toBeNull() // bad char
+    expect(parseShareFragment(link('abcdefghij!lmnopqrstuvwxyz'))).toBeNull()
   })
 
   it('rejects a key that is not 32 bytes', () => {
@@ -151,7 +151,6 @@ describe('validateBundle', () => {
     expect(v!.createdAt).toBe('2026-07-14T00:00:00Z')
     expect(v!.signerHex).toBe(signerHex)
     expect(v!.events).toEqual([])
-    // Attachments default to an empty map when the field is absent.
     expect(v!.attachments).toEqual({})
   })
 
@@ -200,7 +199,6 @@ describe('validateBundle', () => {
   })
 
   it('tolerates curation in both directions: absent → empty, present → carried through', () => {
-    // An old bundle (field absent) opens identically, with an empty curation array.
     const legacy = validateBundle(JSON.stringify({ v: 1, created_at: 'x', signer, events: [] }))
     expect(legacy).not.toBeNull()
     expect(legacy!.curation).toEqual([])

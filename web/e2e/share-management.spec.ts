@@ -91,7 +91,6 @@ test('history clearing: a revoked share clears individually and in bulk once the
   await page.getByTestId(`clear-${tokenA}`).click()
   await expect(page.getByTestId(`share-status-${tokenA}`)).toHaveCount(0)
 
-  // Bulk clear over a second revoked share.
   const tokenB = await createAndRevokeShare()
   await expect(page.getByTestId('clear-inactive-history')).toBeEnabled()
   await page.getByTestId('clear-inactive-history').click()

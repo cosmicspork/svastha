@@ -1,7 +1,6 @@
 import { test, expect, type Page } from '@playwright/test'
 import { onboardViaUI, connectRelayViaUI, restoreViaUI, logBP, logFood, waitForPushed, RELAY } from './helpers'
 
-/** A spine entry containing `text`. */
 function entryWith(page: Page, text: string) {
   return page.getByTestId('spine-entry').filter({ hasText: text })
 }

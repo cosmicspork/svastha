@@ -86,8 +86,6 @@ describe('grant metadata store', () => {
   })
 })
 
-// --- enrollGrantee ---
-
 function fakeIdentity(): SealingIdentity {
   return {
     ed25519_public_hex: OWNER_ED,

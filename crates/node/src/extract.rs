@@ -90,7 +90,6 @@ pub struct Extraction {
 /// counted, so the worst case is "nothing proposed", never a bad proposal.
 pub fn parse(answer: &str) -> Extraction {
     let Some(parsed) = parse_json_object::<Findings>(answer) else {
-        // The whole answer was not JSON we could read — treat as "nothing found".
         return Extraction::default();
     };
     let mut out = Extraction::default();
@@ -123,7 +122,7 @@ fn to_draft(f: Finding) -> Option<EventDraft> {
     };
 
     if code.is_none() && value.is_none() {
-        return None; // an empty shell — nothing to propose
+        return None;
     }
 
     Some(EventDraft {

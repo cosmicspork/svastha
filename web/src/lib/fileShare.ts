@@ -92,13 +92,11 @@ function readU32be(bytes: Uint8Array, offset: number): number {
   )
 }
 
-/** The embedded-mode header: magic, version, mode, then the raw share key. */
 export function buildEmbeddedHeader(key: Uint8Array): Uint8Array {
   if (key.length !== SHARE_KEY_BYTES) throw new Error('share key must be 32 bytes')
   return new Uint8Array([...MAGIC, FORMAT_VERSION, MODE_EMBEDDED, ...key])
 }
 
-/** The passphrase-mode header: magic, version, mode, salt, iteration count. */
 export function buildPassphraseHeader(salt: Uint8Array, iterations: number): Uint8Array {
   if (salt.length !== SALT_BYTES) throw new Error('salt must be 16 bytes')
   return new Uint8Array([...MAGIC, FORMAT_VERSION, MODE_PASSPHRASE, ...salt, ...u32be(iterations)])
@@ -134,7 +132,6 @@ export function parseHeader(bytes: Uint8Array): ParsedHeader | null {
   return null
 }
 
-/** Concatenate a header and the sealed bundle into the file's bytes. */
 export function assembleFile(header: Uint8Array, sealed: Uint8Array): Uint8Array {
   const out = new Uint8Array(header.length + sealed.length)
   out.set(header, 0)
@@ -281,7 +278,6 @@ export interface FileShareRecord {
   createdAt: string
 }
 
-/** Record that a file share was created. */
 export async function recordFileShare(entry: {
   mode: FileShareMode
   scopeDescription: string

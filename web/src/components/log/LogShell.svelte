@@ -33,7 +33,6 @@
     children: Snippet
   } = $props()
 
-  // --- time control ---
   let earlier = $state(false)
   let earlierValue = $state('')
 
@@ -62,7 +61,6 @@
   // valid string works for the "is the form saveable" check.
   const canSave = $derived(buildDrafts('2000-01-01T00:00:00+00:00') !== null)
 
-  // --- save + toast ---
   let saving = $state(false)
   let error = $state('')
   let toast = $state<{ label: string; templates: DraftTemplate[] } | null>(null)

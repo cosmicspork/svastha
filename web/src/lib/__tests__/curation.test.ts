@@ -305,7 +305,6 @@ describe('migrateCurationToSigned', () => {
 
     await migrateCurationToSigned(signAs(AUTHOR_A), AUTHOR_A)
 
-    // Content identical — only a signature was added.
     expect(await getCuration('tag:evt-1')).toEqual({
       key: 'tag:evt-1',
       value: { tags: ['a'] },

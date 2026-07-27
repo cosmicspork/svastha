@@ -33,7 +33,6 @@ test('logging an input before a symptom surfaces it in Patterns, and a tag persi
 }) => {
   await onboardViaUI(page)
 
-  // Food 30 hours ago, via the Earlier time control.
   await openLog(page, 'food')
   await page.getByTestId('food-input').fill('peanut butter')
   await page.getByTestId('food-input').press('Enter')
@@ -42,16 +41,14 @@ test('logging an input before a symptom surfaces it in Patterns, and a tag persi
   await page.getByTestId('save').click()
   await expect(page.getByTestId('spine-entry').filter({ hasText: 'peanut butter' })).toBeVisible()
 
-  // Headache, severity 8, now.
   await openLog(page, 'symptom')
   await page.getByTestId('symptom-headache').click()
   await page.getByTestId('severity').fill('8')
   await page.getByTestId('save').click()
   await expect(page.getByTestId('spine-entry').filter({ hasText: 'Headache' })).toBeVisible()
 
-  // Patterns: the symptom dot is there, and tapping it opens FlarePanel.
-  // (Patterns is reached from the dashboard; hash-navigate since logging left
-  // us on the Timeline page.)
+  // Patterns is reached from the dashboard; hash-navigate since logging left
+  // us on the Timeline page.
   await page.evaluate(() => {
     window.location.hash = '#/correlate'
   })
@@ -65,7 +62,6 @@ test('logging an input before a symptom surfaces it in Patterns, and a tag persi
   await expect(flareItem).toBeVisible()
   await expect(flareItem).toContainText('30 h before')
 
-  // Tag the symptom from FlarePanel's TagEditor.
   await page.getByTestId('tag-input').fill('flare')
   await page.getByTestId('tag-input').press('Enter')
   await expect(page.getByTestId('tag-chip')).toContainText('#flare')

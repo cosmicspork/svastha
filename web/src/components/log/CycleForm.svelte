@@ -145,7 +145,7 @@
     font-size: inherit;
   }
 
-  /* flow scale — a quarter-to-full pip, same construction as the mood moon */
+  /* same construction as the mood moon */
   .flows {
     display: flex;
     justify-content: space-between;

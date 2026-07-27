@@ -328,7 +328,6 @@ async fn a_live_sse_stream_suppresses_push() {
 
     register(&app, &alice, &mock.endpoint("dev-1")).await;
 
-    // Alice opens a live SSE stream, then Bob deposits for her.
     let sse = app
         .clone()
         .oneshot(signed(&alice, "GET", "/v0/events", b"", now()))
@@ -338,7 +337,6 @@ async fn a_live_sse_stream_suppresses_push() {
     let _stream = sse.into_body().into_data_stream(); // hold it open
 
     deposit(&app, &bob, &alice, "item-1", now()).await;
-    // No push should reach the mock while the stream is live.
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(mock.hits(), 0, "a foregrounded client should not be pushed");
 }

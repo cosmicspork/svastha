@@ -9,7 +9,6 @@
   const wire = contract_version()
   const major = contract_major()
 
-  // --- install instructions ---
   let showInstallSheet = $state(false)
 
   async function closeInstallSheet(): Promise<void> {

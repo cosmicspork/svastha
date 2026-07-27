@@ -236,7 +236,7 @@ describe('v2 passphrase and passkey management', () => {
 
     await changePassphrase(PASS, 'a-brand-new-pass')
     expect(await get('keyvault', 'format')).toBe(2)
-    expect(await get('keyvault', 'v2:vaultkey')).toEqual(canonicalBefore) // untouched
+    expect(await get('keyvault', 'v2:vaultkey')).toEqual(canonicalBefore)
 
     await expect(unlock(PASS)).rejects.toBeInstanceOf(WrongPassphraseError)
     expect((await unlock('a-brand-new-pass')).identity.mnemonic).toBe(MNEMONIC)

@@ -386,8 +386,6 @@ fn narrative_section_becomes_one_dated_document_note() {
 #[test]
 fn no_data_available_narrative_is_skipped_not_emitted_as_empty_note() {
     let result = import_ccda(FIXTURE).unwrap();
-    // Only the Plan of Care becomes a document event; the Assessment "no data"
-    // section must not.
     assert_eq!(
         result
             .events

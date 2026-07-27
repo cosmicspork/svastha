@@ -137,8 +137,6 @@ mod tests {
         assert!(!verify_request(&[0xff; 32], &sig, &req()));
     }
 
-    // --- pinned spec vectors ---
-
     #[derive(Deserialize)]
     struct VectorFile {
         contract_version: u32,

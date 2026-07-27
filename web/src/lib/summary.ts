@@ -163,7 +163,6 @@ function representativeDate(events: Ev[], strategy: 'earliest' | 'latest'): stri
   return pick.effective_at
 }
 
-/** date desc, undated (null) last. */
 function byDateDescNullLast(a: SummaryRow, b: SummaryRow): number {
   if (a.date === b.date) return 0
   if (a.date === null) return 1

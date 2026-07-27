@@ -155,7 +155,6 @@ mod tests {
         let owner_key = owner.verifying_key().to_bytes();
         let owner_hex = hex::encode(owner_key);
 
-        // Genesis keyring wrapped to the node.
         let data_key = DataKey::generate();
         let owner_x = owner.x25519_public().to_bytes();
         let genesis = Keyring::genesis(&owner.x25519_public(), &data_key)
@@ -166,7 +165,6 @@ mod tests {
         assert!(state.enroll_or_merge(owner_hex.clone(), owner_key, owner_x, genesis.clone()));
         assert_eq!(state.enrolled_count(), 1);
 
-        // A rotation, re-delivered to the node.
         let (rotated_owner, _k) =
             Keyring::genesis(&owner.x25519_public(), &data_key).rotate(&owner.x25519_public(), 100);
         let rotated = rotated_owner

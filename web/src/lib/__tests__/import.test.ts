@@ -99,7 +99,6 @@ describe('projectedDocBlobBytes', () => {
     // ~12.1 MiB of raw bytes already blows past 16 MiB once base64'd (~4/3).
     const raw = 13 * 1024 * 1024
     expect(projectedDocBlobBytes('big.xml', raw)).toBeGreaterThan(RELAY_MAX_BLOB_BYTES)
-    // A comfortably small document stays under the cap.
     expect(projectedDocBlobBytes('small.xml', 1024)).toBeLessThan(RELAY_MAX_BLOB_BYTES)
   })
 })

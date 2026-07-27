@@ -69,7 +69,6 @@ test('spousal sharing: grant, accept, read-only timeline, then revoke goes stale
   await onboardViaUI(pageB)
   await connectRelayViaUI(pageB)
 
-  // A logs two entries and pushes them to the relay before sharing.
   await logBP(pageA, '118', '76')
   await logFood(pageA, 'oatmeal')
   await waitForPushed(pageA)
@@ -102,7 +101,6 @@ test('spousal sharing: grant, accept, read-only timeline, then revoke goes stale
   await pageB.getByTestId('invite-accept').click()
   await expect(pageB.getByTestId('invite-banner')).toHaveCount(0)
 
-  // B's dashboard lists Alex as a shared record.
   await pageB.evaluate(() => {
     window.location.hash = '#/'
   })
@@ -186,12 +184,10 @@ test('the sharing home reaches both audiences: cards with counts, plus the Home 
   await onboardViaUI(page)
   await connectRelayViaUI(page)
 
-  // The Home switcher chip is the front door — visible on a fresh vault.
   await expect(page.getByTestId('nav-share')).toBeVisible()
   await page.getByTestId('nav-share').click()
   await expect(page).toHaveURL(/#\/share$/)
 
-  // Both navigation cards render, each with its zero-state count sub-line.
   await expect(page.getByTestId('card-people')).toBeVisible()
   await expect(page.getByTestId('card-doctor')).toBeVisible()
   await expect(page.getByTestId('people-counts')).toContainText('0 active grants')
@@ -199,7 +195,6 @@ test('the sharing home reaches both audiences: cards with counts, plus the Home 
   await expect(page.getByTestId('doctor-counts')).toContainText('0 links')
   await expect(page.getByTestId('doctor-counts')).toContainText('0 active')
 
-  // The cards route to their respective screens.
   await page.getByTestId('card-people').click()
   await expect(page).toHaveURL(/#\/share\/people$/)
   await expect(page.getByTestId('my-code')).toBeVisible()

@@ -79,7 +79,6 @@ describe('mergeRemoteOnlyShares', () => {
   })
 
   it('never surfaces a token this device has no local record for from another owner as anything but remote', () => {
-    // Two remote-only shares sort newest-created first.
     const relayShares = [relayShare('older', 5, 5), relayShare('newer', 1, 5)]
     const result = mergeRemoteOnlyShares(new Set(), relayShares)
     expect(result.remoteOnly.map((s) => s.token)).toEqual(['newer', 'older'])

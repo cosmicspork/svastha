@@ -13,7 +13,7 @@ describe('orderByFrequency', () => {
   })
 
   it('does not reorder counts within the same log2 bucket', () => {
-    // floor(log2(9)) === floor(log2(13)) === 3 — same bucket, so the default
+    // floor(log2(8)) === floor(log2(12)) === 3 — same bucket, so the default
     // order (a before b) is kept despite b's higher raw count.
     const counts: Record<string, number> = { a: 8, b: 12 }
     expect(orderByFrequency(['a', 'b'], (item) => counts[item])).toEqual(['a', 'b'])

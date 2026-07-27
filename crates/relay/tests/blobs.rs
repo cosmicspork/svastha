@@ -138,7 +138,7 @@ async fn tampered_request_is_unauthorized() {
     let signature = sign_request(&alice, &auth);
     let req = Request::builder()
         .method("GET")
-        .uri("/v0/blobs/rec2") // different path than was signed
+        .uri("/v0/blobs/rec2")
         .header(
             "svastha-public-key",
             hex::encode(alice.verifying_key().to_bytes()),
@@ -277,8 +277,6 @@ async fn filesystem_store_persists_across_restart() {
     assert_eq!(body_bytes(get).await, blob);
 }
 
-// --- pagination: GET /v0/blobs?limit=&cursor= ---
-
 async fn list_query(app: &axum::Router, alice: &Identity, query: &str) -> serde_json::Value {
     let resp = app
         .clone()
@@ -350,7 +348,6 @@ async fn paginated_full_walk_equals_unpaginated_listing() {
         assert_eq!(put.status(), StatusCode::NO_CONTENT);
     }
 
-    // Walk the whole listing 10 ids at a time, following `next` until absent.
     let mut walked = Vec::new();
     let mut cursor: Option<String> = None;
     let mut pages = 0;
@@ -502,8 +499,6 @@ fn signed_with_header(
         .body(Body::from(body.to_vec()))
         .unwrap()
 }
-
-// --- curation etags: GET /v0/blobs/{id} for cur- ids ---
 
 #[tokio::test]
 async fn cur_blob_carries_an_etag_and_if_none_match_answers_304() {

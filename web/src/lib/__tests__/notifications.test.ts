@@ -52,7 +52,6 @@ describe('dedupeAndCap', () => {
       list = dedupeAndCap(list, note(`n${i}`, `2026-07-01T00:${String(i).padStart(2, '0')}:00Z`))
     }
     expect(list).toHaveLength(NOTIFICATION_CAP)
-    // The oldest (n0..n9) fell off; the newest survives at the head.
     expect(list[0].id).toBe(`n${NOTIFICATION_CAP + 9}`)
     expect(list.some((n) => n.id === 'n0')).toBe(false)
   })

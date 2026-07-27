@@ -200,7 +200,6 @@
       {/if}
     </div>
 
-    <!-- Medications: Current (always shown) then a collapsed Past group. -->
     <div class="split-group">
       <SummarySection
         title="Medications"

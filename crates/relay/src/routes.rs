@@ -552,7 +552,6 @@ fn etag_response(id: &str, blob: Vec<u8>, headers: &HeaderMap) -> Response {
     resp
 }
 
-/// Delete a blob owned by the caller.
 pub async fn delete_blob(
     State(state): State<AppState>,
     Extension(owner): Extension<Owner>,
@@ -661,7 +660,6 @@ pub struct GranteeList {
     grantees: Vec<String>,
 }
 
-/// List everyone the caller has granted read access to.
 pub async fn list_grants(
     State(state): State<AppState>,
     Extension(owner): Extension<Owner>,
@@ -682,7 +680,6 @@ pub struct OwnerList {
     owners: Vec<String>,
 }
 
-/// List everyone who has granted the caller read access to their vault.
 pub async fn list_shared(
     State(state): State<AppState>,
     Extension(caller): Extension<Owner>,

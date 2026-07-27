@@ -101,7 +101,6 @@ fn score_event(
     let name = render_name(index, event, concept.as_deref());
     let text = render_text(event, &name, status);
 
-    // Keyword overlap: how many distinct query tokens appear in the item's tokens.
     let item_tokens = tokenize(&text);
     let overlap = query
         .iter()
@@ -112,8 +111,8 @@ fn score_event(
     }
 
     let mut score = overlap as f32 * 10.0;
-    score += recency01(event.effective_at.as_deref()); // light recency signal
-    score += kind_hint(query, &event.kind) * 3.0; // light kind/intent match
+    score += recency01(event.effective_at.as_deref());
+    score += kind_hint(query, &event.kind) * 3.0;
 
     // Curation-aware re-rank: honor the current-vs-past cue against the concept's
     // status. Demotion, not exclusion — a resolved item can still answer a

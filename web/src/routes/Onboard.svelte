@@ -31,7 +31,6 @@
         return { url: relayParam, hostname: parsed.hostname }
       }
     } catch {
-      // Not a valid URL — ignore the param entirely.
     }
     return null
   }

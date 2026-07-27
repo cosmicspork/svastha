@@ -211,7 +211,6 @@ mod tests {
             let store = FsStore::new(dir.path()).unwrap();
             store.put(&owner(1), "rec", b"durable".to_vec()).unwrap();
         }
-        // A fresh store over the same directory still sees the blob.
         let reopened = FsStore::new(dir.path()).unwrap();
         assert_eq!(
             reopened.get(&owner(1), "rec").unwrap(),

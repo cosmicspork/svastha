@@ -43,7 +43,6 @@ describe('SseParser', () => {
 
   it('dispatches nothing for an event that names no poke', () => {
     const p = new SseParser()
-    // data with no `event:` field: not a poke.
     expect(p.push('data: 1\n\n')).toEqual([])
   })
 })

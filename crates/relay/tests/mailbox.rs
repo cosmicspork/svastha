@@ -174,7 +174,6 @@ async fn recipient_isolation() {
         .unwrap();
     assert_eq!(put.status(), StatusCode::NO_CONTENT);
 
-    // Carol has no such item — her own mailbox is unaffected by Bob's.
     let carol_list = app
         .oneshot(signed(&carol, "GET", "/v0/mailbox", b"", now()))
         .await
@@ -214,8 +213,6 @@ async fn fs_mailbox_store_persists_across_router_rebuild() {
         .unwrap();
     assert_eq!(put.status(), StatusCode::NO_CONTENT);
 
-    // A fresh router over the same directory still serves it, with the
-    // depositor's identity intact.
     let second = build(dir.path());
     let get = second
         .oneshot(signed(&bob, "GET", "/v0/mailbox/item-1", b"", now()))

@@ -38,11 +38,6 @@ export function startProposalNotifications(): () => void {
   })
 }
 
-/** One-shot scan on app open (unlocked): doctor links about to expire, plus a
- * dictionary-update check when the feature is on and the device is online. Each
- * source is guarded on its own so one failing never starves the other, and the
- * dictionary check swallows network errors — offline is the normal case, not a
- * notification-worthy event. */
 /** The one-time migration notice for scoped grants (decision Q5), shown exactly
  * once per vault. Legacy grants themselves are untouched; this only tells the
  * owner scopes exist and how to add them to an existing share. The copy is

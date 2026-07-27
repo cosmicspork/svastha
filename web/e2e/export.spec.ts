@@ -50,7 +50,6 @@ test('encrypted backup round-trips to a fresh device from the seed alone, and re
   await expect(resultB).toContainText('new event')
   await expect(resultB).toContainText('curation record')
 
-  // The imported events (and the tag) show on the fresh device's Timeline page.
   await pageB.evaluate(() => {
     window.location.hash = '#/timeline'
   })
@@ -59,7 +58,6 @@ test('encrypted backup round-trips to a fresh device from the seed alone, and re
   await expect(oatmealB).toBeVisible()
   await expect(oatmealB.getByTestId('spine-entry-tag')).toHaveText('#breakfast')
 
-  // Re-importing the exact same file finds everything already present: zero new.
   await pageB.evaluate(() => {
     window.location.hash = '#/settings/data'
   })

@@ -70,7 +70,6 @@ async fn deposit_pokes_the_recipient() {
     let alice = Identity::from_seed(b"alice");
     let bob = Identity::from_seed(b"bob");
 
-    // Bob is listening before Alice deposits.
     let mut bob_stream = open_events(&app, &bob).await;
 
     let deposit = app
@@ -104,7 +103,6 @@ async fn own_blob_write_pokes_own_other_devices() {
     let app = router();
     let alice = Identity::from_seed(b"alice");
 
-    // A second device on the same identity is listening.
     let mut alice_stream = open_events(&app, &alice).await;
 
     let put = app
@@ -139,7 +137,7 @@ async fn blob_write_pokes_a_grantee() {
         .unwrap();
     assert_eq!(grant.status(), StatusCode::NO_CONTENT);
 
-    // Bob listens, then Alice writes: Bob (a grantee) is poked to pull.
+    // Bob (a grantee) is poked to pull.
     let mut bob_stream = open_events(&app, &bob).await;
     let put = app
         .clone()
@@ -178,7 +176,7 @@ async fn scoped_out_grantee_is_not_poked() {
 
     let mut bob_stream = open_events(&app, &bob).await;
 
-    // Alice writes an ev- blob, outside Bob's scope: no poke reaches Bob.
+    // ev- is outside Bob's scope.
     let put_ev = app
         .clone()
         .oneshot(signed(&alice, "PUT", "/v0/blobs/ev-9", b"sealed", now()))
@@ -188,7 +186,7 @@ async fn scoped_out_grantee_is_not_poked() {
     let quiet = tokio::time::timeout(Duration::from_millis(300), bob_stream.next()).await;
     assert!(quiet.is_err(), "scoped-out grantee was poked for ev-");
 
-    // An att- write is within scope: now Bob is poked.
+    // att- is within Bob's scope.
     let put_att = app
         .clone()
         .oneshot(signed(

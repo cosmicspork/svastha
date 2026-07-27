@@ -39,7 +39,6 @@
     type DictManifest,
   } from '../../lib/dictionary'
 
-  // --- storage ---
   let persisted = $state<boolean | null>(null)
   let estimateText = $state('')
   onMount(async () => {
@@ -230,7 +229,6 @@
     }
   }
 
-  // --- restore from backup ---
   let importBusy = $state(false)
   let importError = $state('')
   let importResult = $state('')

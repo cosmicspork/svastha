@@ -677,8 +677,6 @@ mod tests {
         }
     }
 
-    // --- filename sanitization ---
-
     #[test]
     fn sanitize_flattens_xdm_path() {
         assert_eq!(

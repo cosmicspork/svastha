@@ -108,8 +108,6 @@
     margin-top: var(--space-4);
   }
 
-  /* The hub row idiom: a surfaced, bordered card with a leading glyph, a
-     title + muted sub-line, and a trailing chevron — full-width and tappable. */
   .hub-row {
     display: flex;
     align-items: center;

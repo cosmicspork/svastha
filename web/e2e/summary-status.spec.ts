@@ -66,16 +66,13 @@ test('curate the clinician summary: mark a med past (persistent) and rename a co
   await unlock(page)
   await openSummary(page)
 
-  // Both meds start in Current.
   await expect(currentMeds(page).filter({ hasText: 'Lisinopril' })).toHaveCount(1)
   await expect(currentMeds(page).filter({ hasText: 'Metformin' })).toHaveCount(1)
 
-  // --- mark Lisinopril as past ---
   await currentMeds(page).filter({ hasText: 'Lisinopril' }).click()
   await expect(page.getByTestId('row-action-sheet')).toBeVisible()
   await page.getByTestId('action-toggle-status').click()
 
-  // It leaves Current; the collapsed Past group appears with a count.
   await expect(currentMeds(page).filter({ hasText: 'Lisinopril' })).toHaveCount(0)
   const pastToggle = page.getByTestId('meds-past-toggle')
   await expect(pastToggle).toContainText('1 past')
@@ -90,7 +87,6 @@ test('curate the clinician summary: mark a med past (persistent) and rename a co
   await page.getByTestId('meds-past-toggle').click()
   await expect(pastMeds(page).filter({ hasText: 'Lisinopril' })).toHaveCount(1)
 
-  // --- rename Metformin; the override leads, the code line stays demoted ---
   await currentMeds(page).filter({ hasText: 'Metformin' }).click()
   await expect(page.getByTestId('row-action-sheet')).toBeVisible()
   await page.getByTestId('action-name-input').fill('BP + sugar combo')
@@ -102,7 +98,6 @@ test('curate the clinician summary: mark a med past (persistent) and rename a co
   await expect(renamed).toContainText('RxNorm')
   await expect(renamed).toContainText('6809')
 
-  // Survives a reload too.
   await page.reload()
   await unlock(page)
   await openSummary(page)

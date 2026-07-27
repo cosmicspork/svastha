@@ -452,9 +452,8 @@ export async function migrateCurationToSigned(sign: CurationSigner, owner: strin
   const all = await getAll<SignedCurationRecord>('curation')
   let resigned = false
   for (const record of all) {
-    if (record.signature !== undefined) continue // already signed
+    if (record.signature !== undefined) continue
     if (record.author !== owner) continue // foreign unsigned — grandfathered
-    // updatedAt preserved exactly; signer re-stamps the same owner author.
     await put('curation', sign(record.key, record.value, record.updated_at))
     await enqueue([await keyToBlobId(record.key)])
     resigned = true

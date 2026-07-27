@@ -197,7 +197,6 @@ export async function handleIncomingKeyHandoff(info: KeyHandoffInfo): Promise<Ke
   return 'invite'
 }
 
-/** Accept: store the share, forget the mailbox item, and pull their vault. */
 export async function acceptInvite(invite: PendingInvite, hue: 'a' | 'b'): Promise<void> {
   await putShare({
     ownerEd: invite.fromEd,

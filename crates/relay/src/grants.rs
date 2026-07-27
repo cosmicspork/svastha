@@ -105,7 +105,6 @@ impl MemoryGrantStore {
 
 impl GrantStore for MemoryGrantStore {
     fn put(&self, owner: &[u8; 32], grantee: &[u8; 32], grant: &Grant) -> io::Result<()> {
-        // Upsert: replace any existing scope for this pair.
         self.forward
             .lock()
             .unwrap()

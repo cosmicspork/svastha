@@ -14,7 +14,6 @@
   } from '../../lib/bloom-order'
   import { categoryLogCounts } from '../../lib/events'
 
-  // --- appearance ---
   let theme = $state<ThemePref>('system')
   onMount(async () => {
     theme = await loadTheme()
@@ -44,7 +43,6 @@
     await put('prefs', value, 'fab-hand')
   }
 
-  // --- bloom petal order ---
   // Two prefs (see bloom-order.ts): the saved manual order, and whether it's
   // in effect. Toggling back to Automatic keeps the saved order around, so a
   // hand-built arrangement survives a round-trip through Automatic.
@@ -236,8 +234,6 @@
     margin-top: var(--space-6);
   }
 
-  /* A settings row: a label (with optional muted caption) paired with its
-     control, e.g. the .seg theme picker or the hue swatches below. */
   .setrow {
     display: flex;
     align-items: center;

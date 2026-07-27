@@ -118,7 +118,6 @@ test('doctor share opt-in: cycle is excluded by default and included only when t
   await expect(page.getByTestId('clinician-summary')).toBeVisible()
   await expect(page.getByTestId('summary-section-cycle')).toHaveCount(0)
 
-  // Create the default share and confirm the sealed bundle carries no cycle event.
   await page.getByTestId('share-create').click()
   await expect(page.getByTestId('share-link')).toBeVisible()
   const link = (await page.getByTestId('share-link').innerText()).trim()
@@ -252,12 +251,10 @@ test('the Doctor screen lists and revokes an existing link without opening the c
   await expect(page.getByTestId('share-create')).toHaveCount(0)
   await expect(page.getByTestId('doctor-honest')).toBeVisible()
 
-  // Copy link and Show QR work straight from the list.
   await expect(page.getByTestId(`reshow-copy-${token}`)).toBeVisible()
   await page.getByTestId(`reshow-qr-${token}`).click()
   await expect(page.getByTestId(`reshow-qr-svg-${token}`).locator('svg')).toBeVisible()
 
-  // Revoke in place — the row flips to revoked and the relay stops serving it.
   await page.getByTestId(`revoke-${token}`).click()
   await expect(page.getByTestId(`share-status-${token}`)).toHaveText('revoked')
   const afterRevoke = await page.request.get(`${RELAY}/v0/share/${token}`, {

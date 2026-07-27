@@ -448,7 +448,6 @@ fn a_question_from_a_non_enrolled_identity_is_dropped() {
     );
     h.enroll_and_sync();
 
-    // A stranger (never enrolled) signs a real envelope and deposits a question.
     let stranger = Identity::from_seed(b"rag stranger");
     let stranger_client = RelayClient::new(
         h.base.clone(),
@@ -470,7 +469,6 @@ fn a_question_from_a_non_enrolled_identity_is_dropped() {
         0,
         "no inference for a dropped question"
     );
-    // The stranger receives no answer.
     assert!(read_chat_answers(&stranger_client, &stranger).is_empty());
 }
 
@@ -487,14 +485,12 @@ fn cross_tenant_isolation_a_question_never_retrieves_bs_events() {
     let a = h.add_owner(b"rag owner A");
     let b = h.add_owner(b"rag owner B");
 
-    // A's vault: aspirin. B's vault: warfarin. Distinct.
     let a_aspirin = med(&a.id, "1191", "aspirin", "2025-01-01");
     put_event(&a.client, &a.ring, &a.id, &a_aspirin);
     let b_warfarin = med(&b.id, "11289", "warfarin", "2025-01-01");
     put_event(&b.client, &b.ring, &b.id, &b_warfarin);
     h.enroll_and_sync();
 
-    // A asks about warfarin — which only B has.
     ask(&a.id, &a.client, &h.node, "am I taking warfarin?");
     let mut journal = h.journal();
     let report = chat::run(&h.node_client, &h.state, &inf, &mut journal).unwrap();
@@ -511,7 +507,6 @@ fn cross_tenant_isolation_a_question_never_retrieves_bs_events() {
         "A can never cite B's warfarin event"
     );
 
-    // B asks about warfarin — B's own vault answers, citing B's event.
     ask(&b.id, &b.client, &h.node, "am I taking warfarin?");
     let report = chat::run(&h.node_client, &h.state, &inf, &mut journal).unwrap();
     assert_eq!(report.answered, 1);

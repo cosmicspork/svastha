@@ -9,7 +9,7 @@
   let failed = $state(false)
   let downloadUrl = $state('')
 
-  // The caption is the download name; only add .pdf when it isn't already there.
+  // The caption doubles as the download name.
   const downloadName = $derived(
     label.toLowerCase().endsWith('.pdf') ? label : `${label || 'document'}.pdf`,
   )

@@ -18,8 +18,7 @@ test('captures a photo and a PDF in one record and views both', async ({ page })
 
   await page.getByTestId('save').click()
 
-  // Back on the spine: a mixed record uses the neutral paperclip hint. Tapping
-  // the row opens the full-screen viewer.
+  // Back on the spine: a mixed record uses the neutral paperclip hint, hence filtering on '2 items'.
   const entry = page.getByTestId('spine-entry').filter({ hasText: '2 items' })
   await expect(entry).toHaveCount(1)
   await entry.getByTestId('spine-entry-trigger').click()
@@ -55,6 +54,5 @@ test('rejects an oversize PDF at pick time and adds nothing', async ({ page }) =
   })
 
   await expect(page.getByTestId('save-error')).toContainText('over 11 MB')
-  // Nothing was added, so the thumbs grid never renders.
   await expect(page.getByTestId('paper-thumbs')).toHaveCount(0)
 })
