@@ -1,0 +1,63 @@
+{
+  "version": "7.0.0",
+  "generated_at": "2026-07-28T16:09:33.967Z",
+  "traineddata_source": "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/eng.traineddata",
+  "files": [
+    {
+      "path": "worker.min.js",
+      "bytes": 111307,
+      "sha256": "576b7df7e3393e137e51849357c9adb53fe7ac1bb69bfa06cf3d61520f182c6d",
+      "label": "Recognition worker",
+      "role": "worker"
+    },
+    {
+      "path": "tesseract-core-simd-lstm.wasm",
+      "bytes": 2857601,
+      "sha256": "34e8d50cac216427d86bf397d610fdd9f49492539bbcdfbfccc4eda20c810bea",
+      "label": "Recognition core (SIMD)",
+      "role": "core"
+    },
+    {
+      "path": "tesseract-core-simd-lstm.js",
+      "bytes": 89271,
+      "sha256": "e48e2f02ddae3716c8dd24bf41cd290d4efa96892d689cdc4013c2545d63f469",
+      "label": "Recognition core loader (SIMD)",
+      "role": "core"
+    },
+    {
+      "path": "tesseract-core-lstm.wasm",
+      "bytes": 2855361,
+      "sha256": "66b17df6e20c5329a17ffa9c202a47eaa3e32500b253d4c7f38e7f2bc01457c3",
+      "label": "Recognition core",
+      "role": "core"
+    },
+    {
+      "path": "tesseract-core-lstm.js",
+      "bytes": 89261,
+      "sha256": "6510efc4e8b45c5465df30679b9911ffe0071cd2ee982fa064e6f5136ef2de85",
+      "label": "Recognition core loader",
+      "role": "core"
+    },
+    {
+      "path": "eng.traineddata",
+      "bytes": 4113088,
+      "sha256": "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2",
+      "label": "English language data",
+      "role": "lang"
+    },
+    {
+      "path": "TESSERACT_LICENSE.txt",
+      "bytes": 11357,
+      "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1",
+      "label": "Tesseract.js licence",
+      "role": "notice"
+    },
+    {
+      "path": "TESSERACT_CORE_LICENSE.txt",
+      "bytes": 11358,
+      "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08",
+      "label": "Tesseract core licence",
+      "role": "notice"
+    }
+  ]
+}

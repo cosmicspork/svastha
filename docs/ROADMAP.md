@@ -53,8 +53,12 @@ replaces the single vision pass and retires the vision-model requirement.
 
 - Move the node's own inference-endpoint field alongside the device one, so the
   two are configured in one place rather than two screens
-- Optional on-device OCR for photographed pages — engine assets self-hosted and
-  opt-in, following the offline dictionary's download pattern
+- Measure on-device OCR accuracy against the tabular fixtures before it can be
+  switched on by default — the ship gate is zero cross-row mis-associations, and
+  it needs a harness that runs real pages through a configured endpoint
+- Runtime-cache the OCR assets in the service worker, so a device that has
+  switched on on-device reading can still read a page offline (they are excluded
+  from the install precache, so today it depends on the browser's HTTP cache)
 - Propose coded events from pages read on this device — the PWA signs as the
   owner, so local drafts skip the mailbox round-trip entirely
 - Two-stage extraction in the node with in-process OCR — one extraction path,

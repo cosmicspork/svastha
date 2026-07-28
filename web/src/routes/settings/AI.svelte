@@ -12,6 +12,13 @@
     recordConsent,
     testConnection,
   } from '../../lib/inference'
+  import {
+    assetsEnabled,
+    enableAssets,
+    disableAssets,
+    loadManifest,
+    downloadBytes,
+  } from '../../lib/ocr-assets'
 
   let endpoint = $state('')
   let model = $state('')
@@ -26,8 +33,21 @@
   let status = $state('')
   let busy = $state(false)
 
+  // On-device page reading. Off by default and staying that way until its
+  // accuracy has been measured against the tabular fixtures — a lab panel read
+  // wrong is a wrong number against the right analyte.
+  let ocrOn = $state(false)
+  let ocrBusy = $state(false)
+  let ocrError = $state('')
+  let ocrProgress = $state(0)
+  let ocrSizeMb = $state(0)
+
   onMount(async () => {
     consented = await hasConsented()
+    ocrOn = await assetsEnabled()
+    void loadManifest()
+      .then((m) => (ocrSizeMb = downloadBytes(m) / 1024 / 1024))
+      .catch(() => {})
     const config = await loadConfig()
     if (!config) return
     endpoint = config.endpoint
@@ -94,6 +114,26 @@
       error = err instanceof Error ? err.message : 'Could not reach the endpoint.'
     } finally {
       busy = false
+    }
+  }
+
+  async function toggleOcr() {
+    ocrError = ''
+    if (ocrOn) {
+      await disableAssets()
+      ocrOn = false
+      return
+    }
+    ocrBusy = true
+    ocrProgress = 0
+    try {
+      await enableAssets((done, total) => (ocrProgress = total > 0 ? done / total : 0))
+      ocrOn = true
+    } catch (err) {
+      // Nothing is switched on unless every file verified.
+      ocrError = err instanceof Error ? err.message : 'Could not prepare the reader.'
+    } finally {
+      ocrBusy = false
     }
   }
 
@@ -176,6 +216,37 @@
     model running on your own machine needs a certificate — a tunnel or reverse proxy in front of it
     is enough. The API key is stored sealed on this device, and it is unavailable while the vault is
     locked.
+  </p>
+</section>
+
+<section class="stack">
+  <h2>Reading pages on this device</h2>
+  <p class="muted intro">
+    Reads text out of a photographed or scanned page here, so the image itself never leaves this
+    device — only the text it contains is sent for coding. Digital PDFs are read exactly and need
+    none of this; the reader is for pages that are pictures.
+  </p>
+  <p class="muted intro">
+    It does not read handwriting. A handwritten page comes back as "couldn't read this" rather than
+    a guess, which is the honest answer for a medical record.
+  </p>
+
+  <div class="swatches">
+    <button type="button" onclick={toggleOcr} disabled={ocrBusy} data-testid="ocr-toggle">
+      {ocrOn ? 'Turn off' : `Turn on${ocrSizeMb ? ` (${ocrSizeMb.toFixed(0)} MB)` : ''}`}
+    </button>
+  </div>
+  {#if ocrBusy}
+    <p class="muted" data-testid="ocr-progress">
+      Preparing the reader… {Math.round(ocrProgress * 100)}%
+    </p>
+  {/if}
+  {#if ocrError}
+    <p class="error" data-testid="ocr-error">{ocrError}</p>
+  {/if}
+  <p class="muted note">
+    A one-time download, checked against the checksums this app shipped with before it is switched
+    on. Everything is served from this app — nothing is fetched from anyone else's servers.
   </p>
 </section>
 
