@@ -22,10 +22,13 @@
 //! cited line does not actually contain what it says it found.
 //!
 //! This is the defence against the failure that makes tabular lab reports
-//! dangerous: a value read off one row and attached to the analyte on another.
-//! Its limit is worth stating plainly — the guard confirms a finding belongs to
-//! the **line** it cites, not to a particular cell within that line, so a swap
-//! between two values on the *same* row still reaches the owner's approval
+//! dangerous: a value read off one row and attached to the analyte on another,
+//! or read out of the reference-range column of its own row.
+//!
+//! Its limit is worth stating plainly. The guard works at line and token level:
+//! a claimed value must be a whole token of the line it cites and not a bound of
+//! a range printed there. It does not know which *cell* a token came from, so a
+//! swap between two results on the same row still reaches the owner's approval
 //! queue. It narrows the failure, it does not eliminate it.
 
 use serde::Deserialize;
@@ -156,18 +159,26 @@ fn parse_inner(answer: &str, lines: Option<&[String]>) -> Extraction {
 
 /// Whether a finding's cited line actually contains what it claims to have found.
 ///
-/// The check is deliberately forgiving about wording and strict about identity:
+/// Every claim the finding makes is checked against the tokens of that one line,
+/// and a finding that makes no checkable claim at all is dropped:
 ///
 /// - The cited line must exist. No `source_line`, or one out of range, fails —
 ///   an unverifiable claim is not a safer claim.
-/// - At least one substantial word of `display` must appear on that line. Token
-///   overlap rather than exact containment, so "Serum potassium" still matches a
+/// - `display`, when it has a word in it, must share a whole token with the
+///   line. Overlap rather than equality, so "Serum potassium" still matches a
 ///   line reading "Potassium" — while "Sodium" does not, which is the case that
-///   matters.
-/// - `value_quantity`, if given, must appear on that line.
+///   matters. One- and two-letter labels (`K`, `Na`) are checked the same way
+///   rather than dismissed as too short to be worth checking.
+/// - `value_quantity`, when given, must equal a whole token — or a run of
+///   them — that is not a bound of a printed reference range. `13` is therefore
+///   not "found" inside `139`, and `5.1` is not found in `3.5-5.1`.
+/// - `value_text`, when given, must share more than half its tokens with the
+///   line, so free text is bound to its citation the way a value is.
 ///
-/// Numbers keep their decimal points through normalization, so `4.1` does not
-/// match inside `3.5-5.1` by accident.
+/// Beyond the cell-level limit the module doc states: a range is recognized by
+/// the dash joining its bounds (`3.5-5.1`, `135 - 145`, en and em dashes too),
+/// so one spelled another way — "3.5 to 5.1" — reads as two ordinary numbers and
+/// its bounds stay quotable.
 fn quotes_back(f: &Finding, lines: &[String]) -> bool {
     let Some(index) = f.source_line else {
         return false;
@@ -175,41 +186,125 @@ fn quotes_back(f: &Finding, lines: &[String]) -> bool {
     let Some(line) = index.checked_sub(1).and_then(|i| lines.get(i)) else {
         return false;
     };
-    let haystack = normalize(line);
+    let tokens = tokenize(line);
+    let mut checked_something = false;
 
-    let display_tokens: Vec<String> = normalize(&f.display)
-        .split(' ')
-        .filter(|t| t.len() >= 3 && t.chars().any(|c| c.is_ascii_alphabetic()))
-        .map(str::to_string)
+    let display: Vec<String> = tokenize(&f.display)
+        .into_iter()
+        .filter(|t| t.text.chars().any(|c| c.is_ascii_alphabetic()))
+        .map(|t| t.text)
         .collect();
-    if !display_tokens.is_empty() && !display_tokens.iter().any(|t| haystack.contains(t.as_str())) {
-        return false;
+    if !display.is_empty() {
+        if !display.iter().any(|d| tokens.iter().any(|t| &t.text == d)) {
+            return false;
+        }
+        checked_something = true;
     }
 
-    let value = normalize(&f.value_quantity);
-    if !value.is_empty() && !haystack.contains(&value) {
-        return false;
+    let value: Vec<String> = tokenize(&f.value_quantity)
+        .into_iter()
+        .map(|t| t.text)
+        .collect();
+    if !value.is_empty() {
+        if !contains_run(&tokens, &value) {
+            return false;
+        }
+        checked_something = true;
     }
 
-    true
+    if !f.value_text.trim().is_empty() {
+        let text: Vec<String> = tokenize(&f.value_text)
+            .into_iter()
+            .map(|t| t.text)
+            .collect();
+        let quoted = text
+            .iter()
+            .filter(|w| tokens.iter().any(|t| &&t.text == w))
+            .count();
+        // A strict majority, which for one or two tokens means all of them.
+        if quoted * 2 <= text.len() {
+            return false;
+        }
+        checked_something = true;
+    }
+
+    checked_something
 }
 
-/// Lowercase, and collapse every run of characters that is neither alphanumeric
-/// nor a decimal point into a single space. Keeping `.` is what stops `4.1`
-/// matching inside a reference range like `3.5-5.1`.
-fn normalize(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut spaced = true;
+/// One token of a line: alphanumerics and decimal points, lowercased.
+struct Token {
+    text: String,
+    /// This token is one end of a printed reference range. A bound is a number
+    /// on the line like any other, so without this the guard cannot tell a
+    /// result from the interval printed beside it.
+    in_range: bool,
+}
+
+/// Split into tokens, marking the bounds of any `low-high` range.
+fn tokenize(s: &str) -> Vec<Token> {
+    let mut out: Vec<Token> = Vec::new();
+    // The raw characters between the previous token and the next one, which is
+    // where the dash that makes a range lives.
+    let mut gaps: Vec<String> = Vec::new();
+    let mut gap = String::new();
+    let mut current = String::new();
+
     for c in s.chars() {
         if c.is_ascii_alphanumeric() || c == '.' {
-            out.push(c.to_ascii_lowercase());
-            spaced = false;
-        } else if !spaced {
-            out.push(' ');
-            spaced = true;
+            current.push(c.to_ascii_lowercase());
+        } else {
+            if !current.is_empty() {
+                gaps.push(std::mem::take(&mut gap));
+                out.push(Token {
+                    text: std::mem::take(&mut current),
+                    in_range: false,
+                });
+            }
+            gap.push(c);
         }
     }
-    out.trim().to_string()
+    if !current.is_empty() {
+        gaps.push(gap);
+        out.push(Token {
+            text: current,
+            in_range: false,
+        });
+    }
+
+    for i in 1..out.len() {
+        if is_number(&out[i - 1].text) && is_number(&out[i].text) && is_range_dash(&gaps[i]) {
+            out[i - 1].in_range = true;
+            out[i].in_range = true;
+        }
+    }
+    out
+}
+
+fn is_number(t: &str) -> bool {
+    t.chars().any(|c| c.is_ascii_digit()) && t.chars().all(|c| c.is_ascii_digit() || c == '.')
+}
+
+/// Whether the text between two numbers joins them into a range. Hyphen, en
+/// dash and em dash all show up in OCR of the same printed dash.
+fn is_range_dash(gap: &str) -> bool {
+    let g = gap.trim();
+    !g.is_empty()
+        && g.chars()
+            .all(|c| matches!(c, '-' | '\u{2010}' | '\u{2013}' | '\u{2014}'))
+}
+
+/// Whether `needle` appears as a contiguous run of whole tokens, none of them a
+/// range bound. Whole tokens are the point: a substring match accepts `13` from
+/// `139` and `45` from `145`.
+fn contains_run(tokens: &[Token], needle: &[String]) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    tokens.windows(needle.len()).any(|w| {
+        w.iter()
+            .zip(needle)
+            .all(|(t, n)| &t.text == n && !t.in_range)
+    })
 }
 
 /// Validate one finding into a schema-valid, meaningful [`EventDraft`], or `None`
@@ -447,11 +542,24 @@ mod tests {
 
     /// The reason the two-stage split exists. Every finding in this fixture is
     /// individually schema-valid and would sail through `parse` untouched; each
-    /// pairs a real analyte with a value from a different row. "Potassium 139"
-    /// is a clinical emergency that never happened.
+    /// cites a real line and pairs it with a value from a different row.
+    /// "Potassium 139" is a clinical emergency that never happened. Findings
+    /// that cite nothing, or a line that does not exist, are a different failure
+    /// with its own test — keeping them out of here is what makes the count below
+    /// a measure of cross-row coverage.
     #[test]
     fn cross_row_mis_association_is_dropped_entirely() {
         let transcript = lines(PANEL_LINES);
+
+        // A finding that cited nothing would be dropped for the wrong reason and
+        // quietly turn the count below into a weaker claim than it reads as.
+        let parsed: Findings = parse_json_object(PANEL_CROSS_ROW).expect("fixture parses");
+        assert!(
+            parsed.findings.iter().all(|f| f
+                .source_line
+                .is_some_and(|n| (1..=transcript.len()).contains(&n))),
+            "every finding in the cross-row fixture must cite a real line"
+        );
 
         // Without the transcript there is nothing to check against, and all five
         // become proposals — this is what an unverified pass would do.
@@ -488,19 +596,112 @@ mod tests {
             "system":"loinc","code":"2823-3","display":"Serum potassium",
             "value_quantity":"4.1"}]}"#;
         assert_eq!(parse_lines(reworded, &transcript).drafts.len(), 1);
+
+        // ...and so does a label that names only part of the printed one.
+        let narrower = vec!["Potassium, serum    4.1   mmol/L   3.5-5.1".to_string()];
+        assert_eq!(
+            parse_lines(&observation(1, "Potassium", "4.1"), &narrower)
+                .drafts
+                .len(),
+            1
+        );
     }
 
-    /// Decimal points survive normalization, so a value cannot be "found" inside
-    /// the reference range printed beside it.
+    /// One observation finding as the model would emit it.
+    fn observation(source_line: usize, display: &str, value: &str) -> String {
+        format!(
+            r#"{{"findings":[{{"kind":"observation","source_line":{source_line},
+               "system":"loinc","code":"2823-3","display":"{display}",
+               "value_quantity":"{value}"}}]}}"#
+        )
+    }
+
+    /// Reading the reference-range column instead of the result column is the
+    /// commonest tabular mis-read after the cross-row swap, and a bound is a
+    /// whole token on the line like any other number.
     #[test]
-    fn a_value_matching_only_inside_the_reference_range_is_dropped() {
-        let transcript = lines(PANEL_LINES);
-        // Line 5 reads "Potassium 4.1 mmol/L 3.5-5.1". A claimed value of 5.1 is
-        // the range's upper bound, not the result.
-        let from_range = r#"{"findings":[{"kind":"observation","source_line":5,
-            "system":"loinc","code":"2823-3","display":"Potassium",
-            "value_quantity":"51"}]}"#;
-        assert_eq!(parse_lines(from_range, &transcript).dropped, 1);
+    fn a_value_taken_from_the_printed_reference_range_is_dropped() {
+        let t = lines(PANEL_LINES);
+        // Line 5: "Potassium 4.1 mmol/L 3.5-5.1" — 3.5 and 5.1 are the range.
+        assert_eq!(
+            parse_lines(&observation(5, "Potassium", "5.1"), &t).dropped,
+            1
+        );
+        assert_eq!(
+            parse_lines(&observation(5, "Potassium", "3.5"), &t).dropped,
+            1
+        );
+        // Line 7: "Glucose 105 mg/dL 70-99".
+        assert_eq!(parse_lines(&observation(7, "Glucose", "99"), &t).dropped, 1);
+        // OCR renders the same printed dash as a hyphen, en dash or em dash.
+        let dashes = vec!["Sodium   139   mmol/L   135\u{2013}145".to_string()];
+        assert_eq!(
+            parse_lines(&observation(1, "Sodium", "145"), &dashes).dropped,
+            1
+        );
+        // The result on that same line still verifies.
+        assert_eq!(
+            parse_lines(&observation(5, "Potassium", "4.1"), &t)
+                .drafts
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_value_that_is_only_part_of_a_number_on_the_line_is_dropped() {
+        let t = lines(PANEL_LINES);
+        // Line 4: "Sodium 139 mmol/L 135-145". Neither 13 nor 45 is on it.
+        assert_eq!(parse_lines(&observation(4, "Sodium", "13"), &t).dropped, 1);
+        assert_eq!(parse_lines(&observation(4, "Sodium", "45"), &t).dropped, 1);
+    }
+
+    /// The rule is "matches a token outside the range", not "differs from the
+    /// bounds": a potassium of 5.1 against 3.5-5.1 is a real, high-normal result.
+    #[test]
+    fn a_result_that_equals_a_range_bound_is_kept() {
+        let t = vec!["Potassium        5.1      mmol/L    3.5-5.1".to_string()];
+        assert_eq!(
+            parse_lines(&observation(1, "Potassium", "5.1"), &t)
+                .drafts
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_one_letter_analyte_is_checked_rather_than_skipped() {
+        let t = lines(PANEL_LINES);
+        // "K 105" read off the glucose row: potassium 105 is not survivable, and
+        // a label too short to look substantial must not skip the check.
+        assert_eq!(parse_lines(&observation(7, "K", "105"), &t).dropped, 1);
+
+        // The same label verifies against a line that actually carries it.
+        let short = vec!["K    4.1   mmol/L   3.5-5.1".to_string()];
+        assert_eq!(
+            parse_lines(&observation(1, "K", "4.1"), &short)
+                .drafts
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn free_text_must_overlap_the_line_it_cites() {
+        let t = lines(PANEL_LINES);
+        // Line 1 is the lab's letterhead. An impression is not hiding in it.
+        let invented = r#"{"findings":[{"kind":"document","source_line":1,
+            "value_text":"Impression: metastatic carcinoma"}]}"#;
+        assert_eq!(parse_lines(invented, &t).dropped, 1);
+    }
+
+    #[test]
+    fn a_finding_with_nothing_to_check_is_dropped() {
+        let t = lines(PANEL_LINES);
+        // A code with no label, value, or text says nothing the line can confirm.
+        let bare = r#"{"findings":[{"kind":"observation","source_line":5,
+            "system":"loinc","code":"2823-3"}]}"#;
+        assert_eq!(parse_lines(bare, &t).dropped, 1);
     }
 
     #[test]

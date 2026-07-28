@@ -1,5 +1,5 @@
 {
-  "_comment": "The adversarial case the source-line guard exists for. Every finding here is individually well-formed and would pass the schema validation untouched; each pairs a real analyte with a real value that sits on a DIFFERENT row of the panel. Read row-major without layout, this is exactly what a model produces — and 'Potassium 139 mmol/L' in a medical record is a clinical emergency that never happened.",
+  "_comment": "The adversarial case the source-line guard exists for. All five findings are individually well-formed and would pass schema validation untouched; each cites a real line of cmp-panel.lines.json and pairs it with a real value from a DIFFERENT row of the panel. Read row-major without layout, this is exactly what a model produces — and 'Potassium 139 mmol/L' in a medical record is a clinical emergency that never happened. Every case here is a cross-row mis-association: findings that cite no line or a line that does not exist are a different failure and are covered separately in extract.rs.",
   "findings": [
     {
       "kind": "observation",
@@ -36,21 +36,24 @@
     },
     {
       "kind": "observation",
-      "source_line": 99,
+      "source_line": 7,
       "system": "loinc",
       "code": "2345-7",
       "display": "Glucose",
-      "value_quantity": "105",
+      "value_quantity": "104",
       "unit": "mg/dL",
+      "effective_at": "2026-01-14",
       "confidence": 0.8
     },
     {
       "kind": "observation",
+      "source_line": 6,
       "system": "loinc",
       "code": "2075-0",
       "display": "Chloride",
-      "value_quantity": "104",
+      "value_quantity": "105",
       "unit": "mmol/L",
+      "effective_at": "2026-01-14",
       "confidence": 0.8
     }
   ]
