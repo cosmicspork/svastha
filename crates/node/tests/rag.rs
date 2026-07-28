@@ -528,7 +528,7 @@ fn resolved_vs_current_curation_shapes_the_cited_answer() {
     let stopped = med(&owner.id, "861007", "metformin syrup", "2024-01-01"); // newer, but resolved
     put_event(&owner.client, &owner.ring, &owner.id, &active);
     put_event(&owner.client, &owner.ring, &owner.id, &stopped);
-    let stopped_concept = svastha_node::index::VaultIndex::concept_key(&stopped.event).unwrap();
+    let stopped_concept = svastha_node::index::VaultIndex::concept_key(&stopped.event);
     put_curation(
         &owner.client,
         &owner.ring,
