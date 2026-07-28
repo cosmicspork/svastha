@@ -16,56 +16,71 @@
 // it poorly, and it would put markup between the reader and the record.
 import type { OcrLine, OcrWord } from './ocr'
 
-/** Fraction of the shorter run's height that two runs must overlap vertically to
- * count as the same line. Half is forgiving enough for the baseline jitter in a
- * scan, tight enough that a table's rows stay separate. */
-const LINE_OVERLAP = 0.5
+/** How far a run's vertical center may sit from its row's, as a multiple of the
+ * page's typical glyph height. A full height means the two bands merely touch:
+ * forgiving enough for the baseline wobble in a scan and the droop a fraction of
+ * a degree of skew accumulates across a wide panel, short of the leading that
+ * separates two printed rows. */
+const BAND_TOLERANCE = 1
 
 /** Character width of a rendered column block. Wide enough for a lab panel's
  * analyte/value/unit/range, narrow enough not to bloat the prompt. */
 export const COLUMN_WIDTH = 100
 
-/** How much two vertical spans overlap, as a fraction of the shorter one. */
-function overlapRatio(a: OcrWord, b: OcrWord): number {
-  const top = Math.max(a.y0, b.y0)
-  const bottom = Math.min(a.y1, b.y1)
-  const shorter = Math.min(a.y1 - a.y0, b.y1 - b.y0)
-  if (shorter <= 0) return 0
-  return Math.max(0, bottom - top) / shorter
+/** Middle of a run's vertical span. Large and small faces on one printed row
+ * share a center far more closely than they share an edge. */
+function center(word: OcrWord): number {
+  return (word.y0 + word.y1) / 2
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = sorted.length >> 1
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
 }
 
 /**
- * Group positioned runs into lines by vertical overlap, top to bottom, each
- * line's runs ordered left to right.
+ * Group positioned runs into lines, top to bottom, each line's runs ordered left
+ * to right.
  *
- * Overlap rather than equal baselines: a scan's baselines wobble, and a run set
- * in a larger face sits on the same visual row without sharing a y. Each run is
- * compared against the line it would join rather than against a running average,
- * so one tall run cannot drag a line's band across its neighbours.
+ * A row's band is the median of its members' vertical centers, and the tolerance
+ * around it comes from the median glyph height of the whole page. Both medians
+ * are load-bearing:
+ *
+ *   - Against the row: a section label in a large face, a scanned table rule or a
+ *     logo is several rows tall. Anchoring a row to its tallest member let such a
+ *     run stretch the band over every row it crossed and merge them into one
+ *     line, which is the cross-row mis-association this module exists to prevent.
+ *     A tall run contributes one center like any other, so it can join a row but
+ *     cannot become that row's extent.
+ *   - Against the page: a row's own heights say nothing about how far apart the
+ *     page's rows are, so the tolerance is a page statistic, immune to whatever
+ *     outsized runs happen to land in one row.
+ *
+ * The median also drifts along with a skewed row as its cells droop, which is
+ * what keeps a crooked scan's row together rather than shredding it into one
+ * line per cell.
  */
 export function groupLines(words: OcrWord[]): OcrLine[] {
   const usable = words.filter((w) => w.text.trim() !== '')
   if (usable.length === 0) return []
 
-  const sorted = [...usable].sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0)
-  const rows: OcrWord[][] = []
+  const tolerance = median(usable.map((w) => w.y1 - w.y0)) * BAND_TOLERANCE
+  const sorted = [...usable].sort((a, b) => center(a) - center(b) || a.x0 - b.x0)
+  const rows: { words: OcrWord[]; centers: number[] }[] = []
 
   for (const word of sorted) {
     const row = rows.at(-1)
-    // Compare against the row's tallest member: the run most likely to define
-    // the visual band, so a short subscript joins rather than starting a row.
-    const anchor = row?.reduce((tallest, w) =>
-      w.y1 - w.y0 > tallest.y1 - tallest.y0 ? w : tallest,
-    )
-    if (anchor && overlapRatio(anchor, word) >= LINE_OVERLAP) {
-      row!.push(word)
+    if (row && Math.abs(center(word) - median(row.centers)) <= tolerance) {
+      row.words.push(word)
+      row.centers.push(center(word))
     } else {
-      rows.push([word])
+      rows.push({ words: [word], centers: [center(word)] })
     }
   }
 
   return rows.map((row, i) => {
-    const ordered = [...row].sort((a, b) => a.x0 - b.x0)
+    const ordered = [...row.words].sort((a, b) => a.x0 - b.x0)
     return {
       index: i + 1,
       words: ordered,
