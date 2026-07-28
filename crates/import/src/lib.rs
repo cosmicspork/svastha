@@ -18,13 +18,14 @@ use svastha_core::event::{Code, EventKind, EventValue};
 
 pub mod ccda;
 pub mod dates;
+pub mod extract;
 pub mod fhir;
 
 /// Terminology system URIs shared by both mappers (also mirrored in
 /// `web/src/lib/codes.ts` — keep the strings identical so a fact mapped from
-/// either format uses the same system URI). Public so a third mapper — the
-/// node's OCR extractor (`crates/node`) — codes against the identical URIs
-/// rather than inventing a parallel set.
+/// either format uses the same system URI). Public so the third mapper — the
+/// OCR extractor in [`extract`] — codes against the identical URIs rather than
+/// inventing a parallel set.
 pub mod systems {
     pub const LOINC: &str = "http://loinc.org";
     pub const SNOMED: &str = "http://snomed.info/sct";

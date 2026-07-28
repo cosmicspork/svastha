@@ -53,9 +53,6 @@ replaces the single vision pass and retires the vision-model requirement.
 
 - Move the node's own inference-endpoint field alongside the device one, so the
   two are configured in one place rather than two screens
-- Code from transcribed text with source-line verification — each finding
-  quotes back the numbered line it came from, so a value cannot be
-  mis-associated across the columns of a lab panel
 - Optional on-device OCR for photographed pages — engine assets self-hosted and
   opt-in, following the offline dictionary's download pattern
 - Propose coded events from pages read on this device — the PWA signs as the
