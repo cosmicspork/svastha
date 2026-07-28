@@ -8,9 +8,11 @@
 //! `docs/ARCHITECTURE.md`, "Self-hosting"). Everything else has a safe default.
 //!
 //! The inference endpoint, model, and API key are read and *validated* here.
-//! Inference is split into two independent **roles** — OCR (vision extraction)
+//! Inference is split into two independent **roles** — OCR (coding a page the
+//! node transcribed itself)
 //! and chat (RAG answers) — so an operator can point each at a different model
-//! (a vision model reads pages badly answers questions; a chat model the reverse).
+//! (a model tuned for structured extraction and one tuned for answering are
+//! rarely the same model).
 //! Each role resolves its endpoint/model/API key from role-specific env vars,
 //! each **falling back to the shared base** (`SVASTHA_NODE_INFERENCE_*`), so a
 //! single-model setup keeps working unchanged. A role is enabled when it resolves
@@ -31,13 +33,13 @@ pub const ENV_DATA_DIR: &str = "SVASTHA_NODE_DATA_DIR";
 /// disposable: on restart, anything missing simply re-syncs.
 pub const ENV_CACHE_DIR: &str = "SVASTHA_NODE_CACHE_DIR";
 /// Optional OpenAI-compatible inference endpoint. When set, OCR (D2) is enabled
-/// and this is the chat-completions base the node posts vision requests to; a
+/// and this is the chat-completions base the node posts coding requests to; a
 /// model id ([`ENV_INFERENCE_MODEL`]) is then required.
 pub const ENV_INFERENCE_ENDPOINT: &str = "SVASTHA_NODE_INFERENCE_ENDPOINT";
 /// Optional inference API key. Sent as an `Authorization: Bearer` header; never
 /// logged.
 pub const ENV_INFERENCE_API_KEY: &str = "SVASTHA_NODE_INFERENCE_API_KEY";
-/// The chat-completions model id (e.g. a vision model). **Required whenever an
+/// The chat-completions model id (a text model). **Required whenever an
 /// endpoint resolves for a role** — an OpenAI-compatible request carries a
 /// `model` field, and leaving it to an endpoint default is too surprising for a
 /// pipeline that writes proposals into someone's medical record. This is the
@@ -48,11 +50,11 @@ pub const ENV_INFERENCE_MODEL: &str = "SVASTHA_NODE_INFERENCE_MODEL";
 // single-model deployment needs only the base three vars. Set a role's model to
 // run OCR and chat on different models (the common case: one endpoint, two model
 // ids); set a role's endpoint/key too to split them across providers entirely.
-/// OCR (vision) endpoint override; falls back to [`ENV_INFERENCE_ENDPOINT`].
+/// OCR (page-coding) endpoint override; falls back to [`ENV_INFERENCE_ENDPOINT`].
 pub const ENV_OCR_ENDPOINT: &str = "SVASTHA_NODE_OCR_INFERENCE_ENDPOINT";
-/// OCR (vision) model override; falls back to [`ENV_INFERENCE_MODEL`].
+/// OCR (page-coding) model override; falls back to [`ENV_INFERENCE_MODEL`].
 pub const ENV_OCR_MODEL: &str = "SVASTHA_NODE_OCR_INFERENCE_MODEL";
-/// OCR (vision) API-key override; falls back to [`ENV_INFERENCE_API_KEY`].
+/// OCR (page-coding) API-key override; falls back to [`ENV_INFERENCE_API_KEY`].
 pub const ENV_OCR_API_KEY: &str = "SVASTHA_NODE_OCR_INFERENCE_API_KEY";
 /// Chat (RAG) endpoint override; falls back to [`ENV_INFERENCE_ENDPOINT`].
 pub const ENV_CHAT_ENDPOINT: &str = "SVASTHA_NODE_CHAT_INFERENCE_ENDPOINT";
@@ -395,14 +397,14 @@ mod tests {
 
     #[test]
     fn a_role_model_override_wins_over_the_base_model() {
-        // The headline case: one endpoint, a vision model for OCR and a chat model
+        // The headline case: one endpoint, an extraction model for OCR and a chat model
         // for RAG.
         let l = lookup_from(&[
             (ENV_INFERENCE_ENDPOINT, "https://base/v1"),
-            (ENV_INFERENCE_MODEL, "vision-model"),
+            (ENV_INFERENCE_MODEL, "extract-model"),
             (ENV_CHAT_MODEL, "chat-model"),
         ]);
-        assert_eq!(ocr(&l).unwrap().unwrap().model, "vision-model");
+        assert_eq!(ocr(&l).unwrap().unwrap().model, "extract-model");
         let c = chat(&l).unwrap().unwrap();
         assert_eq!(c.model, "chat-model");
         assert_eq!(c.endpoint, "https://base/v1", "endpoint still shared");

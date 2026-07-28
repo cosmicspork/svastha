@@ -41,6 +41,7 @@ pub mod poke;
 pub mod retrieval;
 pub mod state;
 pub mod sync;
+pub mod transcribe;
 
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
@@ -109,6 +110,21 @@ pub fn run(config: Config, logs: LogBuffer) -> Result<()> {
         "inference roles configured (each runs only when its endpoint is set; admin can set one)"
     );
 
+    // Stage A's reader, loaded once — the models cost a few hundred milliseconds
+    // and real memory, so never per page. Absent models are not fatal: the node
+    // still syncs, answers questions, and serves its household. It just cannot
+    // read pages, and says so rather than proposing nothing from every one.
+    let transcriber = match transcribe::Transcriber::from_env() {
+        Ok(t) => {
+            tracing::info!("page reader loaded");
+            Some(t)
+        }
+        Err(e) => {
+            tracing::warn!(error = %format!("{e:#}"), "page reader unavailable; OCR is off this run");
+            None
+        }
+    };
+
     spawn_bootstrap(&config, &code, &identity, state.clone());
 
     // SSE pokes arrive on this channel. Keep a spare sender so the receiver never
@@ -123,6 +139,9 @@ pub fn run(config: Config, logs: LogBuffer) -> Result<()> {
         &cache,
         &state,
         &mut inference,
+        transcriber
+            .as_ref()
+            .map(|t| t as &dyn transcribe::PageReader),
         &logs,
         &mut journal,
         Poke::Sync,
@@ -143,6 +162,9 @@ pub fn run(config: Config, logs: LogBuffer) -> Result<()> {
             &cache,
             &state,
             &mut inference,
+            transcriber
+                .as_ref()
+                .map(|t| t as &dyn transcribe::PageReader),
             &logs,
             &mut journal,
             poke,
@@ -152,11 +174,13 @@ pub fn run(config: Config, logs: LogBuffer) -> Result<()> {
 
 /// Act on one poke (or a timer tick). Errors are logged, never fatal: a transient
 /// relay outage must not take the node down — the next tick reconciles.
+#[allow(clippy::too_many_arguments)]
 fn reconcile(
     client: &RelayClient,
     cache: &Cache,
     state: &Mutex<NodeState>,
     inference: &mut InferenceRuntime,
+    transcriber: Option<&dyn transcribe::PageReader>,
     logs: &LogBuffer,
     journal: &mut Journal,
     poke: Poke,
@@ -242,8 +266,10 @@ fn reconcile(
     // OCR the newly-synced pages into proposals (design §7). Idempotent across
     // ticks and restarts via the journal, so running it on every reconcile is
     // cheap — an already-processed page short-circuits.
-    if let Some(client_inf) = inference.ocr_client() {
-        match ocr::run(client, cache, state, client_inf, journal) {
+    // Both halves are required: an endpoint to code the text, and a reader to
+    // produce it.
+    if let (Some(client_inf), Some(transcriber)) = (inference.ocr_client(), transcriber) {
+        match ocr::run(client, cache, state, client_inf, transcriber, journal) {
             Ok(r)
                 if r.proposals + r.empties + r.failed + r.resolved > 0
                     || r.not_ready > 0

@@ -150,14 +150,14 @@ fn inference_client(base: &str) -> InferenceClient {
     InferenceClient::new(&InferenceConfig {
         endpoint: base.to_string(),
         api_key: None,
-        model: "vision-test".to_string(),
+        model: "coding-test".to_string(),
     })
 }
 
 /// A findings answer the mock returns as the model's content.
 fn one_bp_finding() -> String {
     r#"{"findings":[
-        {"kind":"observation","system":"loinc","code":"8480-6",
+        {"kind":"observation","source_line":2,"system":"loinc","code":"8480-6",
          "display":"Systolic blood pressure","value_quantity":"120","unit":"mm[Hg]",
          "effective_at":"2026-03-03","confidence":0.92}
     ]}"#
@@ -295,8 +295,15 @@ fn ocr_happy_path_deposits_a_parseable_proposal() {
     let fx = setup(b"ocr owner one", &[b"page one bytes"]);
     let mut journal = Journal::load(fx.journal_dir.path());
 
-    let report =
-        svastha_node::ocr::run(&fx.node_client, &fx.cache, &fx.state, &inf, &mut journal).unwrap();
+    let report = svastha_node::ocr::run(
+        &fx.node_client,
+        &fx.cache,
+        &fx.state,
+        &inf,
+        &StubReader::page(),
+        &mut journal,
+    )
+    .unwrap();
     assert_eq!(report.proposals, 1, "one page → one proposal");
     assert_eq!(report.failed, 0);
     assert_eq!(calls.load(Ordering::SeqCst), 1, "one inference call");
@@ -309,7 +316,7 @@ fn ocr_happy_path_deposits_a_parseable_proposal() {
     let draft = &body.proposals[0];
     // Provenance the owner's signature will later cover via `proposed`.
     assert_eq!(draft.method.as_deref(), Some("ocr"));
-    assert_eq!(draft.model.as_deref(), Some("vision-test"));
+    assert_eq!(draft.model.as_deref(), Some("coding-test"));
     assert!(draft.source_blob.as_deref().unwrap().starts_with("att-"));
     // The draft event is unsigned, schema-valid, and coded on the import URI.
     assert!(
@@ -334,15 +341,29 @@ fn malformed_inference_output_proposes_nothing() {
     let fx = setup(b"ocr owner two", &[b"unreadable page"]);
     let mut journal = Journal::load(fx.journal_dir.path());
 
-    let report =
-        svastha_node::ocr::run(&fx.node_client, &fx.cache, &fx.state, &inf, &mut journal).unwrap();
+    let report = svastha_node::ocr::run(
+        &fx.node_client,
+        &fx.cache,
+        &fx.state,
+        &inf,
+        &StubReader::page(),
+        &mut journal,
+    )
+    .unwrap();
     assert_eq!(report.proposals, 0, "garbage output → no proposal");
     assert_eq!(report.empties, 1, "recorded processed-empty, not proposed");
     assert!(read_proposals(&fx.owner_client, &fx.owner).is_empty());
 
     // Re-running does not re-process an empty (terminal) source.
-    let report2 =
-        svastha_node::ocr::run(&fx.node_client, &fx.cache, &fx.state, &inf, &mut journal).unwrap();
+    let report2 = svastha_node::ocr::run(
+        &fx.node_client,
+        &fx.cache,
+        &fx.state,
+        &inf,
+        &StubReader::page(),
+        &mut journal,
+    )
+    .unwrap();
     assert_eq!(report2.empties, 0, "empty source is terminal");
 }
 
@@ -354,15 +375,30 @@ fn idempotent_across_a_simulated_restart() {
 
     {
         let mut journal = Journal::load(fx.journal_dir.path());
-        svastha_node::ocr::run(&fx.node_client, &fx.cache, &fx.state, &inf, &mut journal).unwrap();
+        svastha_node::ocr::run(
+            &fx.node_client,
+            &fx.cache,
+            &fx.state,
+            &inf,
+            &StubReader::page(),
+            &mut journal,
+        )
+        .unwrap();
     }
     assert_eq!(read_proposals(&fx.owner_client, &fx.owner).len(), 1);
 
     // Simulated restart: a fresh journal loaded from the same durable dir sees
     // the deposited source and does not re-propose.
     let mut journal = Journal::load(fx.journal_dir.path());
-    let report =
-        svastha_node::ocr::run(&fx.node_client, &fx.cache, &fx.state, &inf, &mut journal).unwrap();
+    let report = svastha_node::ocr::run(
+        &fx.node_client,
+        &fx.cache,
+        &fx.state,
+        &inf,
+        &StubReader::page(),
+        &mut journal,
+    )
+    .unwrap();
     assert_eq!(report.proposals, 0, "restart must not re-deposit");
     assert_eq!(
         read_proposals(&fx.owner_client, &fx.owner).len(),
@@ -379,7 +415,15 @@ fn resolved_source_is_never_reproposed() {
     let fx = setup(b"ocr owner four", &[b"page bytes"]);
     let mut journal = Journal::load(fx.journal_dir.path());
 
-    svastha_node::ocr::run(&fx.node_client, &fx.cache, &fx.state, &inf, &mut journal).unwrap();
+    svastha_node::ocr::run(
+        &fx.node_client,
+        &fx.cache,
+        &fx.state,
+        &inf,
+        &StubReader::page(),
+        &mut journal,
+    )
+    .unwrap();
     let proposals = read_proposals(&fx.owner_client, &fx.owner);
     let proposal_id = proposals[0].0.clone();
 
@@ -405,8 +449,15 @@ fn resolved_source_is_never_reproposed() {
         .unwrap();
 
     // Next pass folds the rejection in and re-proposes nothing.
-    let report =
-        svastha_node::ocr::run(&fx.node_client, &fx.cache, &fx.state, &inf, &mut journal).unwrap();
+    let report = svastha_node::ocr::run(
+        &fx.node_client,
+        &fx.cache,
+        &fx.state,
+        &inf,
+        &StubReader::page(),
+        &mut journal,
+    )
+    .unwrap();
     assert_eq!(report.resolved, 1, "the rejection resolved the source");
     assert_eq!(
         report.proposals, 0,
@@ -422,8 +473,15 @@ fn inference_error_backs_the_page_off() {
     let fx = setup(b"ocr owner six", &[b"page bytes"]);
     let mut journal = Journal::load(fx.journal_dir.path());
 
-    let report =
-        svastha_node::ocr::run(&fx.node_client, &fx.cache, &fx.state, &inf, &mut journal).unwrap();
+    let report = svastha_node::ocr::run(
+        &fx.node_client,
+        &fx.cache,
+        &fx.state,
+        &inf,
+        &StubReader::page(),
+        &mut journal,
+    )
+    .unwrap();
     assert_eq!(report.failed, 1);
     assert_eq!(report.proposals, 0);
     assert!(read_proposals(&fx.owner_client, &fx.owner).is_empty());
@@ -443,8 +501,15 @@ fn a_failing_page_backs_off_without_wedging_the_queue() {
     let fx = setup(b"ocr owner five", &[b"page A bytes", b"page B bytes"]);
     let mut journal = Journal::load(fx.journal_dir.path());
 
-    let report =
-        svastha_node::ocr::run(&fx.node_client, &fx.cache, &fx.state, &inf, &mut journal).unwrap();
+    let report = svastha_node::ocr::run(
+        &fx.node_client,
+        &fx.cache,
+        &fx.state,
+        &inf,
+        &StubReader::page(),
+        &mut journal,
+    )
+    .unwrap();
     assert_eq!(report.failed, 1, "the failing page is counted, not fatal");
     assert_eq!(report.proposals, 1, "the other page is not wedged");
     assert_eq!(read_proposals(&fx.owner_client, &fx.owner).len(), 1);
@@ -455,11 +520,46 @@ fn a_failing_page_backs_off_without_wedging_the_queue() {
     assert_eq!(jobs.queued, 1, "one page awaiting retry");
     assert_eq!(jobs.failed, 1);
 
-    let report2 =
-        svastha_node::ocr::run(&fx.node_client, &fx.cache, &fx.state, &inf, &mut journal).unwrap();
+    let report2 = svastha_node::ocr::run(
+        &fx.node_client,
+        &fx.cache,
+        &fx.state,
+        &inf,
+        &StubReader::page(),
+        &mut journal,
+    )
+    .unwrap();
     assert_eq!(report2.proposals, 0, "deposited page not re-proposed");
     assert_eq!(
         report2.failed, 0,
         "failed page still backing off, not retried"
     );
+}
+
+/// Stage A stubbed: the real recognizer needs model files (and a page that looks
+/// like one), so these tests drive the pass with a fixed transcript. What they
+/// exercise is everything the transcript feeds — the prompt, the source-line
+/// guard, the journal, and the proposal deposit.
+struct StubReader {
+    lines: Vec<String>,
+}
+
+impl StubReader {
+    /// A transcript the fixture answer below can legitimately cite: the guard
+    /// checks each finding's display and value against the line it names, so the
+    /// two have to correspond or nothing is proposed — which is the point.
+    fn page() -> Self {
+        Self {
+            lines: vec![
+                "Vitals 2026-03-03".to_string(),
+                "Systolic blood pressure 120 mm[Hg]".to_string(),
+            ],
+        }
+    }
+}
+
+impl svastha_node::transcribe::PageReader for StubReader {
+    fn transcribe(&self, _bytes: &[u8]) -> anyhow::Result<Vec<String>> {
+        Ok(self.lines.clone())
+    }
 }

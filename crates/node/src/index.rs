@@ -186,7 +186,7 @@ impl VaultIndex {
 
     /// The content hashes of every captured **image** attachment, in id order.
     /// This is D2's OCR work queue: `image/*` pages only — a PDF `att-` (or a
-    /// structured `doc-` source) is not a page a vision model reads, so it is
+    /// structured `doc-` source) is not a captured page to read, so it is
     /// deliberately excluded here (see the node README's D2 scope note).
     pub fn image_attachment_shas(&self) -> Vec<String> {
         self.attachments

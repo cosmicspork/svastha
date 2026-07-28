@@ -1,4 +1,4 @@
-//! A generic, blocking **OpenAI-compatible chat-completions** client for vision
+//! A generic, blocking **OpenAI-compatible chat-completions** client for
 //! extraction (design §8). The endpoint, key, and model are user-supplied
 //! ([`crate::config::InferenceConfig`]); the node ships no models and speaks only
 //! the one wire shape every such server (Ollama, LM Studio, vLLM, or a cloud
@@ -22,7 +22,6 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 use ureq::http::StatusCode;
 use ureq::Agent;
@@ -87,7 +86,7 @@ impl InferenceClient {
     /// return the model's raw assistant-message text. This is the RAG turn (D3) —
     /// the caller supplies the retrieved context inside `user` and parses the
     /// answer defensively (this method makes no claim the text is well-formed).
-    /// Shares the vision path's transport, timeout, and deterministic
+    /// Shares the coding path's transport, timeout, and deterministic
     /// `temperature: 0`; like it, it logs nothing — the prompt carries the
     /// decrypted context to the endpoint the operator chose, and never to a log.
     pub fn answer(&self, system: &str, user: &str) -> Result<String, InferenceError> {
@@ -103,7 +102,7 @@ impl InferenceClient {
     }
 
     /// Post a chat-completions request and return the first choice's text. Shared
-    /// by [`extract`](Self::extract) (vision) and [`answer`](Self::answer) (text).
+    /// by [`code_page`](Self::code_page) and [`answer`](Self::answer).
     fn chat(&self, request: &serde_json::Value) -> Result<String, InferenceError> {
         let body =
             serde_json::to_vec(request).map_err(|e| InferenceError::Transport(e.to_string()))?;
@@ -134,31 +133,28 @@ impl InferenceClient {
             .ok_or(InferenceError::BadResponse)
     }
 
-    /// Run one vision extraction: send `image` (with its `mime`) plus the
-    /// extraction prompt and return the model's raw assistant-message text. The
-    /// caller parses it defensively — this method makes no claim the text is
-    /// well-formed JSON.
-    pub fn extract(&self, image: &[u8], mime: &str) -> Result<String, InferenceError> {
-        let data_url = format!("data:{};base64,{}", mime, BASE64.encode(image));
-        let request = serde_json::json!({
-            "model": self.model,
-            // Deterministic extraction: no creative variance when reading a record.
-            "temperature": 0,
-            "messages": [
-                { "role": "system", "content": svastha_import::extract::VISION_SYSTEM_PROMPT },
-                { "role": "user", "content": [
-                    { "type": "text", "text": svastha_import::extract::VISION_USER_PROMPT },
-                    { "type": "image_url", "image_url": { "url": data_url } }
-                ] }
-            ]
-        });
-        self.chat(&request)
+    /// Code one already-transcribed page: send the extraction prompt plus the
+    /// numbered transcript and return the model's raw assistant-message text.
+    /// The caller validates it against that same transcript
+    /// ([`svastha_import::extract::parse_lines`]) — this method makes no claim
+    /// the text is well-formed JSON, nor that its findings belong to the lines
+    /// they cite.
+    ///
+    /// Replaces the vision pass the node used to make. The page image no longer
+    /// leaves this process; only the text does.
+    pub fn code_page(&self, numbered_lines: &str) -> Result<String, InferenceError> {
+        let user = format!(
+            "{}\n\nThe page, one numbered line per row:\n{}",
+            svastha_import::extract::USER_PROMPT,
+            numbered_lines
+        );
+        self.answer(svastha_import::extract::SYSTEM_PROMPT, &user)
     }
 }
 
 /// The runtime inference target for both roles, mutable by the
 /// `set_inference_endpoint` admin command (design §9). It owns the live
-/// [`InferenceClient`]s the OCR (vision) and chat (RAG) passes use — each with
+/// [`InferenceClient`]s the OCR (coding) and chat (RAG) passes use — each with
 /// its own model and API key from the boot config — and resolves the effective
 /// endpoint per role.
 ///
@@ -173,7 +169,7 @@ impl InferenceClient {
 /// the two roles across *different* endpoints is a boot-env choice; a per-role
 /// live override would need a wider admin command.)
 pub struct InferenceRuntime {
-    /// OCR-role boot config (vision model + key + endpoint), or `None`.
+    /// OCR-role boot config (text model + key + endpoint), or `None`.
     ocr_boot: Option<InferenceConfig>,
     /// Chat-role boot config (text model + key + endpoint), or `None`.
     chat_boot: Option<InferenceConfig>,
@@ -222,7 +218,7 @@ impl InferenceRuntime {
         rt
     }
 
-    /// The live OCR (vision) client, if OCR inference is usable. `None` means the
+    /// The live OCR (coding) client, if OCR inference is usable. `None` means the
     /// OCR pass does not run (a page waits rather than getting a fake extraction).
     pub fn ocr_client(&self) -> Option<&InferenceClient> {
         self.ocr_current.as_ref()
@@ -422,13 +418,13 @@ mod tests {
     fn each_role_uses_its_own_boot_endpoint_and_model() {
         let dir = tempfile::tempdir().unwrap();
         let rt = InferenceRuntime::load(
-            Some(boot_model("https://vision/v1", "vision-model")),
+            Some(boot_model("https://coding/v1", "coding-model")),
             Some(boot_model("https://chat/v1", "chat-model")),
             dir.path(),
         );
-        assert_eq!(rt.ocr_endpoint(), Some("https://vision/v1"));
+        assert_eq!(rt.ocr_endpoint(), Some("https://coding/v1"));
         assert_eq!(rt.chat_endpoint(), Some("https://chat/v1"));
-        assert_eq!(rt.ocr_client().map(|c| c.model()), Some("vision-model"));
+        assert_eq!(rt.ocr_client().map(|c| c.model()), Some("coding-model"));
         assert_eq!(rt.chat_client().map(|c| c.model()), Some("chat-model"));
     }
 
@@ -445,7 +441,7 @@ mod tests {
     fn set_endpoint_retargets_both_roles_but_keeps_per_role_models() {
         let dir = tempfile::tempdir().unwrap();
         let mut rt = InferenceRuntime::load(
-            Some(boot_model("https://vision/v1", "vision-model")),
+            Some(boot_model("https://coding/v1", "coding-model")),
             Some(boot_model("https://chat/v1", "chat-model")),
             dir.path(),
         );
@@ -454,12 +450,12 @@ mod tests {
         assert_eq!(rt.ocr_endpoint(), Some("https://override/v1"));
         assert_eq!(rt.chat_endpoint(), Some("https://override/v1"));
         // …while each role keeps its own model and API key.
-        assert_eq!(rt.ocr_client().map(|c| c.model()), Some("vision-model"));
+        assert_eq!(rt.ocr_client().map(|c| c.model()), Some("coding-model"));
         assert_eq!(rt.chat_client().map(|c| c.model()), Some("chat-model"));
 
         // A restart (fresh load from the same dir) keeps the override.
         let rt2 = InferenceRuntime::load(
-            Some(boot("https://vision/v1")),
+            Some(boot("https://coding/v1")),
             Some(boot("https://chat/v1")),
             dir.path(),
         );

@@ -1,7 +1,7 @@
 # svastha-node
 
 The [Svastha](https://github.com/cosmicspork/svastha) node: a trusted processing
-client that holds keys, syncs a vault's plaintext locally, and runs OCR and cited
+client that holds keys, syncs a vault's plaintext locally, and runs page reading and cited
 Q&A by delegating inference to a user-supplied OpenAI-compatible endpoint. It ships
 no models.
 
@@ -53,20 +53,29 @@ reconcile the node OCRs newly-synced captured pages and deposits the results as
 `proposal` envelopes into the owner's mailbox, for review in the PWA's proposal
 inbox. It never signs anything as the owner — it proposes; the owner signs.
 
-- **Vision inference.** Each captured page goes to the configured
-  OpenAI-compatible chat-completions endpoint as a vision request with a
-  structured-extraction prompt. Only a **synchronous** endpoint is allowed — a
-  batch-style API path is rejected at config time, because batch outputs are
-  retained server-side, beyond the trust boundary. The request necessarily
-  carries the decrypted page to the endpoint you chose (the design's trust
-  decision); the node's own logs never carry the image, prompt, or extracted
-  text — only counts and blob ids.
+- **Read here, code there.** The page is transcribed **in-process** (`ocrs`,
+  pure Rust — no C toolchain, matching the no-OpenSSL stance below), and only
+  the resulting text goes to the configured OpenAI-compatible endpoint, with a
+  numbered transcript and a structured-extraction prompt. **The page image never
+  leaves the node.** Only a **synchronous** endpoint is allowed — a batch-style
+  API path is rejected at config time, because batch outputs are retained
+  server-side, beyond the trust boundary. The node's own logs never carry the
+  page, prompt, or extracted text — only counts and blob ids.
+- **Every finding must quote its line.** Because the transcript exists before
+  coding does, a finding that cites no line, cites one that does not exist, or
+  cites a line that does not contain what it claims is **dropped**, not proposed.
+  A single read-and-code pass could not do this: there was nothing to check
+  against. It bounds a finding to the *line* it cites, not to a cell within that
+  line, so a swap between two values on one row still reaches your approval
+  queue — it narrows the failure rather than eliminating it.
 - **Draft coded events.** Findings map into the same event model and the same
   terminology URIs `crates/import`'s C-CDA/FHIR mappers use — no parallel coding
   vocabulary — as **unsigned, schema-valid** drafts, each carrying its source
   blob, `method = "ocr"`, and the model id. Malformed inference output never
-  becomes a malformed proposal: it is dropped and counted. Low confidence and
-  handwriting are proposed anyway and lean on the approval loop by design.
+  becomes a malformed proposal: it is dropped and counted. Low confidence is
+  proposed anyway and leans on the approval loop by design.
+- **No handwriting.** The reader handles printed text. A handwritten page reads
+  as nothing and is recorded as "could not read", never guessed at.
 - **Scope: `att-` image pages only.** This release OCRs `image/*` captured
   attachments. `att-` PDFs (which need rasterization first) and `doc-` source
   documents (structured EHR exports — narrative extraction is a separate roadmap
@@ -155,8 +164,9 @@ image tags.
 | `SVASTHA_NODE_INFERENCE_ENDPOINT` | no | Shared OpenAI-compatible chat-completions endpoint — the base both roles fall back to (the **boot default** — a `set_inference_endpoint` admin command overrides it at runtime, persisted). Setting it **enables OCR and cited Q&A**. Must be synchronous — a Batch-API path is rejected (batch outputs are retained server-side). |
 | `SVASTHA_NODE_INFERENCE_MODEL` | when an endpoint resolves | Shared model id sent in every request, unless a role overrides it below. |
 | `SVASTHA_NODE_INFERENCE_API_KEY` | no | Shared inference API key; sent as a bearer token, never logged. |
-| `SVASTHA_NODE_OCR_INFERENCE_ENDPOINT` / `_MODEL` / `_API_KEY` | no | Per-role override for **OCR** (reading pages — a vision model). Each falls back to the shared `SVASTHA_NODE_INFERENCE_*` value, so overriding just `_MODEL` is the common case. A role runs only when an endpoint resolves for it (its own or the shared base). |
-| `SVASTHA_NODE_CHAT_INFERENCE_ENDPOINT` / `_MODEL` / `_API_KEY` | no | Per-role override for **chat** (cited Q&A — an instruction model). Same shared fallback. Splitting the models lets one endpoint serve a vision model for OCR and a text model for answers (each does the other's job poorly); the endpoint/API key can split across providers too. |
+| `SVASTHA_NODE_OCR_INFERENCE_ENDPOINT` / `_MODEL` / `_API_KEY` | no | Per-role override for **OCR** (coding a page the node transcribed — a **text** model; no vision model is needed or used). Each falls back to the shared `SVASTHA_NODE_INFERENCE_*` value, so overriding just `_MODEL` is the common case. A role runs only when an endpoint resolves for it (its own or the shared base). |
+| `SVASTHA_NODE_OCR_MODELS_DIR` | no | Where the page-reading models live (default `/models`, baked into the image). Absent models are not fatal — the node still syncs, answers questions, and serves its household; it just cannot read pages, and says so at boot. |
+| `SVASTHA_NODE_CHAT_INFERENCE_ENDPOINT` / `_MODEL` / `_API_KEY` | no | Per-role override for **chat** (cited Q&A — an instruction model). Same shared fallback. Splitting the models lets one endpoint serve an extraction-tuned model for OCR and an instruction model for answers; the endpoint/API key can split across providers too. |
 | `SVASTHA_NODE_BOOTSTRAP_ADDR` | no | Bootstrap-page bind address, **loopback only** (default `127.0.0.1:7071`). |
 | `SVASTHA_NODE_POLL_INTERVAL_SECS` | no | Fallback pull cadence when the SSE stream is down (default 60). |
 | `SVASTHA_NODE_LABEL` | no | Label shown in the identity code (default `svastha-node`). |
