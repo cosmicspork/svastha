@@ -45,6 +45,34 @@ harvest a PR's "## Deferred" notes into the list.
 - ABDM boundary adapter (consent-federated — a different trust model)
 - Research marketplace (the grant primitive at different settings)
 
+## AI on device
+
+Making the node optional. The PWA already holds the decrypted vault, so OCR and
+cited Q&A can run where the keys already are; classical OCR plus a text model
+replaces the single vision pass and retires the vision-model requirement.
+
+- Share ranking and grounding between node and browser — retrieval is pure
+  lexical scoring with no embeddings, so it lifts into its own crate the node
+  and WASM both consume. The citation contract must not fork into two languages
+- Configure an inference endpoint on this device — HTTPS only, because the PWA
+  is HTTPS and a plain-HTTP LAN endpoint is blocked as mixed content; the API
+  key seals into the keyvault rather than plaintext prefs
+- Answer questions on this device — the node becomes optional for Q&A
+- Read text from digital PDF attachments — `pdfjs-dist` is already a dependency
+  and its text layer is exact, and PDFs sit outside the node's image-only scope
+- Code from transcribed text with source-line verification — each finding
+  quotes back the numbered line it came from, so a value cannot be
+  mis-associated across the columns of a lab panel
+- Optional on-device OCR for photographed pages — engine assets self-hosted and
+  opt-in, following the offline dictionary's download pattern
+- Propose coded events from pages read on this device — the PWA signs as the
+  owner, so local drafts skip the mailbox round-trip entirely
+- Two-stage extraction in the node with in-process OCR — one extraction path,
+  and the vision model goes away
+
+Handwriting is out of scope on device: an honest "couldn't read this page"
+rather than a silent miss. Running a node stays the answer for it.
+
 ## Processing node
 
 - Narrative-notes extraction — mine imported `doc-` prose for coded-event
