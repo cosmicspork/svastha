@@ -31,7 +31,7 @@ import { allStatuses, allNames, type ConceptStatus } from './curation'
 import { buildCodeNameIndex, resolveDisplay } from './code-names'
 import { loadDictionaryIndex } from './dictionary'
 import { conceptKey } from './summary'
-import { loadConfig, normalizeEndpoint, InferenceError } from './inference'
+import { loadConfig, chatComplete, InferenceError } from './inference'
 import type { Code } from './codes'
 
 /** How many ranked items reach the model. Matches the node's `MAX_CONTEXT` so
@@ -124,53 +124,6 @@ async function gatherCandidates(): Promise<Candidate[]> {
   return buildCandidates(events, statuses, names, buildCodeNameIndex(events), dictionary)
 }
 
-/** The model's raw reply for a prompt — the one network call in the flow. */
-async function complete(
-  endpoint: string,
-  model: string,
-  apiKey: string | undefined,
-  system: string,
-  user: string,
-): Promise<string> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (apiKey) headers.Authorization = `Bearer ${apiKey}`
-
-  let response: Response
-  try {
-    response = await fetch(`${normalizeEndpoint(endpoint)}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model,
-        // Deterministic: the same question over the same record should not
-        // wander between answers.
-        temperature: 0,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user },
-        ],
-      }),
-    })
-  } catch {
-    throw new InferenceError(
-      'Could not reach the inference endpoint. It may be offline, or it may not allow requests from web apps (CORS).',
-    )
-  }
-
-  if (response.status === 401 || response.status === 403) {
-    throw new InferenceError('The inference endpoint rejected the API key.')
-  }
-  if (!response.ok) {
-    throw new InferenceError(`The inference endpoint answered ${response.status}.`)
-  }
-
-  const body = (await response.json().catch(() => null)) as {
-    choices?: { message?: { content?: unknown } }[]
-  } | null
-  const content = body?.choices?.[0]?.message?.content
-  return typeof content === 'string' ? content : ''
-}
-
 /** Whether this device can answer without a node. */
 export async function canAnswerLocally(): Promise<boolean> {
   const config = await loadConfig()
@@ -202,10 +155,8 @@ export async function askLocally(question: string): Promise<GroundedAnswer> {
     return { text: cant_answer_text(), citations: [] }
   }
 
-  const raw = await complete(
-    config.endpoint,
-    config.model,
-    config.apiKey,
+  const raw = await chatComplete(
+    config,
     system_prompt(),
     build_context_prompt(question, contextJson),
   )

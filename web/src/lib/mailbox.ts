@@ -596,10 +596,21 @@ export async function sendAdminCommand(node: NodeTarget, command: AdminCommand):
  * complete it. Returns whether the reply was sent.
  */
 export async function resolveProposalIfDone(proposalId: string): Promise<boolean> {
-  if (!client || !identity) return false
   const record = await getProposal(proposalId)
   if (!record || !record.resolved || record.resultSent) return false
 
+  // A locally-read proposal has no envelope to delete and nobody to reply to —
+  // this device authored it. Checked before the relay guard, because reading a
+  // page and approving what it found needs no relay at all. Without this it
+  // would look up its own identity in the proposer directory (which deliberately
+  // holds only nodes and caregivers), warn, mark the result unsent, and leave
+  // the record pending forever.
+  if (record.local) {
+    await removeProposal(proposalId)
+    return true
+  }
+
+  if (!client || !identity) return false
   const proposer = await getProposer(record.fromEd)
   if (!proposer) {
     // Can't seal the reply without the proposer's X25519 key. Leave the item in

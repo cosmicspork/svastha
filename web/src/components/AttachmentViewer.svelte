@@ -21,6 +21,7 @@
     recordedIso,
     source = null,
     loadBytes,
+    onread,
     onclose,
   }: {
     pages: AttachmentRef[]
@@ -32,8 +33,14 @@
      * reads the local `attachments` store; a share recipient reads the bundle's
      * in-memory map — the viewer doesn't care which. */
     loadBytes: (sha256: string) => Promise<Uint8Array | null>
+    /** Read this page and propose what it says. Optional and opt-in: only the
+     * owner's own record can be proposed into, so the share-recipient mounts
+     * leave it off and the action simply isn't there. */
+    onread?: (sha256: string, bytes: Uint8Array, mime: string) => Promise<void>
     onclose: () => void
   } = $props()
+
+  let reading = $state(false)
 
   let index = $state(0)
   let zoomed = $state(false)
@@ -121,6 +128,29 @@
     <span class="counter" data-testid="viewer-counter">
       {#if total > 1}Page {index + 1} of {total}{:else}1 page{/if}
     </span>
+    <!-- Bytes are fetched on click rather than read from the cache: image pages
+         keep an object URL there, not bytes, and images are exactly the pages
+         this is for. One extra decrypt on an explicit action is cheap. -->
+    {#if onread && !loading && !failed}
+      <button
+        type="button"
+        class="read"
+        disabled={reading}
+        data-testid="viewer-read"
+        onclick={async () => {
+          reading = true
+          try {
+            const page = pages[index]
+            const bytes = byteCache.get(index) ?? (await loadBytes(page.sha256))
+            if (bytes) await onread(page.sha256, bytes, page.mime)
+          } finally {
+            reading = false
+          }
+        }}
+      >
+        {reading ? 'Reading…' : 'Read this page'}
+      </button>
+    {/if}
     <button type="button" class="close" aria-label="Close" onclick={onclose} data-testid="viewer-close">
       ×
     </button>
@@ -212,6 +242,12 @@
     align-items: center;
     justify-content: space-between;
     padding: calc(var(--space-2) + env(safe-area-inset-top)) var(--space-4) var(--space-2);
+  }
+
+  .read {
+    margin-left: auto;
+    margin-right: var(--space-3);
+    font-size: var(--text-sm);
   }
 
   .counter {
