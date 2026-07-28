@@ -403,6 +403,15 @@ function noteFailure(err: unknown): void {
   patchStatus({ lastError: describeError(err), reachable: isNetworkError(err) ? false : true })
 }
 
+/** Report a failure raised outside the engine — today, a `connectRelay` that
+ * rejected before `syncInit` could run. That rejection is otherwise a floating
+ * promise: the engine never starts, so `pullAll` returns at its own guard and
+ * every later "Sync now" is a silent no-op with nothing in the UI to explain
+ * it. */
+export function noteSyncFailure(err: unknown): void {
+  noteFailure(err)
+}
+
 interface SyncRecord {
   id: string
   state: 'pending' | 'done'
@@ -536,85 +545,89 @@ export async function pullAll(): Promise<void> {
     return
   }
 
-  const syncRecords = await getAll<SyncRecord>('sync')
-  const doneIds = new Set(syncRecords.filter((r) => r.state === 'done').map((r) => r.id))
-
-  patchStatus({ pulledCount: 0 })
-  for (const id of idsToPull(remoteIds, doneIds)) {
-    const codec = codecFor(id)! // idsToPull only returns ids with a registered codec
-    try {
-      // The localHas-then-skip shortcut only makes sense for an immutable
-      // id: "already have it" and "have the latest version of it" are the
-      // same fact there. For a mutable id they're not (someone else may have
-      // PUT a newer value over the same id), so always fetch and let the
-      // codec's own remoteApply (LWW merge, for cur-) decide. This mirrors
-      // `applySealedBlob`'s own duplicate check, but is kept here too so a
-      // duplicate skips the `getBlob` round trip entirely.
-      if (!codec.mutable && (await codec.localHas(id))) {
-        // Already have it (e.g. logged before sync was configured) — record
-        // done without a redundant round trip.
-        await markDone(id)
-        continue
-      }
-      if (codec.mutable && supportsConditionalGet(relayClient)) {
-        // A mutable id (today, only cur-) is always re-fetched above — the one
-        // namespace worth an etag, since it's the one a client keeps asking
-        // about after already having the answer. Send back whatever etag the
-        // last successful fetch left, so an unchanged record costs a 304, not
-        // a body (see spec/README.md, "Curation etags").
-        const existing = await get<SyncRecord>('sync', id)
-        const result: ConditionalBlob = await relayClient.getBlobConditional(id, existing?.etag ?? null)
-        if (result.status === 'missing') continue
-        if (result.status === 'ok') {
-          await applySealedBlob(id, result.blob, vaultKey)
-          await put('sync', {
-            id,
-            state: 'done',
-            updated_at: new Date().toISOString(),
-            etag: result.etag ?? undefined,
-          })
-          syncStatus.update((s) => ({ ...s, pulledCount: s.pulledCount + 1 }))
-        }
-        // 'not-modified': nothing changed since `existing.etag` — already
-        // `done` with that etag, so there is nothing to re-apply or re-store.
-        continue
-      }
-      const blob = await relayClient.getBlob(id)
-      if (!blob) continue
-      await applySealedBlob(id, blob, vaultKey)
-      await markDone(id)
-      syncStatus.update((s) => ({ ...s, pulledCount: s.pulledCount + 1 }))
-    } catch (err) {
-      // Left un-done on failure (bad open, failed verify, network hiccup) —
-      // retried on the next pull rather than dropped.
-      noteFailure(err)
-    }
-  }
-
-  const localEventIds = (await getAll<StoredEvent>('events')).map((e) => e.event.id)
-  const toPush = idsToPush(localEventIds, new Set(remoteIds), doneIds)
-  if (toPush.length) {
-    await enqueue(toPush)
-    void drain()
-  }
-
-  // Sharing rides the same pull cycle: consume the mailbox (invites + proposal
-  // inbox) once, then pull whatever accepted shares have new events, after this
-  // device's own pull/push reconcile above. A failure here must not abort the
-  // whole pull: callers invoke `pullAll` fire-and-forget (`void pullAll()`), so
-  // an unguarded throw here is swallowed with no UI surface — and because it
-  // lands after `noteContact()` set "Online" but before `lastPullAt` below, it
-  // left the status stuck on "Online, last pull never" with no error. Route it
-  // through `noteFailure` like the per-blob loop, so the core vault pull above
-  // still counts as completed and the sharing error is visible instead of silent.
+  // Everything past the relay listing is guarded as one region, and the pull is
+  // stamped in `finally`. Callers invoke `pullAll` fire-and-forget
+  // (`void pullAll()`), so an unguarded throw in here reaches no one: it lands
+  // after `noteContact()` set "Online" but before `lastPullAt`, stranding the UI
+  // on "Online, pending 0, last pull never" with no error and a "Sync now" that
+  // appears to do nothing. Guarding one step at a time only moves that hazard to
+  // the next unguarded await — it has bitten at the sharing pull and again at the
+  // push reconcile below — so the whole region routes through `noteFailure` and
+  // the timestamp is stamped either way. A visibly advancing "Last pull" is what
+  // tells the user the button did something, even when the cycle errored.
   try {
+    const syncRecords = await getAll<SyncRecord>('sync')
+    const doneIds = new Set(syncRecords.filter((r) => r.state === 'done').map((r) => r.id))
+
+    patchStatus({ pulledCount: 0 })
+    for (const id of idsToPull(remoteIds, doneIds)) {
+      const codec = codecFor(id)! // idsToPull only returns ids with a registered codec
+      try {
+        // The localHas-then-skip shortcut only makes sense for an immutable
+        // id: "already have it" and "have the latest version of it" are the
+        // same fact there. For a mutable id they're not (someone else may have
+        // PUT a newer value over the same id), so always fetch and let the
+        // codec's own remoteApply (LWW merge, for cur-) decide. This mirrors
+        // `applySealedBlob`'s own duplicate check, but is kept here too so a
+        // duplicate skips the `getBlob` round trip entirely.
+        if (!codec.mutable && (await codec.localHas(id))) {
+          // Already have it (e.g. logged before sync was configured) — record
+          // done without a redundant round trip.
+          await markDone(id)
+          continue
+        }
+        if (codec.mutable && supportsConditionalGet(relayClient)) {
+          // A mutable id (today, only cur-) is always re-fetched above — the one
+          // namespace worth an etag, since it's the one a client keeps asking
+          // about after already having the answer. Send back whatever etag the
+          // last successful fetch left, so an unchanged record costs a 304, not
+          // a body (see spec/README.md, "Curation etags").
+          const existing = await get<SyncRecord>('sync', id)
+          const result: ConditionalBlob = await relayClient.getBlobConditional(id, existing?.etag ?? null)
+          if (result.status === 'missing') continue
+          if (result.status === 'ok') {
+            await applySealedBlob(id, result.blob, vaultKey)
+            await put('sync', {
+              id,
+              state: 'done',
+              updated_at: new Date().toISOString(),
+              etag: result.etag ?? undefined,
+            })
+            syncStatus.update((s) => ({ ...s, pulledCount: s.pulledCount + 1 }))
+          }
+          // 'not-modified': nothing changed since `existing.etag` — already
+          // `done` with that etag, so there is nothing to re-apply or re-store.
+          continue
+        }
+        const blob = await relayClient.getBlob(id)
+        if (!blob) continue
+        await applySealedBlob(id, blob, vaultKey)
+        await markDone(id)
+        syncStatus.update((s) => ({ ...s, pulledCount: s.pulledCount + 1 }))
+      } catch (err) {
+        // Left un-done on failure (bad open, failed verify, network hiccup) —
+        // retried on the next pull rather than dropped.
+        noteFailure(err)
+      }
+    }
+
+    const localEventIds = (await getAll<StoredEvent>('events')).map((e) => e.event.id)
+    const toPush = idsToPush(localEventIds, new Set(remoteIds), doneIds)
+    if (toPush.length) {
+      await enqueue(toPush)
+      void drain()
+    }
+
+    // Sharing rides the same pull cycle: consume the mailbox (invites + proposal
+    // inbox) once, then pull whatever accepted shares have new events, after this
+    // device's own pull/push reconcile above.
     await pullMailbox()
     await pullShared()
   } catch (err) {
     noteFailure(err)
+  } finally {
+    patchStatus({ lastPullAt: new Date().toISOString() })
   }
-
-  patchStatus({ lastPullAt: new Date().toISOString() })
 }
 
 const PULL_INTERVAL_MS = 5 * 60 * 1000

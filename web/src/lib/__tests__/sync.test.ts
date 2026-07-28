@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { get as storeGet } from 'svelte/store'
-import { deleteDb, put, del, get as dbGet } from '../db'
+import { deleteDb, put, del, get as dbGet, getAll as dbGetAll } from '../db'
 import {
   idsToPull,
   idsToPush,
@@ -28,6 +28,13 @@ vi.mock('../shared', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../shared')>()),
   pullShared: vi.fn(),
 }))
+
+// `getAll` wrapped (not replaced) so a test can make one store's read reject
+// while every other db call stays real.
+vi.mock('../db', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../db')>()
+  return { ...actual, getAll: vi.fn(actual.getAll) }
+})
 
 // deleteDb() (not a raw indexedDB.deleteDatabase call) so the module's
 // memoized connection is closed and cleared between tests — same pattern as
@@ -487,6 +494,32 @@ describe('relay reachability + friendly errors', () => {
     // …and the core vault pull still counted as completed: `lastPullAt` is
     // stamped, so the status no longer sticks on "last pull never".
     expect(s.lastPullAt).not.toBeNull()
+  })
+
+  it('a reconcile-step failure surfaces instead of stalling the pull silently', async () => {
+    // Same silent-stall shape the sharing guard above fixed, but in the push
+    // reconcile between the blob loop and that guard: the local-event read and
+    // `enqueue` still ran unguarded, after `noteContact()` set "Online" but
+    // before `lastPullAt`. A throw there is swallowed by `void pullAll()`, so
+    // the UI sits on "Online, pending 0, last pull never" with no error and a
+    // dead "Sync now" — which is exactly what a user reports as "nothing
+    // happens".
+    const realGetAll = vi.mocked(dbGetAll).getMockImplementation()!
+    vi.mocked(dbGetAll).mockImplementation(async (storeName: string) => {
+      if (storeName === 'events') throw new Error('events read failed')
+      return realGetAll(storeName)
+    })
+    try {
+      syncStatus.update((s) => ({ ...s, lastPullAt: null, lastError: null }))
+      const relay = inMemoryBlobClient()
+      configure(relay, passthroughSealKey())
+      await pullAll()
+      const s = storeGet(syncStatus)
+      expect(s.lastError).toContain('events read failed')
+      expect(s.lastPullAt).not.toBeNull()
+    } finally {
+      vi.mocked(dbGetAll).mockImplementation(realGetAll)
+    }
   })
 })
 

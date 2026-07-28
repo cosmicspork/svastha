@@ -6,7 +6,7 @@
   import { get } from './lib/db'
   import { RelayClient } from './lib/relay'
   import { connectRelay } from './lib/vault'
-  import { syncTeardown } from './lib/sync'
+  import { syncTeardown, noteSyncFailure } from './lib/sync'
   import { ensureCurationSigned } from './lib/curation'
   import { route } from './lib/router.svelte'
   import { loadTheme, applyTheme } from './lib/theme'
@@ -82,7 +82,12 @@
     void ensureCurationSigned()
     get<string>('prefs', 'relayUrl').then((url) => {
       if (url && identity) {
-        connectRelay(new RelayClient(url, identity))
+        // Caught, not floating: a rejection here (keyring reconcile failed, relay
+        // unreachable at unlock) means `syncInit` never ran, so the engine holds
+        // no relay client and every later "Sync now" returns at `pullAll`'s guard
+        // — silently, and with the relay panel still showing a URL as if
+        // connected. Surface it instead.
+        connectRelay(new RelayClient(url, identity)).catch(noteSyncFailure)
       }
     })
   })
