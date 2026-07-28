@@ -488,3 +488,93 @@ pub fn event_id(content_json: &str) -> Result<String, JsError> {
     );
     Ok(event.id.to_hex())
 }
+
+// --- retrieval: ranking, prompt, and citation grounding ---------------------
+//
+// The browser holds the decrypted vault, so it can retrieve and cite entirely on
+// its own — no processing node in the loop. These three bindings expose
+// `svastha-retrieval` so the PWA runs the *same* ranker and, more importantly,
+// the same citation contract the node runs, rather than a JS reimplementation
+// that could drift from it.
+//
+// Name and display-status resolution stay on the JS side deliberately: the
+// browser resolves a code through the in-vault name index and the offline
+// dictionary, which the node has no access to, so it produces better context
+// lines than the node can.
+
+/// One candidate crossing from JS: an event plus the two things the caller
+/// resolves. Owned (the Rust `Candidate` borrows its event), so this is the
+/// deserialization target and the borrowed view is built from it.
+#[derive(serde::Deserialize)]
+struct CandidateInput {
+    event: Event,
+    name: String,
+    status: svastha_retrieval::ConceptStatus,
+}
+
+/// Rank `candidates_json` (a JSON array of `{event, name, status}`) against
+/// `question`, returning up to `max_items` `ContextItem`s as JSON, highest score
+/// first. An item with no keyword overlap is not returned at all, so an
+/// unanswerable question yields `[]` — which the caller must turn into an honest
+/// "couldn't answer" rather than an uncited summary.
+#[wasm_bindgen]
+pub fn rank_context(
+    candidates_json: &str,
+    question: &str,
+    max_items: usize,
+) -> Result<String, JsError> {
+    let inputs: Vec<CandidateInput> = serde_json::from_str(candidates_json).map_err(to_js)?;
+    let candidates: Vec<svastha_retrieval::Candidate<'_>> = inputs
+        .iter()
+        .map(|c| svastha_retrieval::Candidate {
+            event: &c.event,
+            name: c.name.clone(),
+            status: c.status,
+        })
+        .collect();
+    let items = svastha_retrieval::rank(&candidates, question, max_items);
+    serde_json::to_string(&items).map_err(to_js)
+}
+
+/// The user prompt for `question` over `context_json` (the `rank_context`
+/// output). Paired with [`system_prompt`].
+#[wasm_bindgen]
+pub fn build_context_prompt(question: &str, context_json: &str) -> Result<String, JsError> {
+    let context: Vec<svastha_retrieval::ContextItem> =
+        serde_json::from_str(context_json).map_err(to_js)?;
+    Ok(svastha_retrieval::build_prompt(question, &context))
+}
+
+/// Ground a model's raw reply against the context it was given. Returns
+/// `{"answer": "...", "citations": ["<event id>", ...]}` as JSON, or `null` when
+/// the reply is unparseable or its answer text is empty.
+///
+/// A citation can only ever be an id drawn from `context_json`, so no model
+/// output can invent one. The caller must still refuse to show an answer whose
+/// citations came back empty.
+#[wasm_bindgen]
+pub fn ground_answer(raw: &str, context_json: &str) -> Result<String, JsError> {
+    let context: Vec<svastha_retrieval::ContextItem> =
+        serde_json::from_str(context_json).map_err(to_js)?;
+    match svastha_retrieval::ground(raw, &context) {
+        Some((answer, citations)) => serde_json::to_string(&serde_json::json!({
+            "answer": answer,
+            "citations": citations,
+        }))
+        .map_err(to_js),
+        None => Ok("null".to_string()),
+    }
+}
+
+/// The system instruction paired with [`build_context_prompt`].
+#[wasm_bindgen]
+pub fn system_prompt() -> String {
+    svastha_retrieval::SYSTEM_PROMPT.to_string()
+}
+
+/// The honest reply text for a question that could not be grounded. Exposed so
+/// every client says the same thing rather than inventing its own wording.
+#[wasm_bindgen]
+pub fn cant_answer_text() -> String {
+    svastha_retrieval::CANT_ANSWER.to_string()
+}

@@ -9,7 +9,9 @@
   import { categorize } from '../lib/category'
   import { focusedEventId } from '../lib/spine-focus'
   import { pullMailbox, sendChatMessage } from '../lib/mailbox'
-  import { chatTurns, refreshChat, conversationState } from '../lib/chat'
+  import { chatTurns, refreshChat, conversationState, appendLocalTurn } from '../lib/chat'
+  import { askLocally, canAnswerLocally } from '../lib/ask'
+  import { InferenceError } from '../lib/inference'
   import { enrolledNode, getNodeLastSeen } from '../lib/nodeadmin'
   import { loadDictionaryIndex, dictionaryStatus } from '../lib/dictionary'
   import type { ProposerRecord } from '../lib/proposals'
@@ -41,12 +43,18 @@
   let aiOn = $state(false)
   let sending = $state(false)
   let ready = $state(false)
+  // This device can answer on its own once an inference endpoint is configured
+  // (Settings -> AI). It is preferred over the node when both are available: no
+  // mailbox round-trip, and it works while the node is asleep.
+  let localReady = $state(false)
+  let askError = $state('')
 
   // A node is "asleep" only once it has been heard from and then gone quiet — a
   // freshly enrolled node (never seen) is still askable, so it gets the benefit
   // of the doubt.
   const nodeStale = $derived(!!nodeSeenAt && Date.now() - Date.parse(nodeSeenAt) >= NODE_FRESH_MS)
   const nodeAvailable = $derived(!!node && !nodeStale)
+  const aiAvailable = $derived(localReady || nodeAvailable)
   // The offline code dictionary, hydrated the same way Spine/ClinicianSummary do
   // it — a code with no display of its own is searchable only through this.
   let dictionary = $state<Map<string, string>>(new Map())
@@ -60,7 +68,9 @@
     aiOn ? { hits: [] as SearchHit[], truncated: false } : searchEvents(events, query, dictionary),
   )
   const convoState = $derived(conversationState($chatTurns))
-  const modeLabel = $derived(aiOn ? `${node?.label || 'Node'} Node` : 'On-device')
+  const modeLabel = $derived(
+    !aiOn ? 'On-device' : localReady ? 'This device' : `${node?.label || 'Node'} Node`,
+  )
 
   onMount(async () => {
     if (person) {
@@ -77,22 +87,42 @@
       await refreshChat()
       node = await enrolledNode()
       nodeSeenAt = (await getNodeLastSeen()) ?? null
+      localReady = await canAnswerLocally()
     }
     ready = true
   })
 
   function toggleAi(): void {
-    if (!nodeAvailable) return
+    if (!aiAvailable) return
     aiOn = !aiOn
   }
 
   async function ask(): Promise<void> {
     const text = query.trim()
-    if (!text || !node || sending) return
+    if (!text || sending || !aiAvailable) return
     sending = true
+    askError = ''
     try {
-      await sendChatMessage({ ed: node.ed, x25519: node.x25519 }, text)
-      query = ''
+      if (localReady) {
+        // The question is recorded before the model is called, so the transcript
+        // shows it (and reads as `waiting`) for however long the endpoint takes.
+        await appendLocalTurn('user', text)
+        query = ''
+        const answer = await askLocally(text)
+        await appendLocalTurn('node', answer.text, answer.citations)
+      } else if (node) {
+        await sendChatMessage({ ed: node.ed, x25519: node.x25519 }, text)
+        query = ''
+      }
+    } catch (err) {
+      // Only an unusable endpoint lands here — a question the record cannot
+      // answer comes back as a normal, honest turn.
+      askError =
+        err instanceof InferenceError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Could not answer on this device.'
     } finally {
       sending = false
     }
@@ -151,7 +181,13 @@
       <ol class="transcript" data-testid="search-transcript">
         {#each $chatTurns as turn (turn.id)}
           <li class="turn {turn.role}" data-testid="search-turn" data-role={turn.role}>
-            <span class="who muted">{turn.role === 'user' ? 'You' : node?.label || 'Node'}</span>
+            <span class="who muted"
+              >{turn.role === 'user'
+                ? 'You'
+                : turn.id.startsWith('local-')
+                  ? 'This device'
+                  : node?.label || 'Node'}</span
+            >
             <p class="text">{turn.text}</p>
             {#if turn.role === 'node'}
               <CitationList citations={turn.citations} />
@@ -160,8 +196,12 @@
         {/each}
       </ol>
     {/if}
-    {#if convoState === 'waiting'}
-      <p class="muted waiting" data-testid="search-waiting">Waiting for your node to answer…</p>
+    {#if askError}
+      <p class="error" data-testid="search-ask-error">{askError}</p>
+    {:else if convoState === 'waiting'}
+      <p class="muted waiting" data-testid="search-waiting">
+        {localReady ? 'Reading your record…' : 'Waiting for your node to answer…'}
+      </p>
     {/if}
   {:else if query.trim() === ''}
     <p class="muted" data-testid="search-prompt">Type to search titles, codes and notes across your record.</p>
@@ -256,20 +296,20 @@
   </div>
 
   <div class="modebar">
-    {#if ready && node}
+    {#if ready && (node || localReady)}
       <button
         type="button"
         class="aiswitch"
-        class:disabled={!nodeAvailable}
+        class:disabled={!aiAvailable}
         aria-pressed={aiOn}
-        disabled={!nodeAvailable}
+        disabled={!aiAvailable}
         onclick={toggleAi}
         data-testid="search-ai-toggle"
       >
         <span class="track" class:on={aiOn}><span class="knob"></span></span>
         <span class="ai-label">
           Ask AI
-          {#if nodeStale}<small>{node.label || 'Your node'} is asleep</small>{/if}
+          {#if nodeStale && !localReady}<small>{node?.label || 'Your node'} is asleep</small>{/if}
         </span>
       </button>
     {:else}
