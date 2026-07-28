@@ -17,6 +17,7 @@ import { fromHex } from './hex'
 import { base64ToBytes } from './base64'
 import { writable } from 'svelte/store'
 import type { StoredEvent } from './events'
+import { BATCH_PULL_THRESHOLD, type BlobBodyPage } from './blob-batch'
 
 /** Local lowercase-hex SHA-256, duplicated (like sync.ts's own) to keep this
  * module free of an import cycle. Used to check a pulled `att-` blob's bytes
@@ -35,6 +36,25 @@ export interface SharingClient {
   listMailbox(): Promise<{ id: string; from: string }[]>
   getMailbox(id: string): Promise<{ blob: Uint8Array; from: string } | null>
   deleteMailbox(id: string): Promise<boolean>
+}
+
+/** The optional batched-listing surface (`?include=body`), mirroring sync.ts's
+ * own `BatchListClient`. Kept out of `SharingClient` on purpose: widening that
+ * interface would force every in-memory test fake to grow a method it has no
+ * use for, so this is probed for instead and the per-blob path stands in when
+ * it is absent. */
+interface BatchSharedListClient {
+  listSharedBlobsWithBodies(
+    ownerHex: string,
+    cursor: string | null,
+    limit?: number,
+  ): Promise<BlobBodyPage | null>
+}
+
+function supportsBatchSharedList(
+  client: SharingClient,
+): client is SharingClient & BatchSharedListClient {
+  return typeof (client as Partial<BatchSharedListClient>).listSharedBlobsWithBodies === 'function'
 }
 
 /** Opens ciphertext sealed under a vault keyring — `KeyringBlobKey` satisfies this
@@ -227,6 +247,105 @@ function aad(blobId: string): Uint8Array {
 }
 
 /**
+ * Verify and store one sealed blob from a share — the single open/verify/store
+ * path behind both the per-blob fetch loop and the batched walk below. Throws
+ * on any integrity failure (content-hash mismatch, bad signature, embedded-id
+ * mismatch, an author who is not the vault owner), which aborts the current
+ * share's pull exactly as these checks did inline. A prefix outside
+ * `att-`/`ev-` is a no-op.
+ *
+ * The cheap "already have it" checks stay at the call sites, where they can
+ * skip the fetch (or drop the frame) before any of this work starts.
+ */
+async function applySharedSealed(
+  share: Share,
+  known: Set<string>,
+  blobId: string,
+  sealed: Uint8Array,
+): Promise<void> {
+  // Captured paper records: mirror the owner's `att-` blobs into the same
+  // content-addressed `attachments` store the owner's own device uses, so the
+  // read-only spine's viewer loads them the same way (see Spine.svelte). A
+  // household share carries the owner's keyring, so these open under the same
+  // epoch their events do. Content-addressed, so once-and-done.
+  if (blobId.startsWith('att-')) {
+    const sha256 = blobId.slice('att-'.length)
+    const { mime, bytes: b64 } = JSON.parse(
+      new TextDecoder().decode(openKeyFor(share).open(sealed, aad(blobId))),
+    ) as { mime: string; bytes: string }
+    const bytes = base64ToBytes(b64)
+    if ((await sha256Hex(bytes)) !== sha256) {
+      throw new Error(`shared blob ${blobId}: content hash does not match the blob id`)
+    }
+    await put('attachments', { sha256, mime, size: bytes.length, bytes, capturedAt: new Date().toISOString() })
+    return
+  }
+  if (!blobId.startsWith('ev-')) return
+
+  const eventId = blobId.slice('ev-'.length)
+  const plaintext = openKeyFor(share).open(sealed, aad(blobId))
+  const json = new TextDecoder().decode(plaintext)
+  if (!verify_event(json)) throw new Error(`shared blob ${blobId}: signature does not verify`)
+  const signed = JSON.parse(json) as StoredEvent
+  if (signed.event.id !== eventId) throw new Error(`shared blob ${blobId}: embedded id mismatch`)
+  if (signed.author !== share.ownerEd) {
+    throw new Error(`shared blob ${blobId}: author is not the vault owner`)
+  }
+  await put('shared_events', { ownerEd: share.ownerEd, id: eventId, event: signed })
+  // Keep the caller's diff set true for the rest of this pull, so an id seen
+  // twice (a relay listing a duplicate, or a re-walked page) isn't reopened.
+  known.add(eventId)
+}
+
+/**
+ * Batched walk of one share's blobs (`?include=body`), applying each frame as
+ * it streams. Returns `false` when the relay doesn't support batching, so the
+ * caller falls back to its per-blob loop; `true` when this share is finished
+ * for this pull — either the walk completed, or the grant vanished mid-walk
+ * and the share was marked stale, as a null listing does.
+ *
+ * Integrity errors propagate to `pullShared`'s per-share catch, aborting this
+ * share and leaving the rest for the next pull — today's semantics for an
+ * inline throw.
+ */
+async function batchPullShare(
+  client: SharingClient & BatchSharedListClient,
+  share: Share,
+  known: Set<string>,
+): Promise<boolean> {
+  let cursor: string | null = null
+  for (;;) {
+    const page = await client.listSharedBlobsWithBodies(share.ownerEd, cursor)
+    if (page === null) {
+      // Revoked between the listing and now. Written unconditionally because
+      // the caller may have just cleared `stale`, so this in-memory copy of the
+      // share can't be trusted to report the stored value.
+      await putShare({ ...share, stale: true })
+      return true
+    }
+    if (page.kind === 'unsupported') return false
+
+    for await (const { id, blob } of page.blobs) {
+      // The same pre-checks the per-blob loop makes before fetching; here they
+      // drop the frame instead, before it is ever opened.
+      if (id.startsWith('ev-')) {
+        if (known.has(id.slice('ev-'.length))) continue
+      } else if (id.startsWith('att-')) {
+        if ((await get('attachments', id.slice('att-'.length))) !== undefined) continue
+      } else {
+        continue
+      }
+      await applySharedSealed(share, known, id, blob)
+    }
+
+    // Same non-advancing-cursor guard as sync.ts's own walk: a buggy relay
+    // must not spin this loop forever.
+    if (page.next === null || page.next === cursor) return true
+    cursor = page.next
+  }
+}
+
+/**
  * Pull every accepted share's new events. Mirrors sync.ts's own-vault pull
  * (list, diff, fetch, open, verify) against the owner's keyring, plus an author
  * check: a shared vault is single-writer by contract, so an event whose signature
@@ -260,42 +379,25 @@ export async function pullShared(): Promise<void> {
         ).map((r) => r.id),
       )
 
+      // The blobs this pull is actually missing — how many there are is what
+      // picks between the two paths below, and the `att-` lookups are the same
+      // IDB reads the per-blob loop would have made on its way past them.
+      const toFetch: string[] = []
       for (const blobId of ids) {
-        // Captured paper records: mirror the owner's `att-` blobs into the same
-        // content-addressed `attachments` store the owner's own device uses, so
-        // the read-only spine's viewer loads them the same way (see Spine.svelte).
-        // A household share carries the owner's keyring, so these open under
-        // the same epoch their events do. Content-addressed, so once-and-done.
-        if (blobId.startsWith('att-')) {
-          const sha256 = blobId.slice('att-'.length)
-          if ((await get('attachments', sha256)) !== undefined) continue
-          const sealed = await sharingClient.getSharedBlob(share.ownerEd, blobId)
-          if (!sealed) continue
-          const { mime, bytes: b64 } = JSON.parse(
-            new TextDecoder().decode(openKeyFor(share).open(sealed, aad(blobId))),
-          ) as { mime: string; bytes: string }
-          const bytes = base64ToBytes(b64)
-          if ((await sha256Hex(bytes)) !== sha256) {
-            throw new Error(`shared blob ${blobId}: content hash does not match the blob id`)
-          }
-          await put('attachments', { sha256, mime, size: bytes.length, bytes, capturedAt: new Date().toISOString() })
-          continue
+        if (blobId.startsWith('ev-')) {
+          if (!known.has(blobId.slice('ev-'.length))) toFetch.push(blobId)
+        } else if (blobId.startsWith('att-')) {
+          if ((await get('attachments', blobId.slice('att-'.length))) === undefined) toFetch.push(blobId)
         }
-        if (!blobId.startsWith('ev-')) continue
-        const eventId = blobId.slice('ev-'.length)
-        if (known.has(eventId)) continue
+      }
+      if (toFetch.length >= BATCH_PULL_THRESHOLD && supportsBatchSharedList(sharingClient)) {
+        if (await batchPullShare(sharingClient, share, known)) continue
+      }
 
+      for (const blobId of toFetch) {
         const sealed = await sharingClient.getSharedBlob(share.ownerEd, blobId)
         if (!sealed) continue
-        const plaintext = openKeyFor(share).open(sealed, aad(blobId))
-        const json = new TextDecoder().decode(plaintext)
-        if (!verify_event(json)) throw new Error(`shared blob ${blobId}: signature does not verify`)
-        const signed = JSON.parse(json) as StoredEvent
-        if (signed.event.id !== eventId) throw new Error(`shared blob ${blobId}: embedded id mismatch`)
-        if (signed.author !== share.ownerEd) {
-          throw new Error(`shared blob ${blobId}: author is not the vault owner`)
-        }
-        await put('shared_events', { ownerEd: share.ownerEd, id: eventId, event: signed })
+        await applySharedSealed(share, known, blobId, sealed)
       }
     } catch (err) {
       // Left for the next pull rather than aborting every other share.
