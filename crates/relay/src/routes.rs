@@ -28,6 +28,7 @@ use crate::grants::Grant;
 use crate::pokes::Poke;
 use crate::push::{subscription_key, Subscription};
 use crate::share::{ShareState, TombstoneReason};
+use crate::store::BlobStore;
 use crate::AppState;
 
 /// SSE heartbeat interval. A comment line every this often keeps the long-lived
@@ -48,6 +49,19 @@ pub const MAILBOX_MAX_BODY: usize = 4096;
 /// of a record built for one recipient, not a whole vault, so it gets its own,
 /// tighter ceiling without touching the blob contract.
 pub const SHARE_MAX_BODY: usize = 8 * 1024 * 1024;
+
+/// Byte budget for one framed listing page (`?include=body`, see
+/// [`framed_page`]). Distinct in kind from the caps above: those bound what a
+/// client may *send*, this bounds how much the relay accumulates in memory
+/// before answering one listing — 8 MiB keeps a batched page's cost in the same
+/// range as a single large blob fetch.
+pub const BATCH_BYTE_BUDGET: usize = 8 * 1024 * 1024;
+
+/// Response header carrying a framed page's continuation cursor. A pure
+/// sequence of frames has nowhere to put a JSON sibling field, so the same
+/// opaque token the JSON listing returns as `next` travels in a header here.
+/// Lowercase because [`HeaderName::from_static`] accepts nothing else.
+pub const NEXT_HEADER: &str = "svastha-next";
 
 /// Hard ceiling on a share's lifetime: the relay clamps any requested expiry to
 /// at most this far in the future (30 days). The client picks a shorter default
@@ -430,13 +444,22 @@ pub struct BlobList {
     next: Option<String>,
 }
 
-/// `?limit=`/`?cursor=` on a listing endpoint. Both optional and independent of
-/// each other; see [`paginate_ids`] for how an absent `limit` alongside a
-/// present `cursor` is handled.
+/// `?limit=`/`?cursor=`/`?include=` on a listing endpoint. All optional and
+/// independent of each other; see [`paginate_ids`] for how an absent `limit`
+/// alongside a present `cursor` is handled, and [`framed_page`] for `include`.
 #[derive(Deserialize)]
 pub struct ListQuery {
     limit: Option<usize>,
     cursor: Option<String>,
+    include: Option<String>,
+}
+
+/// Whether this listing request opted into inline blob bodies. Only `body` is
+/// meaningful; anything else reads as absent rather than `400`, the same
+/// clamp-don't-reject posture as `limit` — an unrecognized value leaves the
+/// caller with the ordinary JSON listing, which is always a usable answer.
+fn wants_bodies(query: &ListQuery) -> bool {
+    query.include.as_deref() == Some("body")
 }
 
 /// Page `ids` per `limit`/`cursor`, or return them untouched when neither is
@@ -489,19 +512,94 @@ fn paginate_ids(
     Ok((page, next))
 }
 
+/// Serve one page of `owner`'s blobs as bodies, not just ids: the frames
+/// `id_len u16 BE | id | blob_len u32 BE | blob` concatenated, with the
+/// continuation cursor in the [`NEXT_HEADER`] response header. This exists to
+/// collapse round trips — a cold device otherwise pays a signed (so
+/// preflighted) request per blob to restore a vault — and changes nothing about
+/// what the relay can see: it already lists every id and serves every body.
+///
+/// Two bounds apply at once. The caller's `limit` fixed how many ids `page`
+/// holds; [`BATCH_BYTE_BUDGET`] caps how many of those actually ship. Whichever
+/// binds first ends the page, so a page can be short of `limit` and a client
+/// must walk by the cursor rather than by counting. The first frame is written
+/// unconditionally, so a blob larger than the whole budget ships alone instead
+/// of stalling the walk on a page that could never fit it.
+///
+/// The cursor is where the two bounds are reconciled: on an early stop, `next`
+/// is the last id this response *accounted for* (`consumed - 1`, the last-seen-id
+/// semantics [`paginate_ids`] defines), so the caller resumes at the first id
+/// that did not ship. When the whole page ships, `next` is `paginate_ids`' own
+/// value and the walk proceeds exactly as the JSON listing's would.
+fn framed_page(
+    store: &dyn BlobStore,
+    owner: &[u8; 32],
+    page: &[String],
+    page_next: Option<String>,
+) -> Result<Response, StatusCode> {
+    let mut body: Vec<u8> = Vec::new();
+    let mut consumed: usize = 0;
+    for id in page {
+        let blob = store
+            .get(owner, id)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        // Deleted between the listing and this read: still consumed, so the
+        // cursor moves past it, but there is nothing to frame.
+        let Some(blob) = blob else {
+            consumed += 1;
+            continue;
+        };
+        let frame_len = 2 + id.len() + 4 + blob.len();
+        if !body.is_empty() && body.len() + frame_len > BATCH_BYTE_BUDGET {
+            break;
+        }
+        body.extend_from_slice(&(id.len() as u16).to_be_bytes());
+        body.extend_from_slice(id.as_bytes());
+        body.extend_from_slice(&(blob.len() as u32).to_be_bytes());
+        body.extend_from_slice(&blob);
+        consumed += 1;
+    }
+
+    // `consumed >= 1` whenever the loop broke early: breaking requires a
+    // non-empty buffer, which requires a frame already written.
+    let next = if consumed < page.len() {
+        Some(page[consumed - 1].clone())
+    } else {
+        page_next
+    };
+    let mut resp = ([(header::CONTENT_TYPE, "application/octet-stream")], body).into_response();
+    if let Some(next) = next {
+        let value = next
+            .parse()
+            .expect("a blob id is header-safe (see `valid_id`)");
+        resp.headers_mut()
+            .insert(HeaderName::from_static(NEXT_HEADER), value);
+    }
+    Ok(resp)
+}
+
 /// List the ids the caller has stored. See [`paginate_ids`] for the optional
-/// `limit`/`cursor` params' semantics.
+/// `limit`/`cursor` params' semantics, and [`framed_page`] for the optional
+/// `include=body` batched form.
 pub async fn list_blobs(
     State(state): State<AppState>,
     Extension(owner): Extension<Owner>,
     Query(query): Query<ListQuery>,
-) -> Result<Json<BlobList>, StatusCode> {
+) -> Result<Response, StatusCode> {
     let ids = state
         .store
         .list(&owner.0)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if wants_bodies(&query) {
+        // A framed page is always paginated: byte-compatibility only constrains
+        // the JSON shape, and an unbounded body page is the very thing the byte
+        // budget exists to prevent.
+        let limit = Some(query.limit.unwrap_or(DEFAULT_PAGE_SIZE));
+        let (page, next) = paginate_ids(ids, limit, query.cursor.as_deref())?;
+        return framed_page(&*state.store, &owner.0, &page, next);
+    }
     let (ids, next) = paginate_ids(ids, query.limit, query.cursor.as_deref())?;
-    Ok(Json(BlobList { ids, next }))
+    Ok(Json(BlobList { ids, next }).into_response())
 }
 
 /// A strong validator over a blob's exact bytes: cheap and free of any AAD or
@@ -705,24 +803,32 @@ pub async fn list_shared(
 /// pagination) is over admitted ids only, so a scoped grantee pages through
 /// its own scope and never learns an excluded id exists, let alone its
 /// position in the walk. See [`paginate_ids`] for the `limit`/`cursor`
-/// semantics themselves.
+/// semantics themselves, and [`framed_page`] for the optional `include=body`
+/// batched form — which composes the same way, since it runs after both the
+/// grant check and the scope filter, so it can only ever carry bodies for ids
+/// this caller could already have fetched one at a time.
 pub async fn list_shared_blobs(
     State(state): State<AppState>,
     Extension(caller): Extension<Owner>,
     Path(owner_hex): Path<String>,
     Query(query): Query<ListQuery>,
-) -> Result<Json<BlobList>, StatusCode> {
+) -> Result<Response, StatusCode> {
     let owner = valid_pubkey_hex(&owner_hex).ok_or(StatusCode::BAD_REQUEST)?;
     let grant = live_grant(&state, &owner, &caller.0)?;
-    let ids = state
+    let ids: Vec<String> = state
         .store
         .list(&owner)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .into_iter()
         .filter(|id| grant.admits(id))
         .collect();
+    if wants_bodies(&query) {
+        let limit = Some(query.limit.unwrap_or(DEFAULT_PAGE_SIZE));
+        let (page, next) = paginate_ids(ids, limit, query.cursor.as_deref())?;
+        return framed_page(&*state.store, &owner, &page, next);
+    }
     let (ids, next) = paginate_ids(ids, query.limit, query.cursor.as_deref())?;
-    Ok(Json(BlobList { ids, next }))
+    Ok(Json(BlobList { ids, next }).into_response())
 }
 
 /// Fetch the caller's live grant on `owner`, or `Err(404)` when there is no
