@@ -21,7 +21,7 @@ import {
 import { pdfTextEngine } from './pdf'
 import { imageOcrEngine } from './ocr-engine'
 import { numberedLines, renderColumns } from './ocr-layout'
-import type { OcrLine } from './ocr'
+import { UnreadablePageError, type OcrLine } from './ocr'
 import { loadConfig, chatComplete, InferenceError } from './inference'
 import { buildProposalRecord, upsertProposal, type DraftEvent } from './proposals'
 import { session } from './session.svelte'
@@ -46,23 +46,23 @@ interface Coded {
   dropped: number
 }
 
-export class UnreadablePageError extends Error {}
+export { UnreadablePageError }
 
 /**
- * Transcribe a page. Tries the exact path first (a PDF's embedded text layer),
- * then the recognizer for images.
+ * Transcribe a page into its pages of lines. Tries the exact path first (a
+ * PDF's embedded text layer), then the recognizer for images — which reads one
+ * image, so it is a single page.
  *
  * Throws rather than returning empty when nothing could be read: "no text" and
  * "not read" are the same from here, and only one of them is safe to assume
  * about a medical document.
  */
-export async function transcribe(bytes: Uint8Array, mime: string): Promise<OcrLine[]> {
-  const lines =
-    (await pdfTextEngine.recognize(bytes, mime)) ?? ([] as OcrLine[])
-  if (lines.length > 0) return lines
+export async function transcribe(bytes: Uint8Array, mime: string): Promise<OcrLine[][]> {
+  const pages = await pdfTextEngine.recognizePages(bytes, mime)
+  if (pages.some((page) => page.length > 0)) return pages
 
   const recognized = await imageOcrEngine.recognize(bytes, mime)
-  if (recognized.length > 0) return recognized
+  if (recognized.length > 0) return [recognized]
 
   throw new UnreadablePageError(
     "Couldn't read this page. Scanned PDFs and photographs need on-device reading switched on (Settings → AI), and handwriting isn't supported.",
@@ -76,16 +76,21 @@ export async function transcribe(bytes: Uint8Array, mime: string): Promise<OcrLi
  * panel's rows visually intact, which is what stops a value being paired with
  * the analyte above or below it; the numbered view is what a finding cites, and
  * what the source-line guard checks against. Neither alone does both jobs.
+ *
+ * Columns are rendered a page at a time: their character scale spans the widest
+ * run in what they are given, so a single page-wide rule or footer would
+ * otherwise squash every other page's table into collisions. The numbering runs
+ * across the whole document, because that is what a cited line number means.
  */
-export function buildExtractionPrompt(lines: OcrLine[]): string {
+export function buildExtractionPrompt(pages: OcrLine[][]): string {
   return [
     extract_user_prompt(),
     '',
     'The page, with columns preserved:',
-    renderColumns(lines),
+    pages.map((page) => renderColumns(page)).join('\n\n'),
     '',
     'The same page, one numbered line per row — cite these numbers:',
-    numberedLines(lines),
+    numberedLines(pages.flat()),
   ].join('\n')
 }
 
@@ -133,9 +138,10 @@ export async function readAndPropose(
   if (!session.identity) throw new Error('Unlock the vault before reading a page.')
 
   await initSvastha()
-  const lines = await transcribe(bytes, mime)
+  const pages = await transcribe(bytes, mime)
+  const lines = pages.flat()
 
-  const answer = await chatComplete(config, extract_system_prompt(), buildExtractionPrompt(lines))
+  const answer = await chatComplete(config, extract_system_prompt(), buildExtractionPrompt(pages))
   const coded = JSON.parse(
     code_from_lines(answer, JSON.stringify(lines.map((l) => l.text))),
   ) as Coded

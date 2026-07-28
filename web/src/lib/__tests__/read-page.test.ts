@@ -13,7 +13,7 @@ const engines = vi.hoisted(() => ({
   pdf: vi.fn(async () => [] as unknown[]),
   image: vi.fn(async () => [] as unknown[]),
 }))
-vi.mock('../pdf', () => ({ pdfTextEngine: { recognize: engines.pdf } }))
+vi.mock('../pdf', () => ({ pdfTextEngine: { recognizePages: engines.pdf } }))
 vi.mock('../ocr-engine', () => ({ imageOcrEngine: { recognize: engines.image } }))
 
 const inference = vi.hoisted(() => ({
@@ -41,7 +41,9 @@ vi.mock('../session.svelte', () => ({
 vi.mock('../db', () => ({ get: vi.fn(), put: vi.fn(), del: vi.fn(), getAll: vi.fn(async () => []) }))
 
 import { readAndPropose, transcribe, buildExtractionPrompt, UnreadablePageError } from '../read-page'
+import { renderColumns } from '../ocr-layout'
 import { InferenceError } from '../inference'
+import type { OcrLine, OcrWord } from '../ocr'
 
 const line = (index: number, text: string) => ({
   index,
@@ -51,6 +53,21 @@ const line = (index: number, text: string) => ({
 })
 
 const PANEL = [line(1, 'Sodium 139 mmol/L 135-145'), line(2, 'Potassium 4.1 mmol/L 3.5-5.1')]
+
+const word = (text: string, x0: number, x1: number): OcrWord => ({
+  text,
+  x0,
+  x1,
+  y0: 0,
+  y1: 8,
+  conf: 1,
+})
+const row = (index: number, words: OcrWord[]): OcrLine => ({
+  index,
+  words,
+  text: words.map((w) => w.text).join(' '),
+  y: 0,
+})
 
 beforeEach(() => {
   stored.records = []
@@ -68,14 +85,14 @@ afterEach(() => vi.restoreAllMocks())
 
 describe('transcribe', () => {
   it('prefers the exact PDF text layer over the recognizer', async () => {
-    engines.pdf.mockResolvedValue(PANEL)
-    expect(await transcribe(new Uint8Array(), 'application/pdf')).toEqual(PANEL)
+    engines.pdf.mockResolvedValue([PANEL])
+    expect(await transcribe(new Uint8Array(), 'application/pdf')).toEqual([PANEL])
     expect(engines.image).not.toHaveBeenCalled()
   })
 
   it('falls back to the recognizer for images', async () => {
     engines.image.mockResolvedValue(PANEL)
-    expect(await transcribe(new Uint8Array(), 'image/jpeg')).toEqual(PANEL)
+    expect(await transcribe(new Uint8Array(), 'image/jpeg')).toEqual([PANEL])
   })
 
   // "No text" and "not read" are indistinguishable from here, and only one of
@@ -89,11 +106,33 @@ describe('transcribe', () => {
 
 describe('buildExtractionPrompt', () => {
   it('sends the page both column-aligned and numbered', () => {
-    const prompt = buildExtractionPrompt(PANEL)
+    const prompt = buildExtractionPrompt([PANEL])
     expect(prompt).toContain('SCHEMA')
     expect(prompt).toContain('[1] Sodium 139 mmol/L 135-145')
     expect(prompt).toContain('[2] Potassium 4.1 mmol/L 3.5-5.1')
     expect(prompt).toContain('columns preserved')
+  })
+
+  // A column scale shared across the whole document lets one page's full-bleed
+  // element squash another page's table flat — which is the row-major collapse
+  // the column view exists to prevent.
+  it("scales columns per page, so one page's outlier cannot flatten another's", () => {
+    const page1 = [row(1, [word('Potassium', 0, 60), word('4.1', 70, 90)])]
+    const page2 = [row(2, [word('Ordered by', 0, 60), word('| page 2 of 2', 5000, 5100)])]
+
+    const prompt = buildExtractionPrompt([page1, page2])
+
+    expect(prompt).toContain(renderColumns(page1))
+    // Analyte and value stay in separate columns rather than colliding.
+    expect(prompt).toMatch(/Potassium {5,}4\.1/)
+  })
+
+  it('numbers lines continuously across pages', () => {
+    const page1 = [row(1, [word('one', 0, 30)])]
+    const page2 = [row(2, [word('two', 0, 30)])]
+    const prompt = buildExtractionPrompt([page1, page2])
+    expect(prompt).toContain('[1] one')
+    expect(prompt).toContain('[2] two')
   })
 })
 

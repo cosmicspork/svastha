@@ -4,7 +4,7 @@
 // stays free of it. The facade keeps AttachmentViewer/PdfDoc dumb (no pdf.js
 // types leak into components) and makes the module trivially mockable in tests.
 import type { PDFDocumentProxy } from 'pdfjs-dist'
-import type { OcrLine, OcrWord } from './ocr'
+import { UnreadablePageError, type OcrEngine, type OcrLine, type OcrWord } from './ocr'
 import { groupLines } from './ocr-layout'
 
 // The css-px ceiling and device-pixel-ratio cap that bound a rendered page's
@@ -34,6 +34,32 @@ function loadPdfjs(): Promise<Pdfjs> {
   return pdfjsPromise
 }
 
+/**
+ * Open the document, with pdf.js's failures translated into this app's.
+ *
+ * `PasswordException` and friends otherwise reach the UI as library wording
+ * ("No password given"), which reads as a bug rather than as something the
+ * owner can act on. Matched by `name`: the exception classes are not part of
+ * pdf.js's public entry, and this module only ever holds the library behind a
+ * dynamic import.
+ */
+async function openDocument(pdfjs: Pdfjs, bytes: Uint8Array): Promise<PDFDocumentProxy> {
+  try {
+    // Copied because pdf.js may detach the buffer it is handed, and the caller
+    // keeps the originals for the download fallback.
+    return await pdfjs.getDocument({ data: bytes.slice() }).promise
+  } catch (err) {
+    if ((err as { name?: string } | null)?.name === 'PasswordException') {
+      throw new UnreadablePageError(
+        'This PDF is locked with a password, which Svastha cannot unlock. Save an unlocked copy from wherever you can open it, and attach that instead.',
+      )
+    }
+    throw new UnreadablePageError(
+      "Couldn't read this PDF — the file looks damaged, incomplete, or is not a PDF at all.",
+    )
+  }
+}
+
 /** An opened PDF: its page count and a per-page render onto a caller-owned
  * canvas, fit to `cssWidth`. Components hold only this shape. */
 export interface OpenedPdf {
@@ -41,13 +67,13 @@ export interface OpenedPdf {
   renderPage(pageNumber: number, canvas: HTMLCanvasElement, cssWidth: number): Promise<void>
 }
 
-/** Open a PDF from its plaintext bytes. Copies the bytes because pdf.js may
- * detach the buffer it is handed, and the caller keeps the originals for the
- * download fallback. Rejects on a corrupt/unreadable PDF (or a failed import),
- * which the component turns into its download-instead fallback. */
+/** Open a PDF from its plaintext bytes. Rejects with an {@link
+ * UnreadablePageError} on a locked or corrupt PDF (or with the import's own
+ * error), which the component turns into its download-instead fallback. The
+ * returned document lives as long as the viewer holds it. */
 export async function openPdf(bytes: Uint8Array): Promise<OpenedPdf> {
   const pdfjs = await loadPdfjs()
-  const doc: PDFDocumentProxy = await pdfjs.getDocument({ data: bytes.slice() }).promise
+  const doc = await openDocument(pdfjs, bytes)
   return {
     numPages: doc.numPages,
     async renderPage(pageNumber, canvas, cssWidth) {
@@ -79,7 +105,9 @@ interface PositionedText {
   str: string
   width: number
   height: number
-  /** pdf.js's 6-element affine matrix; `[4]` is x and `[5]` the baseline y. */
+  /** pdf.js's 6-element affine matrix, in *content-stream* space: it carries
+   * the text matrix but never the page's `/Rotate`. `[4]`/`[5]` are the run's
+   * origin (x, baseline). */
   transform: number[]
 }
 
@@ -96,31 +124,71 @@ function isPositionedText(item: unknown): item is PositionedText {
   )
 }
 
+/** `m1 ∘ m2`, i.e. pdf.js's `Util.transform`. Inlined so the geometry below
+ * stays a pure function: the library is multi-MB and dynamically imported, and
+ * these six multiplications are not worth loading it for. */
+function compose(m1: number[], m2: number[]): number[] {
+  return [
+    m1[0] * m2[0] + m1[2] * m2[1],
+    m1[1] * m2[0] + m1[3] * m2[1],
+    m1[0] * m2[2] + m1[2] * m2[3],
+    m1[1] * m2[2] + m1[3] * m2[3],
+    m1[0] * m2[4] + m1[2] * m2[5] + m1[4],
+    m1[1] * m2[4] + m1[3] * m2[5] + m1[5],
+  ]
+}
+
+/** A direction as a unit vector; zero-length (a degenerate text matrix) becomes
+ * no displacement rather than NaN. */
+function unit(x: number, y: number): [number, number] {
+  const length = Math.hypot(x, y)
+  return length > 0 ? [x / length, y / length] : [0, 0]
+}
+
 /**
- * Positioned runs from one page's embedded text layer.
+ * Positioned runs from one page's embedded text layer, in display space.
  *
- * pdf.js reports PDF coordinates: origin at the bottom-left, y growing upward,
- * and `transform[5]` is the *baseline*, not the top. Every other engine reports
- * image coordinates, so this flips to top-down here rather than leaking two
- * conventions into `ocr-layout.ts`.
+ * `viewportTransform` is `page.getViewport({ scale: 1 }).transform`, and it is
+ * the only thing that knows about the page's `/Rotate`: a text item's own
+ * transform is the content-stream matrix, which carries no rotation at all.
+ * Composing the two is what makes a faxed or portal-rotated page come out
+ * upright — flipping against the viewport's (rotation-aware) *height* instead
+ * lands every run outside its band, which reaches the reader as a lab value
+ * paired with the wrong analyte.
+ *
+ * The composed matrix also gives the run's direction, so its box is the extent
+ * of `width` along the advance and `height` along the ascender rather than an
+ * assumed horizontal run. Output is top-down (y grows downward), matching what
+ * image engines report, so `ocr-layout.ts` never sees two conventions.
  *
  * Confidence is 1: an embedded text layer is what the document says, not a
  * guess at it.
  */
-export function pageWords(items: unknown[], pageHeight: number): OcrWord[] {
+export function pageWords(items: unknown[], viewportTransform: number[]): OcrWord[] {
+  // A run's width and height are user-space magnitudes, so they follow the
+  // viewport's scale but not its rotation.
+  const scale = Math.hypot(viewportTransform[0], viewportTransform[1]) || 1
   const words: OcrWord[] = []
+
   for (const item of items) {
     if (!isPositionedText(item)) continue
     const text = item.str
     if (text.trim() === '') continue
-    const x0 = item.transform[4]
-    const baseline = item.transform[5]
+
+    const m = compose(viewportTransform, item.transform)
+    const [ax, ay] = unit(m[0], m[1])
+    const [ux, uy] = unit(m[2], m[3])
+    const advance = item.width * scale
+    const rise = item.height * scale
+    const xs = [m[4], m[4] + ax * advance, m[4] + ux * rise, m[4] + ax * advance + ux * rise]
+    const ys = [m[5], m[5] + ay * advance, m[5] + uy * rise, m[5] + ay * advance + uy * rise]
+
     words.push({
       text,
-      x0,
-      x1: x0 + item.width,
-      y0: pageHeight - (baseline + item.height),
-      y1: pageHeight - baseline,
+      x0: Math.min(...xs),
+      x1: Math.max(...xs),
+      y0: Math.min(...ys),
+      y1: Math.max(...ys),
       conf: 1,
     })
   }
@@ -128,39 +196,68 @@ export function pageWords(items: unknown[], pageHeight: number): OcrWord[] {
 }
 
 /**
- * Read a PDF's embedded text layer into lines, all pages in order.
+ * Read a PDF's embedded text layer, one array of lines per page.
  *
- * Returns **empty** for a scanned PDF — pages of images carry no text layer, and
- * that is the honest answer here rather than something to paper over. A caller
- * that wants those pages read has to rasterize them through a recognition
- * engine; this path is exact precisely because it never guesses.
+ * Resolves **empty** for a scanned PDF — pages of images carry no text layer,
+ * and that is the honest answer here rather than something to paper over. A
+ * caller that wants those pages read has to rasterize them through a
+ * recognition engine; this path is exact precisely because it never guesses.
  *
- * Line numbering is continuous across pages, so a citation identifies a line in
- * the document rather than a page-relative position that repeats.
+ * Pages stay separate because a column render's character scale is per page:
+ * flattened, one page's full-bleed rule sets the horizontal extent for every
+ * other page and collapses their tables. Line numbering is nevertheless
+ * continuous across pages, so a citation identifies a line in the document
+ * rather than a page-relative position that repeats.
  */
-export async function textLayer(bytes: Uint8Array): Promise<OcrLine[]> {
+export async function textLayerPages(bytes: Uint8Array): Promise<OcrLine[][]> {
   const pdfjs = await loadPdfjs()
-  const doc: PDFDocumentProxy = await pdfjs.getDocument({ data: bytes.slice() }).promise
+  const doc = await openDocument(pdfjs, bytes)
 
-  const lines: OcrLine[] = []
-  for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
-    const page = await doc.getPage(pageNumber)
-    const height = page.getViewport({ scale: 1 }).height
-    const content = await page.getTextContent()
-    const pageLines = groupLines(pageWords(content.items, height))
-    // Renumber onto the running total; groupLines numbers from 1 per page.
-    for (const line of pageLines) {
-      lines.push({ ...line, index: lines.length + 1 })
+  try {
+    const pages: OcrLine[][] = []
+    let numbered = 0
+    for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
+      const page = await doc.getPage(pageNumber)
+      const viewport = page.getViewport({ scale: 1 })
+      const content = await page.getTextContent()
+      // groupLines numbers from 1 per page; renumber onto the running total.
+      pages.push(
+        groupLines(pageWords(content.items, viewport.transform)).map((line) => ({
+          ...line,
+          index: ++numbered,
+        })),
+      )
     }
+    return pages
+  } finally {
+    // The document holds a copy of the bytes and the worker caches every page
+    // it has parsed; on a phone that is tab-kill territory for a long report.
+    // Teardown is the loading task's, not the document's, since pdf.js 6.
+    await doc.loadingTask.destroy().catch(() => {})
   }
-  return lines
+}
+
+/** The same text layer as one run of lines, for callers that do not lay the
+ * page out. */
+export async function textLayer(bytes: Uint8Array): Promise<OcrLine[]> {
+  return (await textLayerPages(bytes)).flat()
+}
+
+/** An {@link OcrEngine} that can also say where its pages divide — needed
+ * because anything that renders columns has to scale them per page. */
+export interface PagedOcrEngine extends OcrEngine {
+  recognizePages(bytes: Uint8Array, mime: string): Promise<OcrLine[][]>
 }
 
 /** An {@link OcrEngine} over the embedded text layer. Handles `application/pdf`
  * only; anything else resolves empty, so a caller can try engines in order. */
-export const pdfTextEngine = {
+export const pdfTextEngine: PagedOcrEngine = {
   async recognize(bytes: Uint8Array, mime: string): Promise<OcrLine[]> {
     if (mime !== 'application/pdf') return []
     return textLayer(bytes)
+  },
+  async recognizePages(bytes: Uint8Array, mime: string): Promise<OcrLine[][]> {
+    if (mime !== 'application/pdf') return []
+    return textLayerPages(bytes)
   },
 }

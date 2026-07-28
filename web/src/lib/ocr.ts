@@ -51,6 +51,13 @@ export interface OcrLine {
   y: number
 }
 
+/** Thrown when a page could not be read at all — a locked or damaged PDF, or a
+ * scan no engine on this device can transcribe. It lives here rather than with
+ * either reader because both throw it and the UI checks one type: putting it in
+ * `read-page.ts` would make `pdf.ts` import the coding path (and drag wasm and
+ * the inference client into the viewer's bundle) just to name an error. */
+export class UnreadablePageError extends Error {}
+
 /** What a page-reading engine must provide. */
 export interface OcrEngine {
   /** Read `bytes` of the given MIME type into lines, top to bottom. Resolves
