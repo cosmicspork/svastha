@@ -13,7 +13,8 @@
         "crates/svastha/Cargo.toml",
         "crates/wasm/Cargo.toml",
         "crates/relay/Cargo.toml",
-        "crates/node/Cargo.toml"
+        "crates/node/Cargo.toml",
+        "crates/retrieval/Cargo.toml"
       ]
     }
   }

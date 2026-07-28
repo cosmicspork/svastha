@@ -51,9 +51,6 @@ Making the node optional. The PWA already holds the decrypted vault, so OCR and
 cited Q&A can run where the keys already are; classical OCR plus a text model
 replaces the single vision pass and retires the vision-model requirement.
 
-- Share ranking and grounding between node and browser — retrieval is pure
-  lexical scoring with no embeddings, so it lifts into its own crate the node
-  and WASM both consume. The citation contract must not fork into two languages
 - Configure an inference endpoint on this device — HTTPS only, because the PWA
   is HTTPS and a plain-HTTP LAN endpoint is blocked as mixed content; the API
   key seals into the keyvault rather than plaintext prefs
