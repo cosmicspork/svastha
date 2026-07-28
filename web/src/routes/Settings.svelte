@@ -69,6 +69,15 @@
     <span class="hub-chevron" aria-hidden="true">›</span>
   </button>
 
+  <button class="hub-row" onclick={() => navigate('#/settings/ai')} data-testid="settings-row-ai">
+    <span class="hub-glyph" aria-hidden="true">✳</span>
+    <span class="hub-text">
+      <span class="hub-title">AI</span>
+      <span class="hub-sub muted">Inference endpoint for reading and answering</span>
+    </span>
+    <span class="hub-chevron" aria-hidden="true">›</span>
+  </button>
+
   <button class="hub-row" onclick={() => navigate('#/proposals')} data-testid="settings-row-proposals">
     <span class="hub-glyph" aria-hidden="true">◇</span>
     <span class="hub-text">

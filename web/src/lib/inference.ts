@@ -1,0 +1,218 @@
+// This device's own inference endpoint: an OpenAI-compatible chat-completions
+// service the owner points the app at, so OCR and cited Q&A can run without a
+// processing node holding the vault key.
+//
+// Three things this module is deliberate about:
+//
+//   1. **The endpoint must be HTTPS.** The PWA is served over HTTPS, so a
+//      browser blocks any `http://` request from it as active mixed content.
+//      `http://localhost` is exempt (a potentially-trustworthy origin) but is
+//      not the shape people actually run — a model on a desktop, reached from a
+//      phone, is a LAN address, and that is precisely the case the browser
+//      refuses. So a self-hosted endpoint has to terminate TLS with a real
+//      certificate, and saying that plainly beats an opaque network error.
+//   2. **Batch paths are rejected**, mirroring `validate_inference_endpoint` in
+//      `crates/node/src/config.rs`: batch APIs retain inputs and outputs
+//      server-side, so pointing at one leaks plaintext beyond the trust
+//      boundary. Duplicated rather than shared because it is twenty lines and
+//      the alternative is a wasm round-trip for a string check.
+//   3. **The API key is sealed, not stored in `prefs`.** `prefs` is plaintext at
+//      rest; a bearer credential is not vault content but it is still a secret.
+import { get, put, del } from './db'
+import { session } from './session.svelte'
+import { toHex, fromHex } from './hex'
+
+const enc = new TextEncoder()
+const dec = new TextDecoder()
+
+/** AAD for the sealed API-key record — binds the ciphertext to its purpose. */
+const API_KEY_AAD = enc.encode('svastha/secrets/inference-api-key')
+const API_KEY_NAME = 'inference-api-key'
+
+/** Where the non-secret half lives. Same `prefs` pattern as `relayUrl`. */
+const PREF_URL = 'inferenceUrl'
+const PREF_MODEL = 'inferenceModel'
+const PREF_CONSENT = 'inferenceConsentAt'
+
+export interface InferenceConfig {
+  endpoint: string
+  model: string
+  /** Absent when no key is configured, or when a stored one could not be
+   * unsealed — see {@link loadApiKey}. */
+  apiKey?: string
+}
+
+/**
+ * Validate an endpoint for browser use. Mirrors the node's
+ * `validate_inference_endpoint` and adds the constraint the node does not have:
+ * a browser on an HTTPS page cannot reach an `http://` origin.
+ */
+export function validateEndpoint(raw: string): string | null {
+  const endpoint = raw.trim()
+  if (!endpoint) return 'Enter an endpoint URL.'
+
+  let url: URL
+  try {
+    url = new URL(endpoint)
+  } catch {
+    return 'That is not a valid URL.'
+  }
+
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    return 'The endpoint must be an http(s) URL.'
+  }
+
+  // Loopback is the one http origin a secure page may call; everything else is
+  // blocked before the request is even sent, so refuse it here with a reason
+  // rather than letting it fail as a bare network error later.
+  if (url.protocol === 'http:' && !isLoopback(url.hostname)) {
+    return 'The endpoint must use https. A browser blocks plain http from this app, so a model on your own machine needs a certificate (a tunnel or reverse proxy will do it).'
+  }
+
+  if (endpoint.toLowerCase().includes('/batch')) {
+    return 'That looks like a Batch API path. Batch services keep your inputs and outputs on their servers, so this app needs a synchronous endpoint.'
+  }
+
+  return null
+}
+
+function isLoopback(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '::1'
+}
+
+/** Trim a trailing slash so `${base}/models` never doubles up. */
+export function normalizeEndpoint(raw: string): string {
+  return raw.trim().replace(/\/+$/, '')
+}
+
+// --- config storage -------------------------------------------------------
+
+export async function loadConfig(): Promise<InferenceConfig | null> {
+  const [endpoint, model] = await Promise.all([
+    get<string>('prefs', PREF_URL),
+    get<string>('prefs', PREF_MODEL),
+  ])
+  if (!endpoint) return null
+  return { endpoint, model: model ?? '', apiKey: (await loadApiKey()) ?? undefined }
+}
+
+export async function saveConfig(endpoint: string, model: string): Promise<void> {
+  await Promise.all([
+    put('prefs', normalizeEndpoint(endpoint), PREF_URL),
+    put('prefs', model.trim(), PREF_MODEL),
+  ])
+}
+
+export async function forgetConfig(): Promise<void> {
+  await Promise.all([
+    del('prefs', PREF_URL),
+    del('prefs', PREF_MODEL),
+    del('prefs', PREF_CONSENT),
+    del('secrets', API_KEY_NAME),
+  ])
+}
+
+// --- the API key ----------------------------------------------------------
+
+/**
+ * Seal the API key under the session's vault key.
+ *
+ * Not the session's `wrapKey`, which would look like the obvious choice: that is
+ * the passphrase's `kdfOut` on a v1 vault and the master key on v2, and *both*
+ * change out from under you — `changePassphrase` derives a fresh `kdfOut` and
+ * `enrollPasskey` swaps the whole thing for MK, each resealing only the three
+ * canonical records. A secret sealed under `wrapKey` would be silently orphaned
+ * by either. The vault key survives both.
+ */
+export async function saveApiKey(apiKey: string): Promise<void> {
+  const key = apiKey.trim()
+  if (!key) {
+    await del('secrets', API_KEY_NAME)
+    return
+  }
+  if (!session.vaultKey) throw new Error('Unlock the vault before saving an API key.')
+  const sealed = session.vaultKey.seal(enc.encode(key), API_KEY_AAD)
+  await put('secrets', { sealed_hex: toHex(sealed) }, API_KEY_NAME)
+}
+
+/**
+ * The stored API key, or `null` if there is none — **or if it will not unseal**.
+ *
+ * Failing soft is deliberate. The vault key is stable across a passphrase change
+ * and passkey enrolment, but a device that adopts a relay-won vault key on first
+ * connect can end up holding a different one than sealed this record. That is
+ * recoverable by re-entering the key, and it is a far better outcome than a
+ * thrown error on a settings screen. The caller shows "re-enter your API key".
+ */
+export async function loadApiKey(): Promise<string | null> {
+  const record = await get<{ sealed_hex: string }>('secrets', API_KEY_NAME)
+  if (!record || !session.vaultKey) return null
+  try {
+    return dec.decode(session.vaultKey.open(fromHex(record.sealed_hex), API_KEY_AAD))
+  } catch {
+    return null
+  }
+}
+
+/** Whether a key is stored at all, regardless of whether it unseals. Lets the UI
+ * tell "no key set" apart from "a key is here but this device cannot read it". */
+export async function hasStoredApiKey(): Promise<boolean> {
+  return (await get<unknown>('secrets', API_KEY_NAME)) !== undefined
+}
+
+// --- consent --------------------------------------------------------------
+
+export async function hasConsented(): Promise<boolean> {
+  return (await get<string>('prefs', PREF_CONSENT)) !== undefined
+}
+
+export async function recordConsent(): Promise<void> {
+  await put('prefs', new Date().toISOString(), PREF_CONSENT)
+}
+
+// --- reachability ---------------------------------------------------------
+
+export class InferenceError extends Error {}
+
+/**
+ * Probe the endpoint with `GET {base}/models` — the OpenAI-compatible discovery
+ * call, cheap and side-effect free, so "Test connection" costs no inference.
+ *
+ * A CORS rejection reaches JS as an indistinguishable `TypeError`, so the failure
+ * message names it as a possibility rather than blaming the network: the endpoint
+ * has to send `Access-Control-Allow-Origin` for a browser to call it at all, and
+ * that is the single most likely reason a correct URL still fails here.
+ */
+export async function testConnection(endpoint: string, apiKey?: string): Promise<string[]> {
+  const base = normalizeEndpoint(endpoint)
+  const headers: Record<string, string> = {}
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`
+
+  let response: Response
+  try {
+    response = await fetch(`${base}/models`, { headers })
+  } catch {
+    throw new InferenceError(
+      'Could not reach that endpoint from the browser. It may be offline, or it may not allow requests from web apps (CORS).',
+    )
+  }
+
+  if (response.status === 401 || response.status === 403) {
+    throw new InferenceError('The endpoint rejected the API key.')
+  }
+  if (!response.ok) {
+    throw new InferenceError(`The endpoint answered ${response.status}.`)
+  }
+
+  return parseModelIds(await response.json().catch(() => null))
+}
+
+/** Model ids out of an OpenAI-compatible `/models` body, tolerant of shape. */
+export function parseModelIds(body: unknown): string[] {
+  if (!body || typeof body !== 'object') return []
+  const data = (body as { data?: unknown }).data
+  if (!Array.isArray(data)) return []
+  return data
+    .map((m) => (m && typeof m === 'object' ? (m as { id?: unknown }).id : null))
+    .filter((id): id is string => typeof id === 'string')
+}

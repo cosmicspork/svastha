@@ -21,6 +21,7 @@
   import SettingsSecurity from './routes/settings/Security.svelte'
   import SettingsSync from './routes/settings/Sync.svelte'
   import SettingsNotifications from './routes/settings/Notifications.svelte'
+  import SettingsAI from './routes/settings/AI.svelte'
   import SettingsData from './routes/settings/Data.svelte'
   import SettingsAbout from './routes/settings/About.svelte'
   import Share from './routes/Share.svelte'
@@ -148,6 +149,8 @@
       <SettingsSync />
     {:else if route.path === '/settings/notifications'}
       <SettingsNotifications />
+    {:else if route.path === '/settings/ai'}
+      <SettingsAI />
     {:else if route.path === '/settings/data'}
       <SettingsData />
     {:else if route.path === '/settings/about'}
