@@ -534,6 +534,25 @@ async function pushOne(blobId: string): Promise<void> {
 /** List the relay, pull anything new, and enqueue any local event missing
  * remotely (the reconcile step that makes two devices converge). */
 export async function pullAll(): Promise<void> {
+  // Single-flight. Every trigger funnels here — the SSE poke, `visibilitychange`,
+  // the 5-minute timer, Onboard's restore, and "Sync now" — and a cold vault's
+  // pull is one authenticated round trip per blob, hundreds of them. Unguarded,
+  // a phone that backgrounds and foregrounds a few times stacks whole concurrent
+  // pulls over the same ids: each re-fetches what the others are already
+  // fetching, `pulledCount` and the pending count flap as they interleave, and
+  // the device burns battery racing itself. Later callers join the in-flight
+  // pull instead of starting a rival one. `drain` has had this guard from the
+  // start; the pull side needs it more, being the long one.
+  if (pulling) return pulling
+  pulling = pullOnce().finally(() => {
+    pulling = null
+  })
+  return pulling
+}
+
+let pulling: Promise<void> | null = null
+
+async function pullOnce(): Promise<void> {
   if (!relayClient || !vaultKey) return
 
   let remoteIds: string[]

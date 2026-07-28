@@ -496,6 +496,29 @@ describe('relay reachability + friendly errors', () => {
     expect(s.lastPullAt).not.toBeNull()
   })
 
+  it('coalesces concurrent pulls into one in-flight run', async () => {
+    // Every trigger (SSE poke, visibilitychange, the 5-minute timer, "Sync now")
+    // calls `pullAll`, and a cold vault's pull is one round trip per blob. Without
+    // single-flight, a phone that backgrounds/foregrounds stacks full concurrent
+    // pulls that re-fetch the same ids and race each other's counters.
+    const relay = inMemoryBlobClient()
+    await relay.putBlob('ev-a', new Uint8Array([1]))
+    let listCalls = 0
+    const counting: BlobClient = {
+      ...relay,
+      async listBlobs() {
+        listCalls++
+        return relay.listBlobs()
+      },
+    }
+    configure(counting, passthroughSealKey())
+    await Promise.all([pullAll(), pullAll(), pullAll()])
+    expect(listCalls).toBe(1)
+    // …and the guard releases, so a later pull still runs.
+    await pullAll()
+    expect(listCalls).toBe(2)
+  })
+
   it('a reconcile-step failure surfaces instead of stalling the pull silently', async () => {
     // Same silent-stall shape the sharing guard above fixed, but in the push
     // reconcile between the blob loop and that guard: the local-event read and
