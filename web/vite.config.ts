@@ -43,7 +43,10 @@ export default defineConfig({
         // to learn what the *newly deployed* bundle contains, and a precached
         // copy would just echo back this same build's own notes.
         globPatterns: ['**/*.{js,css,html,wasm,woff2,png,svg,ico}'],
-        globIgnores: ['**/dict/**', '**/changelog.json'],
+        // `ocr/` is ~10 MiB of recognizer wasm and language data that only
+        // someone who switches on on-device reading ever needs; precaching it
+        // would put that on every install, phones included.
+        globIgnores: ['**/dict/**', '**/ocr/**', '**/changelog.json'],
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
       },
       manifest: {
