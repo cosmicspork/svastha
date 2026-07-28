@@ -112,14 +112,40 @@ export async function recognizeImage(bytes: Uint8Array, mime: string): Promise<O
   }
 
   const { createWorker } = await import('tesseract.js')
-  const worker = await createWorker('eng', undefined, {
-    // Every one of these is same-origin. The library's defaults are not.
-    workerPath: `${ASSET_BASE}/worker.min.js`,
-    corePath: ASSET_BASE,
-    langPath: ASSET_BASE,
-    // The language data is committed uncompressed, so do not look for a .gz.
-    gzip: false,
-  })
+
+  // tesseract.js spawns its underlying Worker synchronously inside
+  // createWorker, but only ever hands it back to us if init succeeds — a
+  // failed init (bad path, 404, corrupt core) rejects with a bare error
+  // string, and the Worker it already started stays alive with no way for a
+  // caller to reach it through the public API. Watching for the `new Worker`
+  // it makes internally, for just the duration of this call, is the only way
+  // to get a handle on that worker so a failed init can still be stopped.
+  const spawned: Worker[] = []
+  const RealWorker = globalThis.Worker
+  globalThis.Worker = new Proxy(RealWorker, {
+    construct(target, args) {
+      const instance = Reflect.construct(target, args) as Worker
+      spawned.push(instance)
+      return instance
+    },
+  }) as typeof Worker
+
+  let worker: Awaited<ReturnType<typeof createWorker>>
+  try {
+    worker = await createWorker('eng', undefined, {
+      // Every one of these is same-origin. The library's defaults are not.
+      workerPath: `${ASSET_BASE}/worker.min.js`,
+      corePath: ASSET_BASE,
+      langPath: ASSET_BASE,
+      // The language data is committed uncompressed, so do not look for a .gz.
+      gzip: false,
+    })
+  } catch (err) {
+    for (const w of spawned) w.terminate()
+    throw err
+  } finally {
+    globalThis.Worker = RealWorker
+  }
 
   try {
     const blob = new Blob([bytes as BlobPart], { type: mime })
