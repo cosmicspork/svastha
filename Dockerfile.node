@@ -1,23 +1,40 @@
 # Multi-stage build for the svastha node — a trusted processing client, not a
 # service: it holds keys and reaches the relay and a user-supplied inference
-# endpoint outbound only (see crates/node/README.md). It ships no models. TLS
-# is pure-Rust (ureq + rustls, bundled root store), so — like the relay —
-# there is no OpenSSL/ca-certificates dependency to carry.
+# endpoint outbound only (see crates/node/README.md). It ships no *language*
+# models — inference is always the user's own endpoint — but it does carry the
+# small page-reading models below. TLS is pure-Rust (ureq + rustls, bundled root
+# store), so — like the relay — there is no OpenSSL/ca-certificates dependency to
+# carry, and the page reader (ocrs/rten) is pure Rust for the same reason.
 
 FROM rust:1-slim-bookworm AS builder
 WORKDIR /build
 COPY . .
 RUN cargo build -p svastha-node --release
 
+# The page-reading models, baked in rather than fetched at boot: a node that
+# downloads its reader on first use is one that phones out before it has read
+# anything, and one that cannot start when that host is down. ~15 MiB total.
+FROM debian:bookworm-slim AS models
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /models \
+    && curl -fsSL -o /models/text-detection.rten \
+       https://ocrs-models.s3-accelerate.amazonaws.com/text-detection.rten \
+    && curl -fsSL -o /models/text-recognition.rten \
+       https://ocrs-models.s3-accelerate.amazonaws.com/text-recognition.rten
+
 FROM debian:bookworm-slim
 WORKDIR /app
 COPY --from=builder /build/target/release/svastha-node /usr/local/bin/svastha-node
+COPY --from=models /models /models
 # Path defaults only — SVASTHA_RELAY_URL is deliberately left unset. The
 # binary treats it as required and fails fast at boot (crates/node/src/config.rs);
 # masking that with an image default would turn a loud misconfiguration into a
 # silent one.
 ENV SVASTHA_NODE_DATA_DIR=/data \
-    SVASTHA_NODE_CACHE_DIR=/cache
+    SVASTHA_NODE_CACHE_DIR=/cache \
+    SVASTHA_NODE_OCR_MODELS_DIR=/models
 # Two mount points, opposite semantics:
 #   /data  — durable. Holds only the node's disposable identity keypair (the
 #            one thing that survives a restart); small, and losing it just

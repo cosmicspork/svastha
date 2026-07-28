@@ -69,39 +69,6 @@ cannot read — omit the finding instead.
 Omit a field rather than guessing. Do not invent codes. Return {\"findings\": []} \
 if nothing is legible.";
 
-/// System instruction for the legacy single-pass vision path.
-///
-/// Deleted when the node gains in-process transcription and every caller moves
-/// to the text path; until then the node still sends page images, and a
-/// text-coding instruction would be the wrong prompt for that request.
-pub const VISION_SYSTEM_PROMPT: &str = "\
-You transcribe medical documents into structured data. Extract ONLY facts that \
-are visibly written on the page — measurements, medications, immunizations, \
-problems, procedures, and their dates. Never infer, diagnose, predict, or add \
-anything not literally present. If the page is blank or unreadable, return an \
-empty findings list. Respond with a single JSON object and nothing else.";
-
-/// User instruction for the legacy single-pass vision path. Carries no
-/// `source_line`, so answers to it cannot be verified — which is precisely why
-/// it is being retired.
-pub const VISION_USER_PROMPT: &str = "\
-Read this medical document image and return JSON of the form:
-{\"findings\": [ {
-  \"kind\": one of observation|condition|medication_statement|immunization|encounter|procedure|allergy_intolerance|document|nutrition_intake,
-  \"system\": a code system URI when you are confident (http://loinc.org, \
-http://www.nlm.nih.gov/research/umls/rxnorm, http://snomed.info/sct, \
-http://hl7.org/fhir/sid/cvx, http://hl7.org/fhir/sid/icd-10-cm) or omit it,
-  \"code\": the code in that system, or omit,
-  \"display\": the human label as written,
-  \"value_quantity\": a measured number as a string (e.g. \"120\"), or omit,
-  \"unit\": the UCUM unit (e.g. \"mm[Hg]\", \"mg\"), or omit,
-  \"value_text\": free text when the fact is not a code or a number, or omit,
-  \"effective_at\": the date/time on the page as ISO-8601, or omit,
-  \"confidence\": your confidence from 0 to 1
-} ]}
-Omit a field rather than guessing. Do not invent codes. Return {\"findings\": []} \
-if nothing is legible.";
-
 /// One finding as the model emits it (all fields optional and tolerant — an
 /// unknown extra key is ignored, a missing key defaults). This is the *only*
 /// place untrusted model JSON is shaped; every field is validated before it
@@ -111,7 +78,7 @@ struct Finding {
     #[serde(default)]
     kind: String,
     /// The 1-based numbered line this fact was read from. Absent on the legacy
-    /// vision path, which has no transcript to point at.
+    /// single-pass path, which has no transcript to point at.
     #[serde(default)]
     source_line: Option<usize>,
     #[serde(default)]
@@ -148,9 +115,10 @@ pub struct Extraction {
 
 /// Parse a model answer into draft events, **without** source-line verification.
 ///
-/// For the legacy vision path, which has no transcript to check a claim against.
-/// Prefer [`parse_lines`] wherever the page was transcribed first: an
-/// unverifiable finding is exactly the failure mode the split exists to close.
+/// Retained for a caller that has no transcript to check a claim against —
+/// none ship in this repo. Prefer [`parse_lines`] everywhere: an unverifiable
+/// finding is exactly the failure mode the split exists to close, and this is
+/// what the comparison in the tests below measures.
 pub fn parse(answer: &str) -> Extraction {
     parse_inner(answer, None)
 }
@@ -486,7 +454,7 @@ mod tests {
         let transcript = lines(PANEL_LINES);
 
         // Without the transcript there is nothing to check against, and all five
-        // become proposals — this is what the vision path does today.
+        // become proposals — this is what an unverified pass would do.
         assert_eq!(parse(PANEL_CROSS_ROW).drafts.len(), 5);
 
         // With it, none survive.

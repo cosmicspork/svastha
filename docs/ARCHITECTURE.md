@@ -425,8 +425,10 @@ reviews and signs in the app; its administration is owner-signed `admin_cmd`
 messages over the same mailbox. One node serves several owners — each grant
 enrolls another vault, and tenants are structurally isolated.
 
-What it runs: OCR of captured pages into draft coded events (each proposal
-carrying source-blob, method, and model provenance), and cited Q&A over the
+What it runs: page reading into draft coded events (each proposal carrying
+source-blob, method, and model provenance) — transcribed **in-process**, so the
+page image never leaves the node and every finding must quote back the numbered
+line it was read from or be dropped, and cited Q&A over the
 owner's own record (every answer cites the event ids it drew from; an answer
 that cannot be grounded is an honest "couldn't answer").
 

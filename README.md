@@ -231,7 +231,7 @@ svelte-check + vitest, and the browser e2e suite.
 | `crates/core` | Trust contract: envelope, event schema, mailbox messages, keyrings. Native + WASM. |
 | `crates/import` | Client-side C-CDA/FHIR mapping into the event model. |
 | `crates/relay` | Zero-knowledge store-and-forward server. |
-| `crates/node` | Trusted processing client: OCR → proposals, cited Q&A. |
+| `crates/node` | Optional trusted processing client: reads pages in-process, proposes coded events, answers cited questions. |
 | `crates/wasm` | WASM bindings (`@svastha/core` on npm). |
 | `crates/svastha` | Umbrella crate re-exporting `core`. |
 | `web` | Svelte 5 PWA (bun + Vite), local-first. |

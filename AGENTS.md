@@ -10,8 +10,9 @@ event schema, relay protocol). It is the source of truth.
 - `crates/core`: Rust trust contract (envelope and event schema), compiles to
   native and WASM. Single source of truth. The relay never decrypts.
 - `crates/relay`: zero-knowledge store-and-forward server (Rust).
-- `crates/node`: trusted processing client (Rust); delegates inference to an
-  OpenAI-compatible endpoint. Later release.
+- `crates/node`: optional trusted processing client (Rust); reads pages
+  in-process and delegates coding/answering inference to an
+  OpenAI-compatible endpoint. The app can do both without it.
 - `web`: Svelte 5 PWA (bun + Vite), local-first, consumes `core` via WASM.
 
 ## Tooling

@@ -1,5 +1,5 @@
 //! The OCR → proposals pipeline (design §7). For each enrolled owner it walks the
-//! captured **image** pages the substrate indexed, runs each through vision
+//! captured **image** pages the substrate indexed, transcribes each in-process
 //! inference, turns the extracted findings into unsigned draft events, and
 //! deposits them as `proposal` envelopes into the owner's mailbox for review in
 //! the PWA. It never signs anything as the owner — it proposes; the owner signs.
@@ -32,6 +32,8 @@ use crate::inference::InferenceClient;
 use crate::journal::Journal;
 use crate::state::NodeState;
 use svastha_import::extract;
+
+use crate::transcribe::PageReader;
 
 /// The extraction method stamped into every draft's provenance (and, on approval,
 /// the event's `proposed.method`).
@@ -80,6 +82,7 @@ pub fn run(
     cache: &Cache,
     state: &Mutex<NodeState>,
     inference: &InferenceClient,
+    transcriber: &dyn PageReader,
     journal: &mut Journal,
 ) -> Result<OcrReport> {
     // First fold in any owner decisions that came back, so a resolved source is
@@ -93,7 +96,7 @@ pub fn run(
     let node = client.identity();
     for job in snapshot_jobs(state) {
         let recipient = PublicKey::from(job.owner_x25519);
-        for (sha, mime, capture) in &job.sources {
+        for (sha, _mime, capture) in &job.sources {
             let source_id = format!("att-{sha}");
             if !journal.eligible(&job.owner_hex, &source_id, now_secs) {
                 continue;
@@ -108,7 +111,35 @@ pub fn run(
                 }
             };
 
-            match inference.extract(&bytes, mime) {
+            // Stage A, in-process: the page becomes text here and the bytes go
+            // no further. A page that cannot be read is terminal for this pass —
+            // retrying a photograph the reader could not make sense of just
+            // burns the queue.
+            let lines = match transcriber.transcribe(&bytes) {
+                Ok(lines) if !lines.is_empty() => lines,
+                Ok(_) => {
+                    journal.mark_empty(&job.owner_hex, &source_id)?;
+                    report.empties += 1;
+                    tracing::info!(
+                        owner = short(&job.owner_hex),
+                        "no text could be read from this page; nothing proposed"
+                    );
+                    continue;
+                }
+                Err(e) => {
+                    journal.mark_failed(&job.owner_hex, &source_id, now_secs)?;
+                    report.failed += 1;
+                    tracing::warn!(
+                        owner = short(&job.owner_hex),
+                        error = %e,
+                        "could not read this page; backing off"
+                    );
+                    continue;
+                }
+            };
+
+            // Stage B: only the transcript crosses to the endpoint.
+            match inference.code_page(&crate::transcribe::numbered(&lines)) {
                 Err(e) => {
                     journal.mark_failed(&job.owner_hex, &source_id, now_secs)?;
                     report.failed += 1;
@@ -120,7 +151,11 @@ pub fn run(
                     );
                 }
                 Ok(answer) => {
-                    let extracted = extract::parse(&answer);
+                    // Verified against the transcript it was coded from: a
+                    // finding that cites no line, or one whose cited line does
+                    // not contain what it claims, is dropped rather than
+                    // proposed. This is what a single read-and-code pass could not do.
+                    let extracted = extract::parse_lines(&answer, &lines);
                     report.dropped_findings += extracted.dropped;
                     if extracted.drafts.is_empty() {
                         journal.mark_empty(&job.owner_hex, &source_id)?;
@@ -395,11 +430,11 @@ mod tests {
                 unit: None,
             }),
         };
-        let out = build_draft_proposals(vec![d], "att-abc", "vision-1", Some("2026-05-05"));
+        let out = build_draft_proposals(vec![d], "att-abc", "coder-1", Some("2026-05-05"));
         assert_eq!(out[0].event.effective_at.as_deref(), Some("2026-05-05"));
         assert_eq!(out[0].source_blob.as_deref(), Some("att-abc"));
         assert_eq!(out[0].method.as_deref(), Some("ocr"));
-        assert_eq!(out[0].model.as_deref(), Some("vision-1"));
+        assert_eq!(out[0].model.as_deref(), Some("coder-1"));
         // The draft is unsigned and carries no `proposed` — the owner stamps that.
         assert!(out[0].event.proposed.is_none());
     }

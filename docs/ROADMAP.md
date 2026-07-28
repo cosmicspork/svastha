@@ -47,10 +47,13 @@ harvest a PR's "## Deferred" notes into the list.
 
 ## AI on device
 
-Making the node optional. The PWA already holds the decrypted vault, so OCR and
-cited Q&A can run where the keys already are; classical OCR plus a text model
-replaces the single vision pass and retires the vision-model requirement.
+The node is now optional: the app holds the decrypted vault, so it reads pages
+and answers cited questions itself, and vision models are gone from both sides.
+What is left is measurement and polish.
 
+- Measure the node's in-process page reader against real pages before trusting
+  it unattended — it replaced a working vision path and has not been run against
+  a real backlog yet; the same zero-cross-row-mis-association gate applies
 - Move the node's own inference-endpoint field alongside the device one, so the
   two are configured in one place rather than two screens
 - Measure on-device OCR accuracy against the tabular fixtures before it can be
@@ -59,8 +62,6 @@ replaces the single vision pass and retires the vision-model requirement.
 - Runtime-cache the OCR assets in the service worker, so a device that has
   switched on on-device reading can still read a page offline (they are excluded
   from the install precache, so today it depends on the browser's HTTP cache)
-- Two-stage extraction in the node with in-process OCR — one extraction path,
-  and the vision model goes away
 
 Handwriting is out of scope on device: an honest "couldn't read this page"
 rather than a silent miss. Running a node stays the answer for it.
