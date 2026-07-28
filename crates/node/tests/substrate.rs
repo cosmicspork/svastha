@@ -178,7 +178,7 @@ fn enrolls_and_syncs_a_sealed_vault() {
     put_event(&owner_client, &ring, &owner, &a);
     put_event(&owner_client, &ring, &owner, &b);
     // Owner marks the first medication past (status: curation).
-    let concept = svastha_node::index::VaultIndex::concept_key(&a.event).unwrap();
+    let concept = svastha_node::index::VaultIndex::concept_key(&a.event);
     let status = owner.sign_curation(
         format!("status:{concept}"),
         serde_json::json!({"status":"inactive"}),
@@ -224,7 +224,7 @@ fn enrolls_and_syncs_a_sealed_vault() {
         svastha_node::index::ConceptStatus::Inactive,
         "the owner marked this medication past"
     );
-    let concept_b = svastha_node::index::VaultIndex::concept_key(&b.event).unwrap();
+    let concept_b = svastha_node::index::VaultIndex::concept_key(&b.event);
     assert_eq!(
         idx.concept_status(&concept_b),
         svastha_node::index::ConceptStatus::Active,
@@ -248,7 +248,7 @@ fn a_second_sync_skips_unchanged_curation_via_304() {
     let ring = Keyring::genesis(&owner.x25519_public(), &data_key);
     let ev = med(&owner, "197361", "2025-01-01T00:00:00Z");
     put_event(&owner_client, &ring, &owner, &ev);
-    let concept = svastha_node::index::VaultIndex::concept_key(&ev.event).unwrap();
+    let concept = svastha_node::index::VaultIndex::concept_key(&ev.event);
     let status = owner.sign_curation(
         format!("status:{concept}"),
         serde_json::json!({"status":"inactive"}),

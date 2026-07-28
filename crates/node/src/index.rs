@@ -29,7 +29,7 @@
 use std::collections::BTreeMap;
 
 use svastha_core::curation::{merge, SignedCurationRecord};
-use svastha_core::event::{Event, EventKind, EventValue, SignedEvent};
+use svastha_core::event::{Code, Event, EventKind, EventValue, SignedEvent};
 
 /// A captured document's metadata (bytes live in the cache dir). Keyed by the
 /// plaintext content hash the event's `attachment` value carries.
@@ -221,17 +221,39 @@ impl VaultIndex {
         self.docs.get(sha256)
     }
 
-    /// The concept key an event folds into — `{kind}|{system}|{code}` — or `None`
-    /// if the event carries no code (uncoded events do not fold into a clinical
-    /// concept).
-    pub fn concept_key(event: &Event) -> Option<String> {
-        let code = event.code.as_ref()?;
-        Some(format!(
-            "{}|{}|{}",
-            kind_wire(&event.kind),
-            code.system,
-            code.code
-        ))
+    /// The concept key an event folds into — `{kind}|{system}|{code}`.
+    ///
+    /// Mirrors `conceptKey` in `web/src/lib/summary.ts`: the two must agree or
+    /// the owner's `status:`/`name:` curation records key against one form and
+    /// are looked up under another. An event with no coding and no text keys as
+    /// `{kind}||`, exactly as the web does.
+    pub fn concept_key(event: &Event) -> String {
+        let coding = Self::coding_for(event);
+        let system = coding.map(|c| c.system.as_str()).unwrap_or_default();
+        let code = coding
+            .map(|c| c.code.as_str())
+            .or(match &event.value {
+                // Uncoded entries key on their text so two distinct free-text
+                // meds stay separate concepts instead of folding together.
+                Some(EventValue::Text(text)) => Some(text.as_str()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        format!("{}|{}|{}", kind_wire(&event.kind), system, code)
+    }
+
+    /// The coding that identifies an event's clinical concept: its own `code`,
+    /// or — for allergies, which import with `code: null` — the substance
+    /// carried in `value.coded`. The same convention `crates/import` and the
+    /// OCR extractor both write.
+    fn coding_for(event: &Event) -> Option<&Code> {
+        if let Some(code) = &event.code {
+            return Some(code);
+        }
+        match &event.value {
+            Some(EventValue::Coded(coded)) => Some(coded),
+            _ => None,
+        }
     }
 
     /// The current/past status of a concept, honouring the owner's `status:`
@@ -303,7 +325,7 @@ mod tests {
     }
 
     fn concept_of(signed: &SignedEvent) -> String {
-        VaultIndex::concept_key(&signed.event).unwrap()
+        VaultIndex::concept_key(&signed.event)
     }
 
     #[test]
@@ -457,19 +479,91 @@ mod tests {
         assert!(idx.attachment("missing").is_none());
     }
 
+    fn text_event(owner: &Identity, kind: EventKind, text: &str) -> SignedEvent {
+        owner.sign_event(Event::new(
+            kind,
+            None,
+            Some("2026-01-01T00:00:00Z".into()),
+            Some(EventValue::Text(text.into())),
+            Provenance {
+                source: "self".into(),
+                source_doc: None,
+            },
+        ))
+    }
+
+    /// An allergy imports with `code: null` and the substance in `value.coded`
+    /// (the convention `crates/import` and the OCR extractor both write). Keying
+    /// off `event.code` alone left every allergy concept-less, so the owner's
+    /// `status:`/`name:` records on it were silently ignored here while the web
+    /// honoured them.
     #[test]
-    fn uncoded_events_have_no_concept() {
+    fn allergy_concept_keys_on_the_substance_in_value_coded() {
         let owner = owner();
-        let uncoded = owner.sign_event(Event::new(
+        let allergy = owner.sign_event(Event::new(
+            EventKind::AllergyIntolerance,
+            None,
+            Some("2026-01-01T00:00:00Z".into()),
+            Some(EventValue::Coded(Code {
+                system: "http://snomed.info/sct".into(),
+                code: "764146007".into(),
+                display: Some("Penicillin".into()),
+            })),
+            Provenance {
+                source: "import".into(),
+                source_doc: None,
+            },
+        ));
+
+        let concept = VaultIndex::concept_key(&allergy.event);
+        assert_eq!(
+            concept,
+            "allergy_intolerance|http://snomed.info/sct|764146007"
+        );
+
+        // The point of the fix: a status: record on that concept now applies.
+        let mut idx = VaultIndex::new(owner.verifying_key().to_bytes());
+        assert!(idx.ingest_event(allergy));
+        let rec = owner.sign_curation(
+            format!("status:{concept}"),
+            json!({ "status": "inactive" }),
+            1_000,
+        );
+        assert_eq!(idx.ingest_curation(rec), CurationOutcome::Applied);
+        assert_eq!(idx.concept_status(&concept), ConceptStatus::Inactive);
+    }
+
+    /// Uncoded entries key on their text, so two quick-logged meds stay distinct
+    /// concepts instead of folding into a single `{kind}||` row.
+    #[test]
+    fn uncoded_events_key_on_their_text() {
+        let owner = owner();
+        let note = text_event(&owner, EventKind::Document, "a note");
+        assert_eq!(VaultIndex::concept_key(&note.event), "document||a note");
+
+        let one = text_event(&owner, EventKind::MedicationStatement, "ibuprofen 200mg");
+        let two = text_event(&owner, EventKind::MedicationStatement, "cetirizine 10mg");
+        assert_ne!(
+            VaultIndex::concept_key(&one.event),
+            VaultIndex::concept_key(&two.event)
+        );
+    }
+
+    /// Nothing to key on at all still yields a stable `{kind}||`, matching the
+    /// web rather than dropping the event out of concept space.
+    #[test]
+    fn valueless_uncoded_event_keys_on_kind_alone() {
+        let owner = owner();
+        let bare = owner.sign_event(Event::new(
             EventKind::Document,
             None,
             Some("2026-01-01T00:00:00Z".into()),
-            Some(EventValue::Text("a note".into())),
+            None,
             Provenance {
                 source: "self".into(),
                 source_doc: None,
             },
         ));
-        assert_eq!(VaultIndex::concept_key(&uncoded.event), None);
+        assert_eq!(VaultIndex::concept_key(&bare.event), "document||");
     }
 }

@@ -94,11 +94,8 @@ fn score_event(
 ) -> Option<ContextItem> {
     let event = &signed.event;
     let concept = VaultIndex::concept_key(event);
-    let status = concept
-        .as_ref()
-        .map(|c| index.concept_status(c))
-        .unwrap_or(ConceptStatus::Active);
-    let name = render_name(index, event, concept.as_deref());
+    let status = index.concept_status(&concept);
+    let name = render_name(index, event, &concept);
     let text = render_text(event, &name, status);
 
     let item_tokens = tokenize(&text);
@@ -130,8 +127,8 @@ fn score_event(
 /// event's own `code.display`, then `system code`, then — for an uncoded event —
 /// its text value or bare kind. Mirrors the render-time name chain the web uses,
 /// minus the offline dictionary (not present on the node).
-fn render_name(index: &VaultIndex, event: &Event, concept: Option<&str>) -> String {
-    if let Some(display) = concept.and_then(|c| index.concept_display(c)) {
+fn render_name(index: &VaultIndex, event: &Event, concept: &str) -> String {
+    if let Some(display) = index.concept_display(concept) {
         return display;
     }
     if let Some(code) = &event.code {
@@ -473,7 +470,7 @@ mod tests {
         let active = med(&o, "111", "metformin tablet", "2020-01-01");
         let stopped = med(&o, "222", "metformin syrup", "2021-01-01");
         let mut idx = idx(&o, &[active.clone(), stopped.clone()]);
-        let stopped_concept = VaultIndex::concept_key(&stopped.event).unwrap();
+        let stopped_concept = VaultIndex::concept_key(&stopped.event);
         idx.ingest_curation(o.sign_curation(
             format!("status:{stopped_concept}"),
             json!({ "status": "inactive" }),
@@ -509,7 +506,7 @@ mod tests {
             },
         ));
         let mut idx = idx(&o, std::slice::from_ref(&e));
-        let concept = VaultIndex::concept_key(&e.event).unwrap();
+        let concept = VaultIndex::concept_key(&e.event);
         idx.ingest_curation(o.sign_curation(
             format!("name:{concept}"),
             json!({ "display": "Lisinopril" }),
