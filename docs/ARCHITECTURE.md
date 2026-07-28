@@ -337,9 +337,11 @@ stays under its own license instead of being embedded in signed events.
   conflated *inside the boundary* with *on a server*: the browser holds the seed
   and the decrypted vault, so it was always inside the boundary — and reading
   locally is in fact the stronger posture, because the page image never leaves
-  the device, where a node uploads it to a vision endpoint. Handwriting is the
-  one thing the on-device reader will not do; it answers "couldn't read this"
-  rather than guessing, and a node with a vision model remains the answer for it.
+  the device, where the node used to upload it to a vision endpoint. Handwriting
+  is the one thing neither reader will do — the node transcribes in-process now
+  too, so no vision model is involved anywhere — and a handwritten page answers
+  "couldn't read this" rather than being guessed at. Entering it by hand is the
+  remaining route.
 - **India (later).** ABDM is consent-federated rather than self-custodial; it is
   a future boundary adapter, and its consent-artifact schema is prior art for
   the grant model.

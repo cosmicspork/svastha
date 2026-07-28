@@ -63,8 +63,10 @@ What is left is measurement and polish.
   switched on on-device reading can still read a page offline (they are excluded
   from the install precache, so today it depends on the browser's HTTP cache)
 
-Handwriting is out of scope on device: an honest "couldn't read this page"
-rather than a silent miss. Running a node stays the answer for it.
+Handwriting is out of scope for both readers — the node transcribes in-process
+too, so no vision model is left to fall back on. A handwritten page answers
+"couldn't read this page" rather than guessing; entering it by hand is the
+remaining route, and that is the deliberate choice, not a gap to close.
 
 ## Processing node
 

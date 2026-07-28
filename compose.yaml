@@ -34,13 +34,14 @@ services:
       # SVASTHA_NODE_INFERENCE_MODEL: "your-model"
       # SVASTHA_NODE_INFERENCE_API_KEY: "your-api-key"
       #
-      # OCR (reading pages) and chat (answering questions) run as separate
-      # roles. The vars above are the shared default for both; set a per-role
-      # model to use, say, a vision model for OCR and an instruction model for
-      # chat (a vision model answers questions poorly, and vice versa). Each
-      # role falls back to the shared value, so overriding just the models is
-      # enough — one endpoint, two models:
-      # SVASTHA_NODE_OCR_INFERENCE_MODEL: "your-vision-model"
+      # OCR (coding pages) and chat (answering questions) run as separate
+      # roles, and BOTH take a text model — the node transcribes a page itself
+      # before any inference, so no vision model is needed or used. The vars
+      # above are the shared default for both; set a per-role model when one
+      # endpoint serves an extraction-tuned model and an instruction model.
+      # Each role falls back to the shared value, so overriding just the models
+      # is enough — one endpoint, two models:
+      # SVASTHA_NODE_OCR_INFERENCE_MODEL: "your-extraction-model"
       # SVASTHA_NODE_CHAT_INFERENCE_MODEL: "your-chat-model"
       # A role can also take its own endpoint/API key to split across providers:
       # SVASTHA_NODE_CHAT_INFERENCE_ENDPOINT / _API_KEY (and the OCR_ variants).

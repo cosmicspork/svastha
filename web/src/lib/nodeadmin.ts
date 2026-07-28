@@ -23,6 +23,10 @@ const LAST_SEEN_KEY = 'node-last-seen'
  * upgrade. `log_tail`'s `lines` is optional (the node defaults it). */
 export type AdminCommand =
   | { cmd: 'set_inference_endpoint'; endpoint: string }
+  // A node reads nothing until it is resumed (crates/node/src/ocr_control.rs).
+  // No UI sends these yet — see docs/ROADMAP.md's "AI on device" group.
+  | { cmd: 'pause_ocr' }
+  | { cmd: 'resume_ocr' }
   | { cmd: 'job_status' }
   | { cmd: 'log_tail'; lines?: number }
 
@@ -55,6 +59,10 @@ export function describeCommand(command: AdminCommand): string {
       return 'Requested job status'
     case 'log_tail':
       return command.lines ? `Requested log tail (${command.lines} lines)` : 'Requested log tail'
+    case 'pause_ocr':
+      return 'Paused page reading'
+    case 'resume_ocr':
+      return 'Resumed page reading'
   }
 }
 
