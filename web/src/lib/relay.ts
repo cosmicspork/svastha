@@ -6,6 +6,7 @@
 import type { WasmIdentity } from './svastha'
 import { contract_version } from './svastha'
 import { toHex } from './hex'
+import { pageFromResponse, type BlobBodyPage } from './blob-batch'
 
 /** Strip a trailing slash so `${url}/v0/...` never double-slashes. */
 export function normalizeRelayUrl(url: string): string {
@@ -103,6 +104,25 @@ export class RelayClient {
     return body.ids
   }
 
+  /** Batched-fetch page of this identity's blobs (`?include=body`; see
+   * `spec/README.md`'s "Batched fetch"): a listing and every blob's ciphertext
+   * in one response, avoiding a signed (preflight-triggering) round trip per
+   * id. `cursor` is the opaque `svastha-next` token from a prior page (`null`
+   * for the first page); `limit` is a count ceiling, not the real page bound —
+   * the relay's own byte budget can end a page sooner. Older relays that don't
+   * recognize `include` answer the pre-batching JSON shape instead, which
+   * {@link pageFromResponse} reports as `{kind: 'unsupported'}` for the caller
+   * to fall back to the per-id path. */
+  async listBlobsWithBodies(cursor: string | null, limit = 1000): Promise<BlobBodyPage> {
+    // Built once and reused verbatim: the Ed25519 signature covers this exact
+    // query string, so it must never be re-encoded or reordered between
+    // signing (inside `fetch`, below) and sending.
+    const path = `/v0/blobs?include=body&limit=${limit}${cursor !== null ? `&cursor=${cursor}` : ''}`
+    const res = await this.fetch('GET', path)
+    if (!res.ok) throw new Error(`listBlobsWithBodies: ${res.status}`)
+    return pageFromResponse(res)
+  }
+
   /**
    * Fetch a blob with an `If-None-Match` conditional GET. `ifNoneMatch` is the
    * etag remembered from the last successful fetch (`null` on a first-ever
@@ -185,6 +205,24 @@ export class RelayClient {
     if (!res.ok) throw new Error(`listSharedBlobs ${ownerHex}: ${res.status}`)
     const body = (await res.json()) as { ids: string[] }
     return body.ids
+  }
+
+  /** Batched-fetch page of `ownerHex`'s shared blobs, or `null` if there is no
+   * live grant (see {@link listSharedBlobs}'s note on the shared `404`).
+   * Otherwise behaves exactly like {@link listBlobsWithBodies}: frames only
+   * ever cover ids the grant admits (the relay applies the grant filter before
+   * framing), and an older relay's plain JSON answer surfaces as
+   * `{kind: 'unsupported'}`. */
+  async listSharedBlobsWithBodies(
+    ownerHex: string,
+    cursor: string | null,
+    limit = 1000,
+  ): Promise<BlobBodyPage | null> {
+    const path = `/v0/shared/${ownerHex}/blobs?include=body&limit=${limit}${cursor !== null ? `&cursor=${cursor}` : ''}`
+    const res = await this.fetch('GET', path)
+    if (res.status === 404) return null
+    if (!res.ok) throw new Error(`listSharedBlobsWithBodies ${ownerHex}: ${res.status}`)
+    return pageFromResponse(res)
   }
 
   /** Fetch one of `ownerHex`'s blobs, or `null` if there is no live grant or
