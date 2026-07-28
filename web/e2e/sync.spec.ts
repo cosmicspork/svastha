@@ -50,6 +50,44 @@ test('events pushed to the relay restore on a fresh device from mnemonic + relay
   await restored.close()
 })
 
+test('a cold restore above the batch threshold pulls pages, not per-id GETs', async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(120_000)
+  const words = await onboardViaUI(page)
+  await connectRelayViaUI(page)
+
+  // 23 events (21 food + one BP pair): enough distinct ev- blobs to clear
+  // BATCH_PULL_THRESHOLD (20) so the restore takes the framed include=body
+  // walk instead of the per-id loop the test below this one still exercises.
+  for (let i = 0; i < 21; i++) {
+    await logFood(page, `meal-${i}`)
+  }
+  await logBP(page, '117', '75')
+  await waitForPushed(page)
+
+  const restored = await browser.newContext()
+  const pageB = await restored.newPage()
+  // The proof is on the wire: a batched restore never fetches an ev- blob by
+  // id. Counting requests (rather than asserting on timing or totals) keeps
+  // the test stable however the page walk splits.
+  let perIdEvGets = 0
+  pageB.on('request', (req) => {
+    if (req.method() === 'GET' && req.url().includes('/v0/blobs/ev-')) perIdEvGets++
+  })
+  await restoreViaUI(pageB, words, undefined, RELAY)
+
+  await pageB.evaluate(() => {
+    window.location.hash = '#/timeline'
+  })
+  await expect(entryWith(pageB, 'meal-0')).toBeVisible({ timeout: 15_000 })
+  await expect(entryWith(pageB, 'meal-20')).toBeVisible()
+  await expect(entryWith(pageB, '117/75')).toBeVisible()
+  expect(perIdEvGets).toBe(0)
+  await restored.close()
+})
+
 test('two connected devices converge: log on A, Sync now on B', async ({ page, browser }) => {
   const words = await onboardViaUI(page)
   await connectRelayViaUI(page)
