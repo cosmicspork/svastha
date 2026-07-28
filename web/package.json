@@ -9,7 +9,7 @@
     "build": "bun run wasm && bun run scripts/build-changelog/build.ts && vite build",
     "preview": "vite preview",
     "check": "bun run wasm && svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json && tsc -p tsconfig.scripts.json && tsc -p tsconfig.sw.json && vitest run",
-    "test": "vitest run",
+    "test": "bun run wasm && vitest run",
     "e2e": "playwright test",
     "icons": "bun run scripts/build-icons/build.ts"
   },
