@@ -44,6 +44,28 @@ before sharing it.
   e.g. `cd fixtures && rm -f xdm/minimal-xdm.zip && mkdir -p /tmp/xdm/IHE_XDM/EXAMPLE1 && cp ccda/minimal-ccd.xml /tmp/xdm/IHE_XDM/EXAMPLE1/DOC0001.XML`
   (add the two stubs) `&& (cd /tmp/xdm && zip -X -r -D "$OLDPWD/xdm/minimal-xdm.zip" IHE_XDM)`.
 
+## `ocr/` — transcribed pages and recorded model answers
+
+Goldens for `crates/import/src/extract.rs`'s text path, so the source-line guard
+is tested deterministically with no model and no recognition engine in the loop.
+
+- `cmp-panel.lines.json` — a transcribed two-column metabolic panel, one string
+  per numbered line. This is what stage A produces; the numbers are what a
+  finding cites.
+- `cmp-panel.answer.json` — a correctly cited answer over it. Every finding
+  survives.
+- `cmp-panel.cross-row.answer.json` — **the adversarial case.** Every finding is
+  individually schema-valid and would pass `parse` untouched, and each pairs a
+  real analyte with a real value from a different row. It is what a model
+  produces when a table has been flattened row-major. `parse_lines` must drop
+  all of them; the test asserts the count, not just a sample.
+
+The synthetic-only rule at the top of this file applies with no exceptions here.
+A photographed or scanned page of a real lab report, prescription, or discharge
+summary must never land in this directory — the transcript form is if anything
+easier to leak by accident, because it looks like plain text rather than a
+document. Hand-write the lines, as these fixtures are.
+
 ## Golden tests
 
 `crates/import/tests/ccda.rs` and `crates/import/tests/fhir.rs` import these

@@ -28,10 +28,10 @@ use x25519_dalek::PublicKey;
 
 use crate::cache::Cache;
 use crate::client::RelayClient;
-use crate::extract;
 use crate::inference::InferenceClient;
 use crate::journal::Journal;
 use crate::state::NodeState;
+use svastha_import::extract;
 
 /// The extraction method stamped into every draft's provenance (and, on approval,
 /// the event's `proposed.method`).

@@ -1,0 +1,57 @@
+{
+  "_comment": "The adversarial case the source-line guard exists for. Every finding here is individually well-formed and would pass the schema validation untouched; each pairs a real analyte with a real value that sits on a DIFFERENT row of the panel. Read row-major without layout, this is exactly what a model produces — and 'Potassium 139 mmol/L' in a medical record is a clinical emergency that never happened.",
+  "findings": [
+    {
+      "kind": "observation",
+      "source_line": 5,
+      "system": "loinc",
+      "code": "2823-3",
+      "display": "Potassium",
+      "value_quantity": "139",
+      "unit": "mmol/L",
+      "effective_at": "2026-01-14",
+      "confidence": 0.91
+    },
+    {
+      "kind": "observation",
+      "source_line": 4,
+      "system": "loinc",
+      "code": "2951-2",
+      "display": "Sodium",
+      "value_quantity": "4.1",
+      "unit": "mmol/L",
+      "effective_at": "2026-01-14",
+      "confidence": 0.9
+    },
+    {
+      "kind": "observation",
+      "source_line": 7,
+      "system": "loinc",
+      "code": "2160-0",
+      "display": "Creatinine",
+      "value_quantity": "0.9",
+      "unit": "mg/dL",
+      "effective_at": "2026-01-14",
+      "confidence": 0.88
+    },
+    {
+      "kind": "observation",
+      "source_line": 99,
+      "system": "loinc",
+      "code": "2345-7",
+      "display": "Glucose",
+      "value_quantity": "105",
+      "unit": "mg/dL",
+      "confidence": 0.8
+    },
+    {
+      "kind": "observation",
+      "system": "loinc",
+      "code": "2075-0",
+      "display": "Chloride",
+      "value_quantity": "104",
+      "unit": "mmol/L",
+      "confidence": 0.8
+    }
+  ]
+}

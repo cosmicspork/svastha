@@ -31,7 +31,6 @@ pub mod cache;
 pub mod chat;
 pub mod client;
 pub mod config;
-pub mod extract;
 pub mod identity;
 pub mod index;
 pub mod inference;

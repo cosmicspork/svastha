@@ -16,7 +16,7 @@
 //!   the model id and byte/finding counts.
 //!
 //! This client is transport only: it returns the model's raw assistant-message
-//! text. Turning that text into draft events lives in [`crate::extract`], so the
+//! text. Turning that text into draft events lives in `svastha_import::extract`, so the
 //! two concerns test independently.
 
 use std::path::{Path, PathBuf};
@@ -145,9 +145,9 @@ impl InferenceClient {
             // Deterministic extraction: no creative variance when reading a record.
             "temperature": 0,
             "messages": [
-                { "role": "system", "content": crate::extract::SYSTEM_PROMPT },
+                { "role": "system", "content": svastha_import::extract::VISION_SYSTEM_PROMPT },
                 { "role": "user", "content": [
-                    { "type": "text", "text": crate::extract::USER_PROMPT },
+                    { "type": "text", "text": svastha_import::extract::VISION_USER_PROMPT },
                     { "type": "image_url", "image_url": { "url": data_url } }
                 ] }
             ]
