@@ -333,6 +333,12 @@ pub enum AdminCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         lines: Option<u32>,
     },
+    /// Stop reading pages. Sync, answering, and enrolment continue; only the
+    /// page-reading pass stands down. Persisted, so it survives a restart.
+    PauseOcr,
+    /// Start reading pages. A node reads nothing until this is sent — see
+    /// `crates/node/README.md`, "Paused until you say otherwise".
+    ResumeOcr,
 }
 
 /// [`MessageKind::AdminCmd`] body.

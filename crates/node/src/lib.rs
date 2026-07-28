@@ -37,6 +37,7 @@ pub mod inference;
 pub mod journal;
 pub mod logtail;
 pub mod ocr;
+pub mod ocr_control;
 pub mod poke;
 pub mod retrieval;
 pub mod state;
@@ -104,6 +105,14 @@ pub fn run(config: Config, logs: LogBuffer) -> Result<()> {
         &config.data_dir,
     );
     let mut journal = Journal::load(&config.data_dir);
+    // Reading is off until the owner asks for it (see ocr_control.rs): enrolling
+    // a node against an existing vault must not silently work through a backlog.
+    let mut ocr_control = ocr_control::OcrControl::load(&config.data_dir);
+    tracing::info!(
+        paused = ocr_control.paused(),
+        max_pages_per_pass = ocr_control.max_pages_per_pass(),
+        "page reading gate"
+    );
     tracing::info!(
         ocr = inference.ocr_client().is_some(),
         chat = inference.chat_client().is_some(),
@@ -142,6 +151,7 @@ pub fn run(config: Config, logs: LogBuffer) -> Result<()> {
         transcriber
             .as_ref()
             .map(|t| t as &dyn transcribe::PageReader),
+        &mut ocr_control,
         &logs,
         &mut journal,
         Poke::Sync,
@@ -165,6 +175,7 @@ pub fn run(config: Config, logs: LogBuffer) -> Result<()> {
             transcriber
                 .as_ref()
                 .map(|t| t as &dyn transcribe::PageReader),
+            &mut ocr_control,
             &logs,
             &mut journal,
             poke,
@@ -181,6 +192,7 @@ fn reconcile(
     state: &Mutex<NodeState>,
     inference: &mut InferenceRuntime,
     transcriber: Option<&dyn transcribe::PageReader>,
+    control: &mut ocr_control::OcrControl,
     logs: &LogBuffer,
     journal: &mut Journal,
     poke: Poke,
@@ -229,7 +241,7 @@ fn reconcile(
     // inference on a node booted without it — hence it comes before chat/OCR, so a
     // just-set endpoint serves this same pass.
     if drain_mailbox {
-        match admin::run(client, state, inference, logs, journal) {
+        match admin::run(client, state, inference, control, logs, journal) {
             Ok(r) if r.replied + r.dropped + r.deferred > 0 => tracing::info!(
                 replied = r.replied,
                 dropped = r.dropped,
@@ -269,11 +281,20 @@ fn reconcile(
     // Both halves are required: an endpoint to code the text, and a reader to
     // produce it.
     if let (Some(client_inf), Some(transcriber)) = (inference.ocr_client(), transcriber) {
-        match ocr::run(client, cache, state, client_inf, transcriber, journal) {
+        match ocr::run(
+            client,
+            cache,
+            state,
+            client_inf,
+            transcriber,
+            control,
+            journal,
+        ) {
             Ok(r)
                 if r.proposals + r.empties + r.failed + r.resolved > 0
                     || r.not_ready > 0
-                    || r.dropped_findings > 0 =>
+                    || r.dropped_findings > 0
+                    || r.deferred_to_next_pass > 0 =>
             {
                 tracing::info!(
                     proposals = r.proposals,
@@ -282,6 +303,7 @@ fn reconcile(
                     resolved = r.resolved,
                     not_ready = r.not_ready,
                     dropped_findings = r.dropped_findings,
+                    deferred = r.deferred_to_next_pass,
                     "ocr pass"
                 );
             }

@@ -45,9 +45,11 @@ infrastructure holds nothing readable.
 - **Multi-device.** Restore any device from your seed phrase; devices converge
   through the relay. A devices & grants screen shows both directions of the
   sharing graph, with revoke-and-rotate as one action.
-- **Ask your record.** An optional self-hosted processing node adds OCR and
-  cited Q&A over your own record — see [AI on your terms](#ai-on-your-terms-the-processing-node)
-  below for what it does and exactly what it's trusted with.
+- **Ask your record.** Reading captured pages and answering cited questions run
+  in the app itself, against an inference endpoint you choose; an optional
+  self-hosted processing node does the same unattended for a backlog or a
+  household — see [AI on your terms](#ai-on-your-terms-the-processing-node)
+  below for what each is trusted with.
 - **Know when something's waiting.** Real-time sync pokes over SSE, plus Web
   Push to a locked phone — notifications are deliberately generic, because
   medical content never belongs on a lock screen.

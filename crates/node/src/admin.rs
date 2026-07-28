@@ -33,6 +33,7 @@ use crate::client::RelayClient;
 use crate::inference::InferenceRuntime;
 use crate::journal::Journal;
 use crate::logtail::{LogBuffer, CAPACITY};
+use crate::ocr_control::OcrControl;
 use crate::state::NodeState;
 
 /// Default number of log lines a `log_tail` returns when the command names none.
@@ -63,6 +64,7 @@ pub fn run(
     client: &RelayClient,
     state: &Mutex<NodeState>,
     inference: &mut InferenceRuntime,
+    control: &mut OcrControl,
     logs: &LogBuffer,
     journal: &mut Journal,
 ) -> Result<AdminReport> {
@@ -113,7 +115,7 @@ pub fn run(
             continue;
         };
 
-        let (ok, detail) = execute(&body.command, state, inference, logs, &owner_hex);
+        let (ok, detail) = execute(&body.command, state, inference, control, logs, &owner_hex);
         let reply = AdminReplyBody {
             in_reply_to: msg_id.clone(),
             ok,
@@ -141,11 +143,15 @@ fn execute(
     command: &AdminCommand,
     state: &Mutex<NodeState>,
     inference: &mut InferenceRuntime,
+    control: &mut OcrControl,
     logs: &LogBuffer,
     owner_hex: &str,
 ) -> (bool, String) {
     match command {
-        AdminCommand::JobStatus => (true, job_status_detail(state, inference, owner_hex)),
+        AdminCommand::JobStatus => (
+            true,
+            job_status_detail(state, inference, control, owner_hex),
+        ),
         AdminCommand::LogTail { lines } => {
             let want = lines
                 .map(|n| n as usize)
@@ -153,6 +159,16 @@ fn execute(
                 .min(CAPACITY);
             (true, log_tail_detail(logs, want))
         }
+        // Reading is the one node behaviour an owner can start and stop, because
+        // it is the one that writes into their approval queue.
+        AdminCommand::PauseOcr => match control.set_paused(true) {
+            Ok(detail) => (true, detail),
+            Err(msg) => (false, msg),
+        },
+        AdminCommand::ResumeOcr => match control.set_paused(false) {
+            Ok(detail) => (true, detail),
+            Err(msg) => (false, msg),
+        },
         AdminCommand::SetInferenceEndpoint { endpoint } => match inference.set_endpoint(endpoint) {
             // Still subject to the boot-time config validation (synchronous,
             // non-batch); a rejected value answers ok:false with the message.
@@ -168,6 +184,7 @@ fn execute(
 fn job_status_detail(
     state: &Mutex<NodeState>,
     inference: &InferenceRuntime,
+    control: &OcrControl,
     owner_hex: &str,
 ) -> String {
     let guard = state.lock().expect("node state mutex");
@@ -193,9 +210,17 @@ fn job_status_detail(
     let chat = inference.chat_client().map(|c| c.model()).unwrap_or("none");
     format!(
         "vault: events={events} attachments={attachments} docs={docs} curation={curation} | \
-         ocr: queued={} processed={} failed={} | inference: ocr-model={ocr} chat-model={chat} | \
-         last_reconcile={last}",
-        jobs.queued, jobs.processed, jobs.failed
+         ocr: {reading} queued={} processed={} failed={} max-per-pass={} | \
+         inference: ocr-model={ocr} chat-model={chat} | last_reconcile={last}",
+        jobs.queued,
+        jobs.processed,
+        jobs.failed,
+        control.max_pages_per_pass(),
+        reading = if control.paused() {
+            "paused"
+        } else {
+            "reading"
+        }
     )
 }
 

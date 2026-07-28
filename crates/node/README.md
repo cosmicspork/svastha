@@ -48,6 +48,21 @@ outbound only.
 
 ## OCR → proposals
 
+**Paused until you say otherwise.** A freshly enrolled node reads **nothing**.
+Enrolment points the node at a vault that may already hold hundreds of captured
+pages, and reading them all would deposit a proposal for each — an approval queue
+nobody reviews, which defeats the point of proposing rather than writing. So
+enrolment is quiet: the node syncs, answers questions, and serves its household,
+and reading starts when you send `resume_ocr` and stops on `pause_ocr`. The
+choice persists, so a restart never silently resumes a node you paused. Once
+resumed, a pass reads at most `SVASTHA_NODE_OCR_MAX_PAGES_PER_PASS` pages before
+standing down until the next reconcile, so a backlog arrives in batches you can
+actually review — and you can pause again after the first one if the results are
+not what you expected.
+
+`job_status` reports which state the node is in and the current cap.
+
+
 Enabled when an inference endpoint is configured (see the config table). On each
 reconcile the node OCRs newly-synced captured pages and deposits the results as
 `proposal` envelopes into the owner's mailbox, for review in the PWA's proposal
@@ -165,6 +180,8 @@ image tags.
 | `SVASTHA_NODE_INFERENCE_MODEL` | when an endpoint resolves | Shared model id sent in every request, unless a role overrides it below. |
 | `SVASTHA_NODE_INFERENCE_API_KEY` | no | Shared inference API key; sent as a bearer token, never logged. |
 | `SVASTHA_NODE_OCR_INFERENCE_ENDPOINT` / `_MODEL` / `_API_KEY` | no | Per-role override for **OCR** (coding a page the node transcribed — a **text** model; no vision model is needed or used). Each falls back to the shared `SVASTHA_NODE_INFERENCE_*` value, so overriding just `_MODEL` is the common case. A role runs only when an endpoint resolves for it (its own or the shared base). |
+| `SVASTHA_NODE_OCR_PAUSED` | no | Whether page reading starts paused (default **`true`**). A node reads nothing until an owner sends `resume_ocr`; set `false` to opt a deployment in from boot. A persisted `pause_ocr`/`resume_ocr` wins over this — the env only decides where a *fresh* node starts. |
+| `SVASTHA_NODE_OCR_MAX_PAGES_PER_PASS` | no | Pages read per reconcile before standing down until the next one (default `20`). A backlog arrives as reviewable batches rather than a flood. |
 | `SVASTHA_NODE_OCR_MODELS_DIR` | no | Where the page-reading models live (default `/models`, baked into the image). Absent models are not fatal — the node still syncs, answers questions, and serves its household; it just cannot read pages, and says so at boot. |
 | `SVASTHA_NODE_CHAT_INFERENCE_ENDPOINT` / `_MODEL` / `_API_KEY` | no | Per-role override for **chat** (cited Q&A — an instruction model). Same shared fallback. Splitting the models lets one endpoint serve an extraction-tuned model for OCR and an instruction model for answers; the endpoint/API key can split across providers too. |
 | `SVASTHA_NODE_BOOTSTRAP_ADDR` | no | Bootstrap-page bind address, **loopback only** (default `127.0.0.1:7071`). |

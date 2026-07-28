@@ -301,6 +301,7 @@ fn ocr_happy_path_deposits_a_parseable_proposal() {
         &fx.state,
         &inf,
         &StubReader::page(),
+        &resumed(&fx.journal_dir),
         &mut journal,
     )
     .unwrap();
@@ -347,6 +348,7 @@ fn malformed_inference_output_proposes_nothing() {
         &fx.state,
         &inf,
         &StubReader::page(),
+        &resumed(&fx.journal_dir),
         &mut journal,
     )
     .unwrap();
@@ -361,6 +363,7 @@ fn malformed_inference_output_proposes_nothing() {
         &fx.state,
         &inf,
         &StubReader::page(),
+        &resumed(&fx.journal_dir),
         &mut journal,
     )
     .unwrap();
@@ -381,6 +384,7 @@ fn idempotent_across_a_simulated_restart() {
             &fx.state,
             &inf,
             &StubReader::page(),
+            &resumed(&fx.journal_dir),
             &mut journal,
         )
         .unwrap();
@@ -396,6 +400,7 @@ fn idempotent_across_a_simulated_restart() {
         &fx.state,
         &inf,
         &StubReader::page(),
+        &resumed(&fx.journal_dir),
         &mut journal,
     )
     .unwrap();
@@ -421,6 +426,7 @@ fn resolved_source_is_never_reproposed() {
         &fx.state,
         &inf,
         &StubReader::page(),
+        &resumed(&fx.journal_dir),
         &mut journal,
     )
     .unwrap();
@@ -455,6 +461,7 @@ fn resolved_source_is_never_reproposed() {
         &fx.state,
         &inf,
         &StubReader::page(),
+        &resumed(&fx.journal_dir),
         &mut journal,
     )
     .unwrap();
@@ -479,6 +486,7 @@ fn inference_error_backs_the_page_off() {
         &fx.state,
         &inf,
         &StubReader::page(),
+        &resumed(&fx.journal_dir),
         &mut journal,
     )
     .unwrap();
@@ -507,6 +515,7 @@ fn a_failing_page_backs_off_without_wedging_the_queue() {
         &fx.state,
         &inf,
         &StubReader::page(),
+        &resumed(&fx.journal_dir),
         &mut journal,
     )
     .unwrap();
@@ -526,6 +535,7 @@ fn a_failing_page_backs_off_without_wedging_the_queue() {
         &fx.state,
         &inf,
         &StubReader::page(),
+        &resumed(&fx.journal_dir),
         &mut journal,
     )
     .unwrap();
@@ -562,4 +572,123 @@ impl svastha_node::transcribe::PageReader for StubReader {
     fn transcribe(&self, _bytes: &[u8]) -> anyhow::Result<Vec<String>> {
         Ok(self.lines.clone())
     }
+}
+
+/// A resumed control for the tests that are about the pass itself. The gate's
+/// own behaviour — paused by default, and the per-pass cap — is covered
+/// separately in `ocr_control`'s unit tests and `reads_at_most_the_cap_per_pass`.
+fn resumed(dir: &tempfile::TempDir) -> svastha_node::ocr_control::OcrControl {
+    let mut control = svastha_node::ocr_control::OcrControl::load(dir.path());
+    control.set_paused(false).unwrap();
+    control
+}
+
+/// The whole point of the gate: enrolling a node against a vault that already
+/// holds pages must not start reading them. A thousand-entry approval queue is
+/// not a queue anyone reviews, and the design rests on the owner reviewing.
+#[test]
+fn a_fresh_node_reads_nothing_until_it_is_resumed() {
+    let (base, calls) = spawn_inference(Mode::Ok(one_bp_finding()));
+    let inf = inference_client(&base);
+    let fx = setup(
+        b"ocr owner paused",
+        &[b"page one", b"page two", b"page three"],
+    );
+    let mut journal = Journal::load(fx.journal_dir.path());
+
+    // Loaded, not resumed — the default.
+    let control = svastha_node::ocr_control::OcrControl::load(fx.journal_dir.path());
+    let report = svastha_node::ocr::run(
+        &fx.node_client,
+        &fx.cache,
+        &fx.state,
+        &inf,
+        &StubReader::page(),
+        &control,
+        &mut journal,
+    )
+    .unwrap();
+
+    assert!(report.paused);
+    assert_eq!(report.proposals, 0);
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "no inference call at all");
+    assert!(
+        read_proposals(&fx.owner_client, &fx.owner).is_empty(),
+        "nothing may reach the owner's mailbox"
+    );
+
+    // Resuming reads them, and the pages are still eligible — pausing defers
+    // work rather than discarding it.
+    let mut resumed = svastha_node::ocr_control::OcrControl::load(fx.journal_dir.path());
+    resumed.set_paused(false).unwrap();
+    let report = svastha_node::ocr::run(
+        &fx.node_client,
+        &fx.cache,
+        &fx.state,
+        &inf,
+        &StubReader::page(),
+        &resumed,
+        &mut journal,
+    )
+    .unwrap();
+    assert!(!report.paused);
+    assert_eq!(report.proposals, 3);
+}
+
+/// A backlog arrives as reviewable batches, not a flood — and the next pass
+/// picks up exactly where this one stopped.
+#[test]
+fn reads_at_most_the_cap_per_pass() {
+    let (base, _calls) = spawn_inference(Mode::Ok(one_bp_finding()));
+    let inf = inference_client(&base);
+    let fx = setup(
+        b"ocr owner capped",
+        &[b"page one", b"page two", b"page three", b"page four"],
+    );
+    let mut journal = Journal::load(fx.journal_dir.path());
+
+    // SAFETY: single-threaded test; set before the control is loaded.
+    unsafe { std::env::set_var("SVASTHA_NODE_OCR_MAX_PAGES_PER_PASS", "2") };
+    let mut control = svastha_node::ocr_control::OcrControl::load(fx.journal_dir.path());
+    unsafe { std::env::remove_var("SVASTHA_NODE_OCR_MAX_PAGES_PER_PASS") };
+    control.set_paused(false).unwrap();
+    assert_eq!(control.max_pages_per_pass(), 2);
+
+    let first = svastha_node::ocr::run(
+        &fx.node_client,
+        &fx.cache,
+        &fx.state,
+        &inf,
+        &StubReader::page(),
+        &control,
+        &mut journal,
+    )
+    .unwrap();
+    assert_eq!(first.proposals, 2, "capped at two");
+    assert!(first.deferred_to_next_pass > 0, "and says there is more");
+
+    let second = svastha_node::ocr::run(
+        &fx.node_client,
+        &fx.cache,
+        &fx.state,
+        &inf,
+        &StubReader::page(),
+        &control,
+        &mut journal,
+    )
+    .unwrap();
+    assert_eq!(second.proposals, 2, "the rest, next pass");
+
+    let third = svastha_node::ocr::run(
+        &fx.node_client,
+        &fx.cache,
+        &fx.state,
+        &inf,
+        &StubReader::page(),
+        &control,
+        &mut journal,
+    )
+    .unwrap();
+    assert_eq!(third.proposals, 0, "and then it is done");
+    assert_eq!(third.deferred_to_next_pass, 0);
 }

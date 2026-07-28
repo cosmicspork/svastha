@@ -1,13 +1,17 @@
 //! The OCR → proposals pipeline (design §7). For each enrolled owner it walks the
-//! captured **image** pages the substrate indexed, transcribes each in-process
-//! inference, turns the extracted findings into unsigned draft events, and
+//! captured **image** pages the substrate indexed, transcribes each in-process,
+//! sends only that text for coding, turns the extracted findings into unsigned
+//! draft events, and
 //! deposits them as `proposal` envelopes into the owner's mailbox for review in
 //! the PWA. It never signs anything as the owner — it proposes; the owner signs.
 //!
-//! **Serial by design.** Pages are processed one at a time, per owner. Inference
-//! endpoints are rate-limited, and a medical record is not a throughput problem —
-//! keeping it serial keeps it simple and polite, and a failure backs off (below)
-//! rather than fanning out retries.
+//! **Serial, capped, and off by default.** Pages are processed one at a time,
+//! per owner. Inference endpoints are rate-limited, and a medical record is not a
+//! throughput problem — keeping it serial keeps it simple and polite, and a
+//! failure backs off (below) rather than fanning out retries. On top of that,
+//! [`crate::ocr_control`] gates the whole pass: a node reads nothing until it is
+//! resumed, and once resumed reads at most a capped number of pages per pass, so
+//! a backlog arrives as reviewable batches instead of a flood.
 //!
 //! **Idempotence** lives in the [`crate::journal`] (the durable, content-free
 //! record of what has been proposed/resolved/failed) — see that module for the
@@ -33,6 +37,7 @@ use crate::journal::Journal;
 use crate::state::NodeState;
 use svastha_import::extract;
 
+use crate::ocr_control::OcrControl;
 use crate::transcribe::PageReader;
 
 /// The extraction method stamped into every draft's provenance (and, on approval,
@@ -63,6 +68,13 @@ pub struct OcrReport {
     pub not_ready: usize,
     /// Findings dropped as unmappable across all sources this pass.
     pub dropped_findings: usize,
+    /// The pass stood down without reading: the node is paused. Resolutions are
+    /// still folded in, so `resolved` may be non-zero.
+    pub paused: bool,
+    /// Set when the per-pass cap stopped the pass with work still eligible — the
+    /// next reconcile continues. Not a count of what is left, just the fact that
+    /// something is.
+    pub deferred_to_next_pass: usize,
 }
 
 /// A per-owner snapshot taken under the state lock, so inference and network I/O
@@ -83,6 +95,7 @@ pub fn run(
     state: &Mutex<NodeState>,
     inference: &InferenceClient,
     transcriber: &dyn PageReader,
+    control: &OcrControl,
     journal: &mut Journal,
 ) -> Result<OcrReport> {
     // First fold in any owner decisions that came back, so a resolved source is
@@ -92,14 +105,30 @@ pub fn run(
         ..Default::default()
     };
 
+    // Resolutions are always folded in — an owner's decision is theirs and has
+    // nothing to do with whether we are reading. Only the reading stops.
+    if control.paused() {
+        report.paused = true;
+        return Ok(report);
+    }
+
     let now_secs = now_secs();
     let node = client.identity();
-    for job in snapshot_jobs(state) {
+    let mut read_this_pass = 0usize;
+    'outer: for job in snapshot_jobs(state) {
         let recipient = PublicKey::from(job.owner_x25519);
         for (sha, _mime, capture) in &job.sources {
             let source_id = format!("att-{sha}");
             if !journal.eligible(&job.owner_hex, &source_id, now_secs) {
                 continue;
+            }
+            // Stand down for this pass once the cap is reached; the next
+            // reconcile picks up where this left off. Counted against pages
+            // actually read, not pages skipped, so a large already-processed
+            // vault still makes progress on its few new pages.
+            if read_this_pass >= control.max_pages_per_pass() {
+                report.deferred_to_next_pass += 1;
+                break 'outer;
             }
             let bytes = match cache.read_attachment(&job.owner_hex, sha)? {
                 Some(b) => b,
@@ -137,6 +166,8 @@ pub fn run(
                     continue;
                 }
             };
+
+            read_this_pass += 1;
 
             // Stage B: only the transcript crosses to the endpoint.
             match inference.code_page(&crate::transcribe::numbered(&lines)) {

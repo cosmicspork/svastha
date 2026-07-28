@@ -288,7 +288,10 @@ An event carries an **optional** `proposed` object attesting it began as a
 proposal — a draft an owner reviewed and signed (see the typed mailbox envelope
 below and `docs/ARCHITECTURE.md`, "Node"):
 
-- `by` — the proposer's Ed25519 identity (hex), e.g. the processing node.
+- `by` — the proposer's Ed25519 identity (hex), e.g. the processing node. It
+  **may be the owner's own identity**: a page read by the owner's own app is
+  proposed and approved by the same key. Like the rest of `proposed`, this is
+  data the owner vouches for by signing, not a key verified here.
 - `source_blob` — the `att-`/`doc-` blob the extraction drew from (optional).
 - `method` — the extraction method, e.g. `"ocr"` (optional).
 - `model` — the inference model id (optional).
@@ -514,9 +517,11 @@ envelope — it is opaque sealed bytes to the crypto above.
 - `proposal_result` — `{ proposal_id, accepted: [id…], rejected: [id…] }`: the
   owner's decision echoed to the proposer (event content ids).
 - `admin_cmd` — `{ command }`, a tagged owner→node command
-  (`set_inference_endpoint`, `job_status`, `log_tail`). The node accepts commands
-  only from an identity holding a live grant *it itself* issued; node-global
-  administration stays with the host operator.
+  (`set_inference_endpoint`, `job_status`, `log_tail`, `pause_ocr`, `resume_ocr`).
+  The node accepts commands only from an identity holding a live grant *it itself*
+  issued; node-global administration stays with the host operator. The set is
+  additive: a reader that does not know a command answers `ok: false` rather than
+  acting on a guess.
 - `admin_reply` — `{ in_reply_to, ok, detail? }`.
 - `chat_msg` — `{ role, text, citations: [event_id…] }`: a retrieval-augmented Q&A
   turn; an answer carries the event ids it cited.

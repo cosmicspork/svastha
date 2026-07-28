@@ -622,7 +622,15 @@ fn admin_job_status_round_trips() {
     let mut rt = runtime(h.dir.path(), "https://inference.internal/v1");
     let logs = LogBuffer::new();
     let mut journal = h.journal();
-    let report = admin::run(&h.node_client, &h.state, &mut rt, &logs, &mut journal).unwrap();
+    let report = admin::run(
+        &h.node_client,
+        &h.state,
+        &mut rt,
+        &mut control(&h),
+        &logs,
+        &mut journal,
+    )
+    .unwrap();
     assert_eq!(report.replied, 1);
 
     let replies = read_admin_replies(&owner.client, &owner.id);
@@ -658,7 +666,15 @@ fn admin_log_tail_round_trips_with_content_free_lines() {
     );
     let mut rt = runtime(h.dir.path(), "https://inference.internal/v1");
     let mut journal = h.journal();
-    admin::run(&h.node_client, &h.state, &mut rt, &logs, &mut journal).unwrap();
+    admin::run(
+        &h.node_client,
+        &h.state,
+        &mut rt,
+        &mut control(&h),
+        &logs,
+        &mut journal,
+    )
+    .unwrap();
 
     let replies = read_admin_replies(&owner.client, &owner.id);
     assert_eq!(replies.len(), 1);
@@ -689,7 +705,15 @@ fn admin_set_inference_endpoint_accepts_valid_and_rejects_batch() {
         },
     );
     let mut journal = h.journal();
-    admin::run(&h.node_client, &h.state, &mut rt, &logs, &mut journal).unwrap();
+    admin::run(
+        &h.node_client,
+        &h.state,
+        &mut rt,
+        &mut control(&h),
+        &logs,
+        &mut journal,
+    )
+    .unwrap();
     assert_eq!(
         rt.chat_endpoint(),
         Some("https://new-inference.internal/v1")
@@ -711,7 +735,15 @@ fn admin_set_inference_endpoint_accepts_valid_and_rejects_batch() {
             endpoint: "https://api.internal/v1/batch".into(),
         },
     );
-    admin::run(&h.node_client, &h.state, &mut rt, &logs, &mut journal).unwrap();
+    admin::run(
+        &h.node_client,
+        &h.state,
+        &mut rt,
+        &mut control(&h),
+        &logs,
+        &mut journal,
+    )
+    .unwrap();
     let bad_reply = read_admin_replies(&owner.client, &owner.id).pop().unwrap();
     assert!(!bad_reply.ok, "batch endpoint rejected");
     assert!(bad_reply.detail.as_deref().unwrap().contains("Batch"));
@@ -743,11 +775,25 @@ fn admin_command_from_a_non_enrolled_identity_is_dropped() {
     let logs = LogBuffer::new();
     let mut rt = runtime(h.dir.path(), "https://boot.internal/v1");
     let mut journal = h.journal();
-    let report = admin::run(&h.node_client, &h.state, &mut rt, &logs, &mut journal).unwrap();
+    let report = admin::run(
+        &h.node_client,
+        &h.state,
+        &mut rt,
+        &mut control(&h),
+        &logs,
+        &mut journal,
+    )
+    .unwrap();
     assert_eq!(
         report.dropped, 1,
         "design §2: commands only from enrolled owners"
     );
     assert_eq!(report.replied, 0);
     assert!(read_admin_replies(&stranger_client, &stranger).is_empty());
+}
+
+/// The admin tests drive commands, not the reading gate; each gets a control
+/// rooted in the harness's own data dir.
+fn control(h: &Harness) -> svastha_node::ocr_control::OcrControl {
+    svastha_node::ocr_control::OcrControl::load(h.dir.path())
 }
