@@ -2455,6 +2455,7 @@ dependencies = [
  "svastha-core",
  "svastha-import",
  "svastha-relay",
+ "svastha-retrieval",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -2483,6 +2484,15 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "web-push",
+]
+
+[[package]]
+name = "svastha-retrieval"
+version = "0.13.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "svastha-core",
 ]
 
 [[package]]

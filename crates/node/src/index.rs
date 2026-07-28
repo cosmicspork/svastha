@@ -47,14 +47,10 @@ pub struct DocMeta {
     pub size: usize,
 }
 
-/// A concept's current/past status. Defaults to [`Active`](ConceptStatus::Active)
-/// when no `status:` override exists (a medication with no override is current, a
-/// problem is active).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ConceptStatus {
-    Active,
-    Inactive,
-}
+/// A concept's current/past status. Defined by [`svastha_retrieval`] because the
+/// ranker consumes it; re-exported here so callers reach it through the index
+/// that resolves it.
+pub use svastha_retrieval::ConceptStatus;
 
 /// The outcome of ingesting one curation record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
