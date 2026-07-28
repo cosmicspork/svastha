@@ -727,6 +727,105 @@ async fn bogus_cursor_on_absent_or_expired_grant_answers_exactly_like_no_grant()
 }
 
 #[tokio::test]
+async fn shared_include_body_respects_grant_scope() {
+    // The batched form is evaluated after the scope filter, so a scoped
+    // grantee's frames can only ever carry what its per-id fetches could.
+    let (app, alice, bob) = alice_with_three_blobs().await;
+    let owner = hex_pk(&alice);
+    let base = now();
+
+    let grant = app
+        .clone()
+        .oneshot(signed(
+            &alice,
+            "PUT",
+            &format!("/v0/grants/{}", hex_pk(&bob)),
+            br#"{"prefixes":["ev-"]}"#,
+            base,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(grant.status(), StatusCode::NO_CONTENT);
+
+    let resp = app
+        .oneshot(signed(
+            &bob,
+            "GET",
+            &format!("/v0/shared/{owner}/blobs?include=body"),
+            b"",
+            base + 1,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get("content-type").unwrap(),
+        "application/octet-stream"
+    );
+    assert!(
+        resp.headers().get("svastha-next").is_none(),
+        "one admitted id fits one page"
+    );
+    assert_eq!(
+        common::parse_frames(&body_bytes(resp).await),
+        vec![("ev-1".to_string(), b"sealed".to_vec())],
+        "the out-of-scope att- and cur- blobs never reach the frames"
+    );
+}
+
+#[tokio::test]
+async fn include_body_on_absent_or_expired_grant_is_plain_404() {
+    let (app, alice, bob) = alice_with_three_blobs().await;
+    let owner = hex_pk(&alice);
+    let base = now();
+
+    // No grant: asking for bodies is the same bare 404 as asking for ids, so
+    // the new parameter cannot tell "not shared with you" from "nothing here".
+    let no_grant = app
+        .clone()
+        .oneshot(signed(
+            &bob,
+            "GET",
+            &format!("/v0/shared/{owner}/blobs?include=body&limit=5"),
+            b"",
+            base,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(no_grant.status(), StatusCode::NOT_FOUND);
+
+    let expired_body = format!(r#"{{"expires_at":{}}}"#, base - 1);
+    let grant = app
+        .clone()
+        .oneshot(signed(
+            &alice,
+            "PUT",
+            &format!("/v0/grants/{}", hex_pk(&bob)),
+            expired_body.as_bytes(),
+            base,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(grant.status(), StatusCode::NO_CONTENT);
+
+    let expired = app
+        .oneshot(signed(
+            &bob,
+            "GET",
+            &format!("/v0/shared/{owner}/blobs?include=body&cursor=not-a-real-id-zzz"),
+            b"",
+            base + 1,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(expired.status(), StatusCode::NOT_FOUND);
+    assert!(
+        body_bytes(expired).await.is_empty(),
+        "a 404 carries no frames"
+    );
+}
+
+#[tokio::test]
 async fn shared_cur_blob_carries_an_etag_and_answers_304() {
     let (app, alice, bob) = alice_with_three_blobs().await;
     let owner = hex_pk(&alice);

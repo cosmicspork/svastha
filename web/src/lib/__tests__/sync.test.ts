@@ -19,6 +19,7 @@ import {
   type Codec,
 } from '../sync'
 import type { ConditionalBlob } from '../relay'
+import { BATCH_PULL_THRESHOLD, type BatchBlob, type BlobBodyPage } from '../blob-batch'
 import { pullShared } from '../shared'
 
 // Mock the sharing pull so a test can force it to reject; `teardownSharing`
@@ -672,6 +673,195 @@ describe('sealLocalBlob', () => {
     // Passthrough seal returns the plaintext — the codec's name+base64 envelope.
     const envelope = JSON.parse(new TextDecoder().decode(sealed!)) as { name: string }
     expect(envelope.name).toBe('D.xml')
+  })
+})
+
+// --- batched pull (?include=body) ---
+
+describe('batched pull', () => {
+  // Two fake codecs for this file, registered once (as the mutable codec above
+  // is): an immutable one standing in for ev-/doc-/att-, and a mutable one
+  // standing in for cur-. Both are backed by plain Maps, so these tests
+  // exercise sync.ts's own batch plumbing without wasm.
+  const store = new Map<string, string>()
+  const mutStore = new Map<string, string>()
+  registerCodec({
+    prefix: 'bat-',
+    async localHas(id) {
+      return store.has(id)
+    },
+    async localLoad(id) {
+      const v = store.get(id)
+      return v === undefined ? null : utf8(v)
+    },
+    async remoteApply(id, plaintext) {
+      store.set(id, new TextDecoder().decode(plaintext))
+    },
+  })
+  registerCodec({
+    prefix: 'batmut-',
+    mutable: true,
+    async localHas(id) {
+      return mutStore.has(id)
+    },
+    async localLoad(id) {
+      const v = mutStore.get(id)
+      return v === undefined ? null : utf8(v)
+    },
+    async remoteApply(id, plaintext) {
+      mutStore.set(id, new TextDecoder().decode(plaintext))
+    },
+  })
+
+  beforeEach(() => {
+    store.clear()
+    mutStore.clear()
+  })
+
+  /** A page fake built straight from decoded frames. The wire framing and its
+   * parser have their own coverage (blob-batch.test.ts), so nothing here needs
+   * a real `Response`. */
+  function fakePage(ids: string[], next: string | null = null): BlobBodyPage {
+    async function* frames(): AsyncGenerator<BatchBlob> {
+      for (const id of ids) yield { id, blob: utf8(`remote-${id}`) }
+    }
+    return { kind: 'page', next, blobs: frames() }
+  }
+
+  const batchIds = Array.from({ length: BATCH_PULL_THRESHOLD }, (_, i) => `bat-${i}`)
+
+  /** A relay that answers the batched listing, recording every per-id fetch so
+   * a test can prove the walk replaced them. */
+  function batchRelay(
+    ids: string[],
+    pages: (cursor: string | null) => Promise<BlobBodyPage>,
+  ): BlobClient & {
+    listBlobsWithBodies(cursor: string | null): Promise<BlobBodyPage>
+    perIdGets: string[]
+    cursors: (string | null)[]
+  } {
+    const perIdGets: string[] = []
+    const cursors: (string | null)[] = []
+    return {
+      perIdGets,
+      cursors,
+      async putBlob() {},
+      async getBlob(id) {
+        perIdGets.push(id)
+        return utf8(`per-id-${id}`)
+      },
+      async listBlobs() {
+        return ids
+      },
+      async listBlobsWithBodies(cursor) {
+        cursors.push(cursor)
+        return pages(cursor)
+      },
+    }
+  }
+
+  it('walks pages instead of fetching each id once enough are missing', async () => {
+    const relay = batchRelay(batchIds, async (cursor) =>
+      cursor === null ? fakePage(batchIds.slice(0, 5), batchIds[4]) : fakePage(batchIds.slice(5)),
+    )
+    configure(relay, passthroughSealKey())
+
+    await pullAll()
+
+    expect(relay.cursors).toEqual([null, batchIds[4]])
+    expect(relay.perIdGets).toEqual([])
+    expect(store.size).toBe(batchIds.length)
+    expect(store.get('bat-0')).toBe('remote-bat-0')
+    expect(await dbGet('sync', 'bat-0')).toMatchObject({ state: 'done' })
+    expect(await dbGet('sync', batchIds.at(-1)!)).toMatchObject({ state: 'done' })
+    expect(storeGet(syncStatus).pulledCount).toBe(batchIds.length)
+  })
+
+  it('marks a batched duplicate done without ticking pulledCount', async () => {
+    store.set('bat-0', 'already-local') // localHas -> 'duplicate', never opened
+    const relay = batchRelay(batchIds, async () => fakePage(batchIds))
+    configure(relay, passthroughSealKey())
+
+    await pullAll()
+
+    expect(store.get('bat-0')).toBe('already-local')
+    expect(await dbGet('sync', 'bat-0')).toMatchObject({ state: 'done' })
+    expect(storeGet(syncStatus).pulledCount).toBe(batchIds.length - 1)
+  })
+
+  it('stays on the per-id path below the threshold', async () => {
+    const few = batchIds.slice(0, BATCH_PULL_THRESHOLD - 1)
+    const relay = batchRelay(few, async () => {
+      throw new Error('the batch path should not be used below the threshold')
+    })
+    configure(relay, passthroughSealKey())
+
+    await pullAll()
+
+    expect(relay.cursors).toEqual([])
+    expect(relay.perIdGets).toEqual(few)
+    expect(store.get('bat-0')).toBe('per-id-bat-0')
+  })
+
+  it('falls back to per-id fetches against a relay that does not support batching', async () => {
+    const relay = batchRelay(batchIds, async () => ({ kind: 'unsupported' }))
+    configure(relay, passthroughSealKey())
+
+    await pullAll()
+
+    expect(relay.cursors).toEqual([null]) // asked once, then gave up on the walk
+    expect(relay.perIdGets).toEqual(batchIds)
+    expect(store.size).toBe(batchIds.length)
+    expect(store.get('bat-0')).toBe('per-id-bat-0')
+  })
+
+  it('isolates a frame that fails to open, leaving it un-done for the next pull', async () => {
+    const decoder = new TextDecoder()
+    const failingKey: SealKey = {
+      seal: (plaintext) => plaintext,
+      open: (sealed, aad) => {
+        if (decoder.decode(aad) === 'bat-3') throw new Error('bad envelope')
+        return sealed
+      },
+    }
+    const relay = batchRelay(batchIds, async () => fakePage(batchIds))
+    configure(relay, failingKey)
+
+    await pullAll()
+
+    // The bad frame didn't end the page: every later id still applied…
+    expect(store.has('bat-3')).toBe(false)
+    expect(store.size).toBe(batchIds.length - 1)
+    expect(store.get(batchIds.at(-1)!)).toBe(`remote-${batchIds.at(-1)}`)
+    // …and it is neither marked done (so the next pull retries it) nor
+    // re-fetched per-id in this cycle.
+    expect(await dbGet('sync', 'bat-3')).toBeUndefined()
+    expect(relay.perIdGets).toEqual([])
+    expect(storeGet(syncStatus).lastError).toContain('bad envelope')
+  })
+
+  it('applies a batched mutable id and marks it done without an etag or a follow-up conditional get', async () => {
+    mutStore.set('batmut-a', 'stale-local')
+    const ids = [...batchIds, 'batmut-a']
+    const conditionalGets: string[] = []
+    const relay = {
+      ...batchRelay(ids, async () => fakePage(ids)),
+      async getBlobConditional(id: string): Promise<ConditionalBlob> {
+        conditionalGets.push(id)
+        return { status: 'missing' }
+      },
+    }
+    configure(relay, passthroughSealKey())
+
+    await pullAll()
+
+    expect(mutStore.get('batmut-a')).toBe('remote-batmut-a') // 'merged'
+    // A mutable id is never filtered by `doneIds`, so only the handled-set
+    // subtraction keeps the per-id loop from re-fetching it right afterwards.
+    expect(conditionalGets).toEqual([])
+    const record = await dbGet<{ state: string; etag?: string }>('sync', 'batmut-a')
+    expect(record).toMatchObject({ state: 'done' })
+    expect(record?.etag).toBeUndefined()
   })
 })
 

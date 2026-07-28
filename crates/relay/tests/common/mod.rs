@@ -71,3 +71,34 @@ pub async fn body_bytes(response: axum::response::Response) -> Vec<u8> {
         .unwrap()
         .to_vec()
 }
+
+/// Parse a framed `?include=body` listing page — `id_len u16 BE | id |
+/// blob_len u32 BE | blob`, repeated — into `(id, blob)` pairs. Deliberately
+/// strict about the tail: the frames must tile the body exactly, since a
+/// trailing partial frame is precisely the corruption a client walking this
+/// stream could otherwise mistake for the end of a page.
+pub fn parse_frames(body: &[u8]) -> Vec<(String, Vec<u8>)> {
+    let mut frames = Vec::new();
+    let mut at = 0usize;
+    while at < body.len() {
+        assert!(at + 2 <= body.len(), "truncated id length");
+        let id_len = u16::from_be_bytes([body[at], body[at + 1]]) as usize;
+        at += 2;
+        assert!(at + id_len <= body.len(), "truncated id");
+        let id = String::from_utf8(body[at..at + id_len].to_vec()).unwrap();
+        at += id_len;
+        assert!(at + 4 <= body.len(), "truncated blob length");
+        let blob_len =
+            u32::from_be_bytes([body[at], body[at + 1], body[at + 2], body[at + 3]]) as usize;
+        at += 4;
+        assert!(at + blob_len <= body.len(), "truncated blob");
+        frames.push((id, body[at..at + blob_len].to_vec()));
+        at += blob_len;
+    }
+    assert_eq!(
+        at,
+        body.len(),
+        "frames tile the body with no trailing bytes"
+    );
+    frames
+}

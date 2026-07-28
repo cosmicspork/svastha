@@ -628,7 +628,7 @@ require the auth handshake above.
 | `GET /v0/info` | — | — | `200 {"contract_version":N}` | version negotiation |
 | `PUT /v0/blobs/{id}` | yes | ciphertext | `204` | store (or replace) a blob |
 | `GET /v0/blobs/{id}` | yes | — | `200` octets / `304` / `404` | fetch the caller's blob; a `cur-` id honors `If-None-Match` (see "Curation etags" below) |
-| `GET /v0/blobs` | yes | — | `200 {"ids":[...]}` | list the caller's blob ids; optional `limit`/`cursor` pagination (see below) |
+| `GET /v0/blobs` | yes | — | `200 {"ids":[...]}` | list the caller's blob ids; optional `limit`/`cursor` pagination and optional `include=body` batched fetch (both below) |
 | `DELETE /v0/blobs/{id}` | yes | — | `204` / `404` | delete the caller's blob |
 
 `{id}` is a client-chosen token, `[A-Za-z0-9._-]`, 1–128 chars, and never `.` or
@@ -711,6 +711,93 @@ This is additive relay behavior — no stored byte format changes — so it does
 not move `CONTRACT_VERSION`, the same posture as the A1 push channel and A2's
 scoped grants.
 
+#### Batched fetch (`include=body`, optional)
+
+Both listing endpoints accept one more **optional** query parameter, which asks
+for the blobs' *bodies* inline rather than a list of ids to fetch one by one:
+
+```
+GET /v0/blobs?include=body&limit=200&cursor=ev-3f9a...
+```
+
+Only the value `body` is meaningful. An absent — or unrecognized — `include` is
+exactly the JSON listing described above, byte for byte (clamp-don't-reject,
+matching `limit`), so a client that never sends it, or sends something a future
+relay understands and this one does not, always gets a usable answer. A client
+detects support by the response's `Content-Type`: `application/octet-stream` is
+a framed page, `application/json` is a relay that ignored the parameter, and
+the id-at-a-time path still works everywhere.
+
+**Framing.** The response body is a concatenation of frames, no header and no
+trailer:
+
+```
+id_len   u16 big-endian   length of the id in bytes
+id       id_len bytes     the blob id, UTF-8
+blob_len u32 big-endian   length of the blob in bytes
+blob     blob_len bytes   the sealed bytes
+```
+
+The ids are the same ids the JSON listing would return, in the same order, and
+each `blob` is byte-for-byte what `GET /v0/blobs/{id}` would serve — the same
+opaque ciphertext, unwrapped in no way. An id listed but deleted between the
+listing and the read is simply absent from the frames, so a client must not
+assume every id it expected yields a frame.
+
+**Always paginated.** There is no unpaginated framed form: an absent `limit`
+takes the same `200` default a cursor-only request takes, and the walk is the
+same lexicographic order over the same last-seen-id cursor. Only the carriage
+of that cursor changes — a bare sequence of frames has no room for a JSON
+sibling field, so the token the JSON listing returns as `next` travels in a
+response header instead:
+
+```
+svastha-next: ev-3f9a...
+```
+
+One mechanism, two carriages: the tokens are the same opaque strings and are
+interchangeable across request styles (a walk may switch between framed and
+JSON pages mid-flight), and the header's *absence* means what a missing `next`
+means — the walk is complete. Byte-compatibility constrains only the JSON
+listing's shape, which is why forcing pagination here is free.
+
+**`limit` bounds count, the byte budget bounds bytes.** A framed page is also
+capped at **8 MiB** of accumulated body, and ends at whichever bound binds
+first. So a page may be far shorter than `limit` asked for, and a client must
+walk by the cursor rather than by counting ids. A single blob larger than the
+whole budget is returned alone rather than skipped, so a large attachment can
+never stall the walk.
+
+**No conditionals on this path.** A framed page carries no `ETag`, honors no
+`If-None-Match`, and has no per-frame validators — there is nowhere in the
+framing to put them, and the batched fetch exists for the cold case (a device
+that holds none of these blobs) where a validator would have nothing to
+compare. `cur-` revalidation stays on the single-blob `GET` (see "Curation
+etags" below), which is the warm-path request this does not replace.
+
+**Composes with grant scoping and the two-404 rule.** On
+`GET /v0/shared/{owner}/blobs`, `include=body` is evaluated *after* the
+live-grant check and *after* the prefix filter, so frames only ever carry ids
+the grant admits, and a missing or expired grant answers the ordinary bare
+`404` whether or not `include=body` was sent — the parameter cannot be used to
+tell the "no grant" and "nothing there" cases apart.
+
+**Zero-knowledge posture unchanged.** The relay reads no blob it was not
+already serving and learns nothing it did not already route on: it lists every
+id and serves every body today, one request at a time. Batching changes only
+how many HTTP transactions that costs — a cold restore of a vault drops from
+roughly two round trips per blob (a signed request is preflighted) to a handful
+of pages.
+
+Like pagination, this is additive relay behavior — no stored byte format
+changes, no new required client behavior — so it does not move
+`CONTRACT_VERSION`. The compatibility argument runs both ways: an older client
+never sends `include`, so it receives byte-identical responses from a new
+relay; a newer client sending `include=body` to an older relay gets the JSON
+listing, detects that by `Content-Type`, and degrades to the per-id path it
+already implements. Neither side needs to know the other's version, which is
+exactly what a version bump would otherwise be for.
+
 #### Curation etags
 
 `cur-` is the one blob namespace that is **mutable** (`docs/ARCHITECTURE.md`,
@@ -778,7 +865,7 @@ blob endpoints above; there is no separate auth scheme for sharing.
 | `DELETE /v0/grants/{grantee}` | yes | — | `204` / `404` | revoke |
 | `GET /v0/grants` | yes | — | `200 {"grantees":[hex...]}` | who the caller has granted |
 | `GET /v0/shared` | yes | — | `200 {"owners":[hex...]}` | who has granted the caller |
-| `GET /v0/shared/{owner}/blobs` | yes | — | `200 {"ids":[...]}` / `404` | list `{owner}`'s blob ids the grant admits, gated on a live grant; supports the same optional `limit`/`cursor` pagination as `GET /v0/blobs` |
+| `GET /v0/shared/{owner}/blobs` | yes | — | `200 {"ids":[...]}` / `404` | list `{owner}`'s blob ids the grant admits, gated on a live grant; supports the same optional `limit`/`cursor` pagination and `include=body` batched fetch as `GET /v0/blobs` |
 | `GET /v0/shared/{owner}/blobs/{id}` | yes | — | `200` octets / `304` / `404` | fetch one of `{owner}`'s blobs, gated on a live grant that admits the id; a `cur-` id honors `If-None-Match` (see "Curation etags" above) |
 
 `{grantee}`/`{owner}` are 64 lowercase hex chars (an Ed25519 public key) or

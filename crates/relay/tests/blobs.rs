@@ -472,6 +472,245 @@ async fn limit_is_clamped_and_a_bad_cursor_length_is_bad_request() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
+// --- batched fetch: ?include=body ---
+
+/// Fetch one framed page: asserts the batched content type, returns the parsed
+/// frames and the continuation cursor from the `svastha-next` header.
+async fn fetch_framed(
+    app: &axum::Router,
+    signer: &Identity,
+    path: &str,
+    ts: u64,
+) -> (Vec<(String, Vec<u8>)>, Option<String>) {
+    let resp = app
+        .clone()
+        .oneshot(signed(signer, "GET", path, b"", ts))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "{path}");
+    assert_eq!(
+        resp.headers().get("content-type").unwrap(),
+        "application/octet-stream",
+        "{path}"
+    );
+    let next = resp
+        .headers()
+        .get("svastha-next")
+        .map(|v| v.to_str().unwrap().to_string());
+    (common::parse_frames(&body_bytes(resp).await), next)
+}
+
+/// Fetch a listing raw — content type plus exact response bytes — for the
+/// byte-identity comparisons below.
+async fn fetch_raw(
+    app: &axum::Router,
+    signer: &Identity,
+    path: &str,
+    ts: u64,
+) -> (String, Vec<u8>) {
+    let resp = app
+        .clone()
+        .oneshot(signed(signer, "GET", path, b"", ts))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "{path}");
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    (content_type, body_bytes(resp).await)
+}
+
+async fn put_blobs(app: &axum::Router, signer: &Identity, blobs: &[(&str, Vec<u8>)]) {
+    for (i, (id, body)) in blobs.iter().enumerate() {
+        let put = app
+            .clone()
+            .oneshot(signed(
+                signer,
+                "PUT",
+                &format!("/v0/blobs/{id}"),
+                body,
+                now() + i as u64,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(put.status(), StatusCode::NO_CONTENT);
+    }
+}
+
+#[tokio::test]
+async fn include_body_full_walk_frames_round_trip() {
+    let app = router();
+    let alice = Identity::from_seed(b"alice");
+    let blobs: Vec<(String, Vec<u8>)> = (0..5)
+        .map(|i| (format!("ev-{i:03}"), format!("sealed {i}").into_bytes()))
+        .collect();
+    let put_args: Vec<(&str, Vec<u8>)> = blobs
+        .iter()
+        .map(|(id, body)| (id.as_str(), body.clone()))
+        .collect();
+    put_blobs(&app, &alice, &put_args).await;
+
+    let mut walked: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut cursor: Option<String> = None;
+    let mut pages = 0;
+    loop {
+        let query = match &cursor {
+            Some(c) => format!("?include=body&limit=2&cursor={c}"),
+            None => "?include=body&limit=2".to_string(),
+        };
+        let (frames, next) = fetch_framed(&app, &alice, &format!("/v0/blobs{query}"), now()).await;
+        walked.extend(frames);
+        pages += 1;
+        assert!(pages <= 5, "walk did not terminate");
+        cursor = next;
+        if cursor.is_none() {
+            break;
+        }
+    }
+
+    assert_eq!(pages, 3, "5 ids at 2/page is 3 pages");
+    assert_eq!(
+        walked, blobs,
+        "the framed walk yields every blob, in sorted id order, byte for byte"
+    );
+}
+
+#[tokio::test]
+async fn include_absent_or_unrecognized_is_byte_identical_json() {
+    let app = router();
+    let alice = Identity::from_seed(b"alice");
+    put_blobs(
+        &app,
+        &alice,
+        &[
+            ("ev-1", b"a".to_vec()),
+            ("ev-2", b"b".to_vec()),
+            ("cur-1", b"c".to_vec()),
+        ],
+    )
+    .await;
+
+    let plain = fetch_raw(&app, &alice, "/v0/blobs", now() + 10).await;
+    let unrecognized = fetch_raw(&app, &alice, "/v0/blobs?include=ids", now() + 10).await;
+    assert_eq!(plain.0, "application/json");
+    assert_eq!(
+        plain, unrecognized,
+        "an unrecognized include leaves the unpaginated listing untouched"
+    );
+
+    let paged = fetch_raw(&app, &alice, "/v0/blobs?limit=10", now() + 10).await;
+    let paged_empty_include =
+        fetch_raw(&app, &alice, "/v0/blobs?limit=10&include=", now() + 10).await;
+    assert_eq!(paged.0, "application/json");
+    assert_eq!(
+        paged, paged_empty_include,
+        "an empty include is treated as absent, not rejected"
+    );
+}
+
+#[tokio::test]
+async fn include_body_empty_vault_is_empty_octet_stream_with_no_next() {
+    let app = router();
+    let alice = Identity::from_seed(b"alice");
+    let (frames, next) = fetch_framed(&app, &alice, "/v0/blobs?include=body", now()).await;
+    assert!(frames.is_empty());
+    assert!(next.is_none(), "an empty page ends the walk");
+}
+
+#[tokio::test]
+async fn budget_truncated_page_sets_next_at_first_unsent_id() {
+    // Three 3 MiB blobs: two fit inside the 8 MiB byte budget, the third does
+    // not, so the page ends short of the requested limit of 10.
+    let app = router();
+    let alice = Identity::from_seed(b"alice");
+    let big = vec![7u8; 3 * 1024 * 1024];
+    put_blobs(
+        &app,
+        &alice,
+        &[
+            ("ev-a", big.clone()),
+            ("ev-b", big.clone()),
+            ("ev-c", big.clone()),
+        ],
+    )
+    .await;
+
+    let (frames, next) =
+        fetch_framed(&app, &alice, "/v0/blobs?include=body&limit=10", now() + 10).await;
+    let ids: Vec<&str> = frames.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(ids, vec!["ev-a", "ev-b"], "the byte budget ended the page");
+    assert_eq!(
+        next.as_deref(),
+        Some("ev-b"),
+        "the cursor is the last id that shipped, so the walk resumes at the first that did not"
+    );
+
+    let (rest, done) = fetch_framed(
+        &app,
+        &alice,
+        "/v0/blobs?include=body&limit=10&cursor=ev-b",
+        now() + 11,
+    )
+    .await;
+    assert_eq!(
+        rest,
+        vec![("ev-c".to_string(), big)],
+        "resuming picks up exactly the blob the budget cut off"
+    );
+    assert!(done.is_none());
+}
+
+#[tokio::test]
+async fn oversized_single_blob_ships_alone() {
+    // A blob larger than the whole budget must still be served, on a page of
+    // its own, or the walk could never get past it.
+    let app = router();
+    let alice = Identity::from_seed(b"alice");
+    let small = vec![1u8; 1024];
+    let huge = vec![2u8; 9 * 1024 * 1024];
+    put_blobs(
+        &app,
+        &alice,
+        &[
+            ("ev-a", small.clone()),
+            ("ev-b", huge.clone()),
+            ("ev-c", small.clone()),
+        ],
+    )
+    .await;
+
+    let mut pages: Vec<Vec<String>> = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let query = match &cursor {
+            Some(c) => format!("?include=body&limit=10&cursor={c}"),
+            None => "?include=body&limit=10".to_string(),
+        };
+        let (frames, next) =
+            fetch_framed(&app, &alice, &format!("/v0/blobs{query}"), now() + 10).await;
+        pages.push(frames.iter().map(|(id, _)| id.clone()).collect());
+        for (id, blob) in &frames {
+            let expected = if id == "ev-b" { &huge } else { &small };
+            assert_eq!(blob, expected, "{id} arrived intact");
+        }
+        assert!(pages.len() <= 5, "walk did not terminate");
+        cursor = next;
+        if cursor.is_none() {
+            break;
+        }
+    }
+
+    assert_eq!(
+        pages,
+        vec![vec!["ev-a"], vec!["ev-b"], vec!["ev-c"]],
+        "the oversized blob ships alone, and the small blobs on either side are not lost"
+    );
+}
+
 /// Like `common::signed`, plus one extra request header — used here to carry
 /// `If-None-Match`, which a real client sends alongside (not instead of) the
 /// standard auth headers.
@@ -632,4 +871,47 @@ async fn cors_preflight_is_allowed() {
         .unwrap();
     assert!(resp.status().is_success());
     assert!(resp.headers().contains_key("access-control-allow-origin"));
+}
+
+#[tokio::test]
+async fn cors_exposes_next_header() {
+    // The batched walk is driven entirely by `svastha-next`, and a response
+    // header a browser cannot read is invisible to the PWA — so pin the expose
+    // posture here rather than let a future CORS tightening silently strand the
+    // walk on its first page.
+    let app = router();
+    let alice = Identity::from_seed(b"alice");
+    put_blobs(
+        &app,
+        &alice,
+        &[("ev-a", b"a".to_vec()), ("ev-b", b"b".to_vec())],
+    )
+    .await;
+
+    let resp = app
+        .oneshot(signed(
+            &alice,
+            "GET",
+            "/v0/blobs?include=body&limit=1",
+            b"",
+            now() + 10,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(
+        resp.headers().contains_key("svastha-next"),
+        "a limit of 1 over two blobs leaves a continuation cursor"
+    );
+    let exposed = resp
+        .headers()
+        .get("access-control-expose-headers")
+        .expect("responses carry an expose-headers list")
+        .to_str()
+        .unwrap()
+        .to_lowercase();
+    assert!(
+        exposed == "*" || exposed.contains("svastha-next"),
+        "svastha-next must be readable from a browser, got {exposed:?}"
+    );
 }

@@ -22,6 +22,7 @@ import { pullShared, teardownSharing } from './shared'
 import { pullMailbox, teardownMailbox } from './mailbox'
 import { bytesToBase64, base64ToBytes } from './base64'
 import { runEventStream } from './events-stream'
+import { BATCH_PULL_THRESHOLD, type BlobBodyPage } from './blob-batch'
 
 /** The relay surface this engine needs — narrower than `RelayClient` so
  * tests can supply an in-memory fake without fighting `RelayClient`'s
@@ -58,6 +59,21 @@ interface ConditionalGetClient {
 
 function supportsConditionalGet(client: BlobClient): client is BlobClient & ConditionalGetClient {
   return typeof (client as Partial<ConditionalGetClient>).getBlobConditional === 'function'
+}
+
+/** The optional batched-listing surface (`?include=body`; see `spec/README.md`,
+ * "Batched fetch"), which returns a page's ids AND their ciphertext in one
+ * response instead of one signed — preflight-triggering — round trip per id.
+ * `RelayClient` satisfies it; a bare `BlobClient` test fake does not, so a pull
+ * under unit tests simply stays on the per-id path — the same
+ * graceful-degradation pattern as {@link StreamClient} and
+ * {@link ConditionalGetClient} above. */
+interface BatchListClient {
+  listBlobsWithBodies(cursor: string | null, limit?: number): Promise<BlobBodyPage>
+}
+
+function supportsBatchList(client: BlobClient): client is BlobClient & BatchListClient {
+  return typeof (client as Partial<BatchListClient>).listBlobsWithBodies === 'function'
 }
 
 /** A namespace plug-in. `doc-` and `cur-` arrive in later PRs and register
@@ -552,6 +568,76 @@ export async function pullAll(): Promise<void> {
 
 let pulling: Promise<void> | null = null
 
+/**
+ * Walk the relay's batched pages, applying each frame as it streams in, and
+ * report which ids the caller no longer needs to fetch one at a time.
+ *
+ * "Handled" is deliberately wider than "applied": an id whose frame failed is
+ * handled too, because re-fetching it per-id in the same cycle would just fail
+ * the same way. It is left un-`done` instead, which is what gets it retried on
+ * the next pull. Anything the walk never reached (a transport error, an old
+ * relay, a truncated page) stays out of the set and falls through to the per-id
+ * loop, so a partial walk is always safe.
+ */
+async function batchPullOwn(relay: BlobClient & BatchListClient, key: SealKey): Promise<Set<string>> {
+  const handled = new Set<string>()
+  let cursor: string | null = null
+  for (;;) {
+    let page: BlobBodyPage
+    try {
+      page = await relay.listBlobsWithBodies(cursor)
+      noteContact()
+    } catch (err) {
+      noteFailure(err)
+      return handled
+    }
+    if (page.kind === 'unsupported') {
+      // A pre-batching relay answered the plain JSON listing. Its ids are
+      // deliberately not parsed — the caller has already listed them, and the
+      // per-id path it falls back to is exactly what it would have done anyway.
+      return handled
+    }
+
+    try {
+      for await (const { id, blob } of page.blobs) {
+        // `vault.key` (and any future codec-less id) rides the same page, since
+        // the relay frames whatever it lists. Nothing local applies it.
+        if (!codecFor(id)) continue
+        try {
+          const outcome = await applySealedBlob(id, blob, key)
+          if (outcome === 'unknown') continue
+          // `markDone` stores no etag, which trades away a `cur-` id's cached
+          // validator: after a warm-vault pull big enough to cross the batch
+          // threshold, that id's next conditional GET pays one full body
+          // instead of a 304. Cheap next to the round trips this walk just
+          // saved, and only on a vault already over the threshold.
+          await markDone(id)
+          handled.add(id)
+          // A `duplicate` was never opened and changed nothing locally, so it
+          // doesn't tick — matching the per-id loop's `localHas` shortcut.
+          if (outcome !== 'duplicate') {
+            syncStatus.update((s) => ({ ...s, pulledCount: s.pulledCount + 1 }))
+          }
+        } catch (err) {
+          // One bad frame doesn't end the page: the rest still apply.
+          noteFailure(err)
+          handled.add(id)
+        }
+      }
+    } catch (err) {
+      // A truncated page (the parser's `finish()` throwing) or a mid-read
+      // network error. Stop the walk — frames already applied stay applied.
+      noteFailure(err)
+      return handled
+    }
+
+    // A relay that keeps handing back the cursor it was given must not spin
+    // this walk forever.
+    if (page.next === null || page.next === cursor) return handled
+    cursor = page.next
+  }
+}
+
 async function pullOnce(): Promise<void> {
   if (!relayClient || !vaultKey) return
 
@@ -579,7 +665,16 @@ async function pullOnce(): Promise<void> {
     const doneIds = new Set(syncRecords.filter((r) => r.state === 'done').map((r) => r.id))
 
     patchStatus({ pulledCount: 0 })
-    for (const id of idsToPull(remoteIds, doneIds)) {
+    let toPull = idsToPull(remoteIds, doneIds)
+    if (toPull.length >= BATCH_PULL_THRESHOLD && supportsBatchList(relayClient)) {
+      const handled = await batchPullOwn(relayClient, vaultKey)
+      // Subtracting what the walk handled is what keeps the loop below from
+      // immediately re-fetching a `cur-` id: being mutable, it is never
+      // filtered out by `doneIds`, so without this it would take a conditional
+      // GET one round trip after the batch already applied it.
+      toPull = toPull.filter((id) => !handled.has(id))
+    }
+    for (const id of toPull) {
       const codec = codecFor(id)! // idsToPull only returns ids with a registered codec
       try {
         // The localHas-then-skip shortcut only makes sense for an immutable
