@@ -874,6 +874,57 @@ async fn cors_preflight_is_allowed() {
 }
 
 #[tokio::test]
+async fn framed_page_omits_next_header_instead_of_panicking_on_a_bad_cursor_id() {
+    // `FsStore::list` trusts `read_dir` + `to_string_lossy` (see
+    // `crates/relay/src/store.rs`), so an id from legacy/foreign data on disk
+    // is not guaranteed to be a valid header value even though it's valid
+    // UTF-8. A raw control byte reproduces that without needing a genuinely
+    // non-UTF-8 filename.
+    let dir = tempfile::tempdir().unwrap();
+    let alice = Identity::from_seed(b"alice");
+    let owner_hex = hex::encode(alice.verifying_key().to_bytes());
+    let owner_dir = dir.path().join(&owner_hex);
+    std::fs::create_dir_all(&owner_dir).unwrap();
+    // A control byte sorts before every ASCII id, so a one-id page ends here
+    // and this id becomes the would-be `next` cursor.
+    std::fs::write(owner_dir.join("\u{1}bad"), b"junk").unwrap();
+
+    let app = app(
+        Arc::new(FsStore::new(dir.path()).unwrap()),
+        Arc::new(MemoryGrantStore::new()),
+        Arc::new(MemoryMailboxStore::new()),
+        Arc::new(MemoryShareStore::new()),
+        SKEW,
+        None,
+        None,
+    );
+
+    let put = app
+        .clone()
+        .oneshot(signed(&alice, "PUT", "/v0/blobs/zzz", b"x", now()))
+        .await
+        .unwrap();
+    assert_eq!(put.status(), StatusCode::NO_CONTENT);
+
+    let resp = app
+        .oneshot(signed(
+            &alice,
+            "GET",
+            "/v0/blobs?include=body&limit=1",
+            b"",
+            now() + 1,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(
+        resp.headers().get("svastha-next").is_none(),
+        "an id that cannot become a header value ends the walk instead of \
+         being sent as a cursor"
+    );
+}
+
+#[tokio::test]
 async fn cors_exposes_next_header() {
     // The batched walk is driven entirely by `svastha-next`, and a response
     // header a browser cannot read is invisible to the PWA — so pin the expose

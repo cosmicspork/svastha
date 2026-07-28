@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use axum::{
     body::Bytes,
     extract::{Path, Query, State},
-    http::{header, HeaderMap, HeaderName, StatusCode},
+    http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode},
     response::{
         sse::{Event, KeepAlive, Sse},
         Html, IntoResponse, Response,
@@ -540,19 +540,32 @@ fn framed_page(
     let mut body: Vec<u8> = Vec::new();
     let mut consumed: usize = 0;
     for id in page {
-        let blob = store
-            .get(owner, id)
+        let size = store
+            .size(owner, id)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         // Deleted between the listing and this read: still consumed, so the
         // cursor moves past it, but there is nothing to frame.
+        let Some(size) = size else {
+            consumed += 1;
+            continue;
+        };
+        let frame_len = 2 + id.len() + 4 + size as usize;
+        // Stat, then decide, then read: a blob that would overflow the
+        // remaining budget is skipped without ever being buffered, so peak
+        // memory for a page is the budget plus at most one oversized blob (the
+        // unconditional-first-frame case below), never budget-plus-a-discard.
+        if !body.is_empty() && body.len() + frame_len > BATCH_BYTE_BUDGET {
+            break;
+        }
+        let blob = store
+            .get(owner, id)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        // Deleted between the stat above and this read: same as the listing
+        // race above, still consumed but nothing to frame.
         let Some(blob) = blob else {
             consumed += 1;
             continue;
         };
-        let frame_len = 2 + id.len() + 4 + blob.len();
-        if !body.is_empty() && body.len() + frame_len > BATCH_BYTE_BUDGET {
-            break;
-        }
         body.extend_from_slice(&(id.len() as u16).to_be_bytes());
         body.extend_from_slice(id.as_bytes());
         body.extend_from_slice(&(blob.len() as u32).to_be_bytes());
@@ -569,11 +582,16 @@ fn framed_page(
     };
     let mut resp = ([(header::CONTENT_TYPE, "application/octet-stream")], body).into_response();
     if let Some(next) = next {
-        let value = next
-            .parse()
-            .expect("a blob id is header-safe (see `valid_id`)");
-        resp.headers_mut()
-            .insert(HeaderName::from_static(NEXT_HEADER), value);
+        // `next` came off disk (`FsStore::list`), not through `valid_id` — a
+        // legacy or foreign file in the data dir can carry bytes that are
+        // valid UTF-8 but not a valid header value (e.g. a control byte). That
+        // is untrusted data the relay does not control, so degrade rather than
+        // panic: drop the cursor and let the walk end here instead of
+        // resuming.
+        if let Ok(value) = HeaderValue::from_str(&next) {
+            resp.headers_mut()
+                .insert(HeaderName::from_static(NEXT_HEADER), value);
+        }
     }
     Ok(resp)
 }
@@ -1153,4 +1171,68 @@ pub async fn list_shares(
         })
         .collect();
     Ok(Json(ShareList { shares }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::io;
+    use std::sync::Mutex;
+
+    /// A `BlobStore` whose `size` is free but whose `get` is logged — lets a
+    /// test assert that a blob rejected by the byte budget is never actually
+    /// read, not merely that the final response is correct (the integration
+    /// tests in `tests/blobs.rs` already cover that).
+    struct CountingStore {
+        blobs: HashMap<String, Vec<u8>>,
+        get_calls: Mutex<Vec<String>>,
+    }
+
+    impl BlobStore for CountingStore {
+        fn put(&self, _owner: &[u8; 32], _id: &str, _blob: Vec<u8>) -> io::Result<()> {
+            unimplemented!("not exercised by framed_page")
+        }
+
+        fn get(&self, _owner: &[u8; 32], id: &str) -> io::Result<Option<Vec<u8>>> {
+            self.get_calls.lock().unwrap().push(id.to_string());
+            Ok(self.blobs.get(id).cloned())
+        }
+
+        fn size(&self, _owner: &[u8; 32], id: &str) -> io::Result<Option<u64>> {
+            Ok(self.blobs.get(id).map(|b| b.len() as u64))
+        }
+
+        fn list(&self, _owner: &[u8; 32]) -> io::Result<Vec<String>> {
+            unimplemented!("not exercised by framed_page")
+        }
+
+        fn delete(&self, _owner: &[u8; 32], _id: &str) -> io::Result<bool> {
+            unimplemented!("not exercised by framed_page")
+        }
+    }
+
+    #[test]
+    fn framed_page_never_reads_a_blob_the_stat_shows_wont_fit() {
+        let owner = [0u8; 32];
+        let mut blobs = HashMap::new();
+        blobs.insert("a".to_string(), vec![1u8; 1024]);
+        // Alone this fits comfortably; after "a" it doesn't, and the budget
+        // check must reject it by its stat size alone.
+        blobs.insert("b".to_string(), vec![2u8; BATCH_BYTE_BUDGET]);
+        let store = CountingStore {
+            blobs,
+            get_calls: Mutex::new(Vec::new()),
+        };
+        let page = vec!["a".to_string(), "b".to_string()];
+
+        let resp = framed_page(&store, &owner, &page, None).unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        assert_eq!(
+            store.get_calls.into_inner().unwrap(),
+            vec!["a".to_string()],
+            "the oversized second blob is rejected by its stat size and never buffered"
+        );
+    }
 }

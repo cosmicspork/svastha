@@ -57,6 +57,39 @@ openssl ec -in vapid.pem -pubout -outform DER 2>/dev/null | tail -c 65 \
 Then set `SVASTHA_RELAY_VAPID_SUBJECT` to your contact (e.g. `mailto:you@example.com`).
 Keep `vapid.pem` and the private key secret; the public key is not sensitive.
 
+## Upgrading past 0.13.0
+
+Before the mailbox-store namespacing fix that landed after the `v0.13.0` tag,
+the mailbox store and the blob store shared the same on-disk root, both keyed
+by `{hex(identity)}/`, so a mailbox item and a blob for the same identity
+could land in the very same directory. Because `PUT /v0/mailbox/{recipient}/{id}`
+lets any authenticated caller choose both `recipient` and `id`, this also meant
+any authed identity could overwrite another identity's real blob by depositing
+a mailbox item at an `id` the victim already used for a blob.
+
+If your data directory predates this fix, it may still hold residue: mailbox
+items, or foreign bytes written via the overwrite above, sitting inside
+identity directories under `SVASTHA_RELAY_DATA_DIR`, indistinguishable on disk
+from real blobs. Both `GET /v0/blobs/{id}` and the batched `?include=body`
+listing serve whatever is in an identity's directory, so this residue is now
+also framed into batch listings.
+
+Every legitimate blob id carries one of a small set of prefixes (`ev-`, `doc-`,
+`att-`, `cur-`) or is the fixed name `vault.key` (see `docs/ARCHITECTURE.md`'s
+"Blob namespaces"). Anything else sitting directly in an identity directory is
+residue. List it with:
+
+```sh
+find "$SVASTHA_RELAY_DATA_DIR" -mindepth 2 -maxdepth 2 -type f \
+  -regextype posix-extended -regex '.*/[0-9a-f]{64}/.*' \
+  ! -name 'ev-*' ! -name 'doc-*' ! -name 'att-*' ! -name 'cur-*' ! -name 'vault.key'
+```
+
+Review the results — a mailbox item is a small wrapped-key envelope, so
+anything sizeable is more likely a genuinely overwritten blob worth
+investigating before deleting. Once you're satisfied, append `-delete` to the
+same command to remove it.
+
 > Pre-1.0 and unstable.
 
 Licensed under AGPL-3.0-only.

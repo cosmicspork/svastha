@@ -23,6 +23,10 @@ pub trait BlobStore: Send + Sync {
     fn put(&self, owner: &[u8; 32], id: &str, blob: Vec<u8>) -> io::Result<()>;
     /// Fetch a blob, or `None` if this owner has no blob under `id`.
     fn get(&self, owner: &[u8; 32], id: &str) -> io::Result<Option<Vec<u8>>>;
+    /// Byte length of a blob, or `None` if this owner has no blob under `id`.
+    /// Lets a caller budget for a blob before reading its bytes — a real
+    /// backend can `stat` rather than buffer (see `FsStore`).
+    fn size(&self, owner: &[u8; 32], id: &str) -> io::Result<Option<u64>>;
     /// List the ids this owner has stored.
     fn list(&self, owner: &[u8; 32]) -> io::Result<Vec<String>>;
     /// Delete a blob; returns whether one existed.
@@ -64,6 +68,16 @@ impl BlobStore for MemoryStore {
             .get(owner)
             .and_then(|blobs| blobs.get(id))
             .cloned())
+    }
+
+    fn size(&self, owner: &[u8; 32], id: &str) -> io::Result<Option<u64>> {
+        Ok(self
+            .owners
+            .lock()
+            .unwrap()
+            .get(owner)
+            .and_then(|blobs| blobs.get(id))
+            .map(|blob| blob.len() as u64))
     }
 
     fn list(&self, owner: &[u8; 32]) -> io::Result<Vec<String>> {
@@ -125,6 +139,14 @@ impl BlobStore for FsStore {
     fn get(&self, owner: &[u8; 32], id: &str) -> io::Result<Option<Vec<u8>>> {
         match fs::read(self.owner_dir(owner).join(id)) {
             Ok(blob) => Ok(Some(blob)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn size(&self, owner: &[u8; 32], id: &str) -> io::Result<Option<u64>> {
+        match fs::metadata(self.owner_dir(owner).join(id)) {
+            Ok(meta) => Ok(Some(meta.len())),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e),
         }
