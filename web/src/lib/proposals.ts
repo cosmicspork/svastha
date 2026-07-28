@@ -63,6 +63,10 @@ export interface ProposalRecord {
   resolved: boolean
   /** The `proposal_result` was deposited back to the proposer's mailbox. */
   resultSent: boolean
+  /** Read on this device rather than routed in from a proposer's mailbox. There
+   * is no envelope to delete and nobody to echo a result to — this device is the
+   * owner — so resolution just forgets the record. See `read-page.ts`. */
+  local?: boolean
 }
 
 /** The proposer identity directory: the label and — crucially — the X25519 key
@@ -95,6 +99,7 @@ export function buildProposalRecord(input: {
   sentAt: number
   drafts: { event: DraftEvent; source_blob?: string; method?: string; model?: string }[]
   receivedAt?: string
+  local?: boolean
 }): ProposalRecord {
   return {
     id: input.id,
@@ -105,6 +110,7 @@ export function buildProposalRecord(input: {
     drafts: input.drafts.map((d) => ({ ...d, status: 'pending' as const })),
     resolved: false,
     resultSent: false,
+    ...(input.local ? { local: true } : {}),
   }
 }
 

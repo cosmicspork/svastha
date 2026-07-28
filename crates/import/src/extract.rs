@@ -140,7 +140,7 @@ struct Findings {
 
 /// The result of parsing one model answer: the valid drafts, and how many
 /// findings were dropped as unmappable (a count for logging — never the content).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize)]
 pub struct Extraction {
     pub drafts: Vec<EventDraft>,
     pub dropped: usize,

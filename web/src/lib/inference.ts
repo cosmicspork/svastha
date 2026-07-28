@@ -216,3 +216,55 @@ export function parseModelIds(body: unknown): string[] {
     .map((m) => (m && typeof m === 'object' ? (m as { id?: unknown }).id : null))
     .filter((id): id is string => typeof id === 'string')
 }
+
+// --- completions ----------------------------------------------------------
+
+/**
+ * One synchronous chat completion. The single network call every AI feature on
+ * this device makes, so the failure messages are written once and read the same
+ * whether you were asking a question or reading a page.
+ *
+ * `temperature: 0` throughout: the same question over the same record, or the
+ * same page read twice, should not wander.
+ */
+export async function chatComplete(
+  config: InferenceConfig,
+  system: string,
+  user: string,
+): Promise<string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`
+
+  let response: Response
+  try {
+    response = await fetch(`${normalizeEndpoint(config.endpoint)}/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: config.model,
+        temperature: 0,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+      }),
+    })
+  } catch {
+    throw new InferenceError(
+      'Could not reach the inference endpoint. It may be offline, or it may not allow requests from web apps (CORS).',
+    )
+  }
+
+  if (response.status === 401 || response.status === 403) {
+    throw new InferenceError('The inference endpoint rejected the API key.')
+  }
+  if (!response.ok) {
+    throw new InferenceError(`The inference endpoint answered ${response.status}.`)
+  }
+
+  const body = (await response.json().catch(() => null)) as {
+    choices?: { message?: { content?: unknown } }[]
+  } | null
+  const content = body?.choices?.[0]?.message?.content
+  return typeof content === 'string' ? content : ''
+}

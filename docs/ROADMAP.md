@@ -59,8 +59,6 @@ replaces the single vision pass and retires the vision-model requirement.
 - Runtime-cache the OCR assets in the service worker, so a device that has
   switched on on-device reading can still read a page offline (they are excluded
   from the install precache, so today it depends on the browser's HTTP cache)
-- Propose coded events from pages read on this device — the PWA signs as the
-  owner, so local drafts skip the mailbox round-trip entirely
 - Two-stage extraction in the node with in-process OCR — one extraction path,
   and the vision model goes away
 

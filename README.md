@@ -87,7 +87,10 @@ What it adds:
   approval inbox — the source page shown beside each extracted fact — and you
   approve, edit, or reject. Nothing enters your record unsigned; every
   approved event permanently attests what proposed it, from which page, with
-  which model.
+  which model. Reading runs on the app itself (a PDF's text layer exactly, a
+  photograph through an opt-in on-device recognizer), so the page never leaves
+  your device — only the text it contains is sent for coding, and each coded
+  fact must quote back the line it came from or it is dropped.
 - **Cited Q&A.** Ask questions of your own record; every answer cites the
   events it drew from, and the citations link straight to them. An answer that
   can't be grounded in your record comes back as an honest "couldn't answer",

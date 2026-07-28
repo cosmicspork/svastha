@@ -578,3 +578,37 @@ pub fn system_prompt() -> String {
 pub fn cant_answer_text() -> String {
     svastha_retrieval::CANT_ANSWER.to_string()
 }
+
+// --- OCR extraction: coding transcribed text into draft events --------------
+//
+// The browser transcribes a page locally (a PDF's text layer, or the on-device
+// recognizer), sends only that text for coding, and maps the reply here through
+// the same validator the node uses — including the source-line guard, which is
+// what stops a value being attached to the analyte on a different row.
+
+/// The system instruction for coding transcribed medical text.
+#[wasm_bindgen]
+pub fn extract_system_prompt() -> String {
+    svastha_import::extract::SYSTEM_PROMPT.to_string()
+}
+
+/// The user instruction and output schema. The caller appends the numbered
+/// transcript.
+#[wasm_bindgen]
+pub fn extract_user_prompt() -> String {
+    svastha_import::extract::USER_PROMPT.to_string()
+}
+
+/// Validate a model answer into draft events, verified against the transcript it
+/// was coded from. `lines_json` is a JSON array of the numbered lines in order,
+/// so `lines_json[0]` is line 1.
+///
+/// Returns `{"drafts": [...], "dropped": n}`. A finding that cites no line,
+/// cites one that does not exist, or cites a line that does not contain what it
+/// claims is dropped and counted — never proposed.
+#[wasm_bindgen]
+pub fn code_from_lines(answer: &str, lines_json: &str) -> Result<String, JsError> {
+    let lines: Vec<String> = serde_json::from_str(lines_json).map_err(to_js)?;
+    let extraction = svastha_import::extract::parse_lines(answer, &lines);
+    serde_json::to_string(&extraction).map_err(to_js)
+}

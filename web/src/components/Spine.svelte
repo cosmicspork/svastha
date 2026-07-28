@@ -11,6 +11,8 @@
   import type { AttachmentRef, TimelineEntry } from '../lib/timeline'
   import SpineEntry from './SpineEntry.svelte'
   import AttachmentViewer from './AttachmentViewer.svelte'
+  import { readAndPropose } from '../lib/read-page'
+  import { navigate } from '../lib/router.svelte'
   import TagChips from './TagChips.svelte'
   import { focusedEventId } from '../lib/spine-focus'
 
@@ -193,6 +195,28 @@
     hiddenEvents = next
   }
 
+
+  // Reading a page files drafts into the same review queue a node's proposals
+  // land in; nothing enters the record until it is approved and signed there.
+  let readMessage = $state('')
+  async function readPage(sha256: string, bytes: Uint8Array, mime: string): Promise<void> {
+    readMessage = ''
+    try {
+      const result = await readAndPropose(sha256, bytes, mime)
+      if (result.proposed === 0) {
+        readMessage =
+          result.dropped > 0
+            ? "Nothing on this page could be read reliably enough to propose."
+            : 'Nothing on this page looked like a record entry.'
+        return
+      }
+      viewerEntry = null
+      navigate('#/proposals')
+    } catch (err) {
+      readMessage = err instanceof Error ? err.message : 'Could not read this page.'
+    }
+  }
+
 </script>
 
 {#if loaded}
@@ -283,8 +307,13 @@
       recordedIso={viewerEntry.effective_at}
       source={viewerEntry.detail.source}
       loadBytes={attachmentBytes}
+      onread={readPage}
       onclose={() => (viewerEntry = null)}
     />
+  {/if}
+
+  {#if readMessage}
+    <p class="read-message" role="status" data-testid="read-message">{readMessage}</p>
   {/if}
 
   {#if sourceDocViewer}
@@ -384,4 +413,13 @@
   .show-older {
     margin-top: var(--space-2);
   }
+  .read-message {
+    margin: var(--space-3) 0;
+    padding: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    font-size: var(--text-sm);
+  }
+
 </style>

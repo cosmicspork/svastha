@@ -326,10 +326,20 @@ stays under its own license instead of being embedded in signed events.
   encrypted blob (`att-*`, see "Sync and backup" below); a caption rides as a
   sibling text event. The photo or PDF is a first-class record — synced,
   exported, viewable in-app (PDFs render via a lazy-loaded pdf.js), and
-  includable in doctor shares. **OCR stays out of the web app by design**: reading the
-  photo's contents belongs to native OS OCR through the wrapper or the
-  processing node (human-in-the-loop for handwriting), inside the user's trust
-  boundary.
+  includable in doctor shares. **The app reads pages itself** — a PDF's embedded
+  text layer exactly, a photograph through an opt-in on-device recognizer — and
+  proposes coded events from what it read, into the same approval queue a node's
+  proposals land in.
+
+  This reverses an earlier decision that "OCR stays out of the web app by
+  design", which held that reading a photo's contents belonged to native OS OCR
+  or the processing node, "inside the user's trust boundary". The reasoning
+  conflated *inside the boundary* with *on a server*: the browser holds the seed
+  and the decrypted vault, so it was always inside the boundary — and reading
+  locally is in fact the stronger posture, because the page image never leaves
+  the device, where a node uploads it to a vision endpoint. Handwriting is the
+  one thing the on-device reader will not do; it answers "couldn't read this"
+  rather than guessing, and a node with a vision model remains the answer for it.
 - **India (later).** ABDM is consent-federated rather than self-custodial; it is
   a future boundary adapter, and its consent-artifact schema is prior art for
   the grant model.

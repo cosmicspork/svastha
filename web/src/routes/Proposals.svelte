@@ -28,6 +28,14 @@
     await refreshPendingProposals()
   })
 
+  // A page read on this device is proposed under the owner's own identity, which
+  // is deliberately not in the proposer directory (that holds nodes and
+  // caregivers). Label it for what it is rather than leaving it as a bare
+  // fingerprint of yourself.
+  const localEds = $derived(
+    new Set($pendingProposals.filter((r) => r.local).map((r) => r.fromEd)),
+  )
+
   $effect(() => {
     for (const [fromEd] of groupByProposer($pendingProposals)) {
       if (labels[fromEd] !== undefined) continue
@@ -122,7 +130,9 @@
     <section class="proposer" data-testid="proposer-group">
       <header class="phead">
         <div class="who">
-          <span class="plabel">{labels[fromEd] ?? fingerprint(fromEd)}</span>
+          <span class="plabel"
+            >{localEds.has(fromEd) ? 'This device' : (labels[fromEd] ?? fingerprint(fromEd))}</span
+          >
           <span class="fp data muted" data-testid="proposer-fingerprint">{fingerprint(fromEd)}</span>
         </div>
         {#if pendingCount(records) > 1}
