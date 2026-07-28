@@ -418,7 +418,18 @@ enrolls another vault, and tenants are structurally isolated.
 What it runs: OCR of captured pages into draft coded events (each proposal
 carrying source-blob, method, and model provenance), and cited Q&A over the
 owner's own record (every answer cites the event ids it drew from; an answer
-that cannot be grounded is an honest "couldn't answer"). It ships no models —
+that cannot be grounded is an honest "couldn't answer").
+
+**Cited Q&A no longer requires a node.** The app holds the decrypted vault
+already, so it can retrieve, prompt, and ground on its own once the owner points
+it at an inference endpoint (Settings → AI); `crates/retrieval` is shared with
+the node through WASM, so both run one ranker and one citation contract rather
+than two that could drift. A node is still what you want for work the browser
+cannot do: a large backlog it can chew through while nothing is open (a phone
+gets no reliable background execution), several household vaults served from one
+place, and one machine holding an inference credential instead of every device.
+
+It ships no models —
 inference delegates to a user-supplied OpenAI-compatible endpoint (Ollama, LM
 Studio, vLLM, or a cloud endpoint the user explicitly chooses), which is how AI
 features stay compatible with a zero-knowledge relay: the trust decision about

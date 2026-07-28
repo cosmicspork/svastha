@@ -53,7 +53,6 @@ replaces the single vision pass and retires the vision-model requirement.
 
 - Move the node's own inference-endpoint field alongside the device one, so the
   two are configured in one place rather than two screens
-- Answer questions on this device — the node becomes optional for Q&A
 - Read text from digital PDF attachments — `pdfjs-dist` is already a dependency
   and its text layer is exact, and PDFs sit outside the node's image-only scope
 - Code from transcribed text with source-line verification — each finding

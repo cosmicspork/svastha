@@ -91,7 +91,10 @@ What it adds:
 - **Cited Q&A.** Ask questions of your own record; every answer cites the
   events it drew from, and the citations link straight to them. An answer that
   can't be grounded in your record comes back as an honest "couldn't answer",
-  never uncited prose. Clearly labeled retrieval, not medical advice.
+  never uncited prose. Clearly labeled retrieval, not medical advice. Runs
+  either on the app itself — point it at an inference endpoint under Settings →
+  AI, no node required — or on a node, sharing one ranker and one citation
+  contract through WASM.
 
 What it's trusted with, exactly:
 

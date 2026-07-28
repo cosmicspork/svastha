@@ -2505,6 +2505,7 @@ dependencies = [
  "serde_json",
  "svastha-core",
  "svastha-import",
+ "svastha-retrieval",
  "wasm-bindgen",
  "x25519-dalek",
 ]

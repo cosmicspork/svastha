@@ -8,10 +8,13 @@
 // configured client and identity; the UI (routes/Search.svelte) drives sending and
 // renders answers with their citations.
 //
-// Nothing produces answers in production yet — the node's RAG is a later PR
-// (D3) — so a sent question stays in the `waiting` state until a fixture (tests)
-// or the real node deposits an answer. That waiting state is deliberate and
-// honest, never a fake spinner that resolves itself.
+// Answers arrive two ways. A **node** turn is routed in from the mailbox, so the
+// question sits in `waiting` until the node deposits one. A **local** turn is
+// produced on this device (see ask.ts) and lands as soon as the endpoint
+// replies; the question still passes through `waiting` while the model is
+// working, which is the honest reading of that state rather than a flicker.
+// Either way `waiting` reflects the turns themselves — never a fake spinner that
+// resolves itself.
 import { writable } from 'svelte/store'
 import { getAll, get, put, clear } from './db'
 
@@ -75,6 +78,30 @@ export async function appendTurn(turn: ChatTurn): Promise<boolean> {
   await put(STORE, turn)
   await refreshChat()
   return true
+}
+
+/**
+ * Record a turn produced on this device rather than routed from the mailbox.
+ *
+ * Node turns key on the mailbox envelope's message id, which is the dedupe
+ * identity for something that can be re-pulled. A local turn is never re-pulled,
+ * so it just needs an id that cannot collide with an envelope id or with another
+ * local turn — hence the `local-` prefix.
+ */
+export async function appendLocalTurn(
+  role: ChatTurn['role'],
+  text: string,
+  citations: string[] = [],
+): Promise<ChatTurn> {
+  const turn: ChatTurn = {
+    id: `local-${crypto.randomUUID()}`,
+    role,
+    text,
+    citations,
+    createdAt: new Date().toISOString(),
+  }
+  await appendTurn(turn)
+  return turn
 }
 
 /** Forget the whole conversation (store + IndexedDB). Used by lock/teardown and

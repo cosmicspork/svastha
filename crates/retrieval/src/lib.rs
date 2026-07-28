@@ -37,12 +37,18 @@ mod rank;
 pub use prompt::{build_prompt, ground, CANT_ANSWER, SYSTEM_PROMPT};
 pub use rank::{rank, render_line};
 
+use serde::{Deserialize, Serialize};
 use svastha_core::event::Event;
 
 /// A concept's current/past status. Defaults to [`Active`](ConceptStatus::Active)
 /// when the owner has recorded no `status:` override (a medication with no
 /// override is current, a problem is active).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Serializes as `"active"`/`"inactive"` — the same two strings the web's
+/// `curation.ts` `ConceptStatus` uses, so a candidate assembled in the browser
+/// crosses into WASM without a translation layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ConceptStatus {
     Active,
     Inactive,
@@ -60,7 +66,11 @@ pub struct Candidate<'a> {
 
 /// One retrieved, rendered context item. `event_id` is the citation the answer
 /// carries; `text` is what the model reads.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// Serializable so a client can rank in WASM, carry the result out to make the
+/// inference call itself, and hand the same items back to [`ground`] — which is
+/// what keeps citations a subset of what was actually supplied.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ContextItem {
     /// The event content id (hex) — the citation.
     pub event_id: String,
