@@ -102,7 +102,15 @@ pub struct FsMailboxStore {
 
 impl FsMailboxStore {
     pub fn new(root: impl AsRef<Path>) -> io::Result<Self> {
-        let root = root.as_ref().to_path_buf();
+        // The `mailbox` segment is what keeps this store's per-recipient
+        // directories out of `store::FsStore`'s per-owner ones. Both key on
+        // `hex(identity)`, so sharing a root made them the same directory for
+        // any identity that both owns blobs and receives mail — i.e. every
+        // real user. `GET /v0/mailbox` then listed the owner's whole blob
+        // namespace as mailbox items, and a client dutifully fetched and
+        // discarded all of them on every pull. Namespaced like the push and
+        // share stores, which got this right.
+        let root = root.as_ref().join("mailbox");
         let tmp = root.join(".tmp");
         fs::create_dir_all(&tmp)?;
         Ok(Self { root, tmp })
@@ -213,5 +221,45 @@ mod tests {
         let store = FsMailboxStore::new(dir.path()).unwrap();
         assert!(store.list(&id(9)).unwrap().is_empty());
         assert!(store.get(&id(9), "x").unwrap().is_none());
+    }
+
+    /// Regression: both stores are constructed on the same data dir (see
+    /// `main.rs`) and both key on `hex(identity)`, so an un-namespaced mailbox
+    /// root made an identity's mailbox and its blob directory the same one.
+    /// Each store must see only its own writes.
+    #[test]
+    fn fs_mailbox_and_blobs_share_a_root_without_colliding() {
+        use crate::store::{BlobStore, FsStore};
+
+        let dir = tempdir().unwrap();
+        let mailbox = FsMailboxStore::new(dir.path()).unwrap();
+        let blobs = FsStore::new(dir.path()).unwrap();
+        // The same identity as blob owner and mail recipient — the case that
+        // collided.
+        let (identity, from) = (id(1), id(2));
+
+        blobs
+            .put(&identity, "ev-abc", b"sealed-event".to_vec())
+            .unwrap();
+        mailbox
+            .put(
+                &identity,
+                "keyring-0123456789abcdef",
+                from,
+                b"handoff".to_vec(),
+            )
+            .unwrap();
+
+        assert_eq!(blobs.list(&identity).unwrap(), vec!["ev-abc".to_string()]);
+        assert_eq!(
+            mailbox.list(&identity).unwrap(),
+            vec![("keyring-0123456789abcdef".to_string(), from)]
+        );
+        // And neither can read the other's item by id.
+        assert!(mailbox.get(&identity, "ev-abc").unwrap().is_none());
+        assert!(blobs
+            .get(&identity, "keyring-0123456789abcdef")
+            .unwrap()
+            .is_none());
     }
 }
