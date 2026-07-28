@@ -51,9 +51,8 @@ Making the node optional. The PWA already holds the decrypted vault, so OCR and
 cited Q&A can run where the keys already are; classical OCR plus a text model
 replaces the single vision pass and retires the vision-model requirement.
 
-- Configure an inference endpoint on this device — HTTPS only, because the PWA
-  is HTTPS and a plain-HTTP LAN endpoint is blocked as mixed content; the API
-  key seals into the keyvault rather than plaintext prefs
+- Move the node's own inference-endpoint field alongside the device one, so the
+  two are configured in one place rather than two screens
 - Answer questions on this device — the node becomes optional for Q&A
 - Read text from digital PDF attachments — `pdfjs-dist` is already a dependency
   and its text layer is exact, and PDFs sit outside the node's image-only scope

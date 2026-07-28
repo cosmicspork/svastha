@@ -111,6 +111,14 @@ export const MIGRATIONS: ((db: IDBDatabase, tx: IDBTransaction) => void)[] = [
   (db) => {
     db.createObjectStore('file_shares', { keyPath: 'id' })
   },
+  // v11: device-local bearer credentials (see lib/inference.ts) — sealed under
+  // the session's vault key, never in `prefs`, which is plaintext at rest. Keyed
+  // by a short name. Never synced: these authenticate *this device* to a service
+  // the owner chose, so they are not vault content and must not travel to other
+  // devices, where they could not be scoped or revoked independently anyway.
+  (db) => {
+    db.createObjectStore('secrets')
+  },
 ]
 
 function requestToPromise<T>(req: IDBRequest<T>): Promise<T> {
