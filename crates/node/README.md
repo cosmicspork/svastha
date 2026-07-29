@@ -62,9 +62,12 @@ not what you expected.
 
 **The choice is yours alone.** Pausing stops the node reading *your* pages;
 anyone else it serves is unaffected, and nobody else can pause or resume yours.
-A node serving several households therefore reads for each independently, which
-is what makes the admin trust rule (you administer the node's work on *your*
-vault, never the node itself) true in effect and not merely in authorization.
+A node serving several households therefore reads for each independently. This
+is true of `pause_ocr`/`resume_ocr` specifically — not of the admin surface as a
+whole: `set_inference_endpoint` repoints inference for **every** enrolled owner,
+and `log_tail` and `job_status`'s OCR counters are node-wide views. Those are
+shared controls any enrolled owner can use; a deployment that cannot accept that
+enrols one owner per node.
 An owner who has never chosen takes the boot default, which is where
 `SVASTHA_NODE_OCR_PAUSED` applies: **an owner's own persisted choice wins, else
 that env default, else paused.** So an existing deployment upgrading into
@@ -74,10 +77,16 @@ owner has a persisted choice yet, and it applies to all of them.
 `job_status` reports whether reading is on **for you** (`paused by you` /
 `reading`) and the current cap.
 
-A pass spends its page cap in owner order, so one household's large backlog can
-use a whole pass before another's pages are reached. Each pass resumes where the
-last stopped, so nothing starves; the cap keeps an approval queue reviewable and
-is deliberately not a scheduler.
+**Multi-owner reading is not scheduled, and can starve.** Every pass walks the
+enrolled owners in owner-id order from the start and stops when the per-pass cap
+is spent; no cursor or rotation is kept between passes. So an owner early in that
+order who has at least a capful of newly eligible pages each reconcile consumes
+every pass, and owners after them are never reached — indefinitely, not just
+slowly. In practice a backlog is finite and drains, after which later owners run;
+sustained capture at that rate on a shared node is the case that breaks. Until a
+scheduler exists (round-robin continuation, or a per-owner cap), a deployment
+that cannot risk it raises `SVASTHA_NODE_OCR_MAX_PAGES_PER_PASS` above the
+combined arrival rate, or runs one node per owner.
 
 Enabled when an inference endpoint is configured (see the config table) and the
 owner in question has reading resumed (above). On each
