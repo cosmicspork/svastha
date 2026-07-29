@@ -145,6 +145,15 @@ async function* streamFrames(res: Response): AsyncGenerator<BatchBlob> {
  * than a batch walk: a batch page ships every id it covers regardless of how
  * many are actually missing (byte-blind — the relay never inspects contents
  * to decide), so a small miss count doesn't earn back a page's own overhead.
- * 20 is a rough knee, not a measured constant; a `missing/total` ratio would
- * be a sharper (but pricier) refinement if this ever needs revisiting. */
+ * 20 is a rough knee, not a measured constant. */
 export const BATCH_PULL_THRESHOLD = 20
+
+/** …and a raw count alone is not enough, because the walk's cost scales with
+ * the whole namespace while its benefit scales with the misses. 25 new events
+ * on a vault holding 400 photographed pages clears the count threshold while
+ * re-streaming hundreds of megabytes — over cellular — to apply 25 small blobs.
+ * So the misses must also be a large enough *share* of what the relay holds.
+ * A third is deliberately generous: the case the walk exists for (a cold
+ * restore, where every id is missing) sits at 1, and a merely-behind device
+ * still batches rather than paying hundreds of signed round trips. */
+export const BATCH_PULL_MIN_RATIO = 1 / 3

@@ -69,12 +69,15 @@ test('a cold restore above the batch threshold pulls pages, not per-id GETs', as
 
   const restored = await browser.newContext()
   const pageB = await restored.newPage()
-  // The proof is on the wire: a batched restore never fetches an ev- blob by
-  // id. Counting requests (rather than asserting on timing or totals) keeps
-  // the test stable however the page walk splits.
+  // The proof is on the wire: the restore walks framed pages and never fetches
+  // an ev- blob by id. Counting requests (rather than asserting on timing or
+  // totals) keeps the test stable however the page walk splits.
+  let batchPages = 0
   let perIdEvGets = 0
   pageB.on('request', (req) => {
-    if (req.method() === 'GET' && req.url().includes('/v0/blobs/ev-')) perIdEvGets++
+    if (req.method() !== 'GET') return
+    if (req.url().includes('include=body')) batchPages++
+    if (req.url().includes('/v0/blobs/ev-')) perIdEvGets++
   })
   await restoreViaUI(pageB, words, undefined, RELAY)
 
@@ -82,9 +85,14 @@ test('a cold restore above the batch threshold pulls pages, not per-id GETs', as
     window.location.hash = '#/timeline'
   })
   await expect(entryWith(pageB, 'meal-0')).toBeVisible({ timeout: 15_000 })
+  // Snapshot the counters the moment the restore's pull has demonstrably
+  // landed: the assertion is about that pull, and a later background pull
+  // between two `toBeVisible` awaits would otherwise fold into it.
+  const duringRestore = { batchPages, perIdEvGets }
   await expect(entryWith(pageB, 'meal-20')).toBeVisible()
   await expect(entryWith(pageB, '117/75')).toBeVisible()
-  expect(perIdEvGets).toBe(0)
+  expect(duringRestore.batchPages).toBeGreaterThan(0)
+  expect(duringRestore.perIdEvGets).toBe(0)
   await restored.close()
 })
 
