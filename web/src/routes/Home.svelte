@@ -399,12 +399,22 @@
     flex: none;
   }
 
-  /* flex: none + nowrap so a long sibling value (a journal entry, a document
-     note) can't collapse this into letter-per-line wrapping — the label is
-     always short and should size to its own content, not fight for space. */
+  /* Labels are usually short ("Weight", "Gratitude") but aren't guaranteed
+     to be — exercise activity, food/med names, and imported code.display
+     are free text and can run long. min-width is a floor so an ordinary
+     label never gets crushed toward 0 the way it did before (letter-per-line
+     wrapping); max-width is a ceiling so an unusually long label can't push
+     the value or the timestamp out of the row — it wraps and clamps instead. */
   .llabel {
-    flex: none;
-    white-space: nowrap;
+    flex: 0 1 auto;
+    min-width: 4.5em;
+    max-width: 55%;
+    overflow-wrap: break-word;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
 
   /* A glance row shows a preview, not the full entry — clamp long free text
