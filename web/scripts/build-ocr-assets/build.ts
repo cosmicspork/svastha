@@ -26,9 +26,13 @@ const NODE_MODULES = join(SCRIPT_DIR, '..', '..', 'node_modules')
 /** tessdata_fast: the smaller of the two trained models. `tessdata_best` is
  * roughly four times the size for accuracy gains that do not survive the
  * approval loop this feeds — every finding is reviewed by the owner regardless,
- * and this is a multi-megabyte download on a phone. */
-const TRAINEDDATA_URL =
-  'https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/eng.traineddata'
+ * and this is a multi-megabyte download on a phone.
+ *
+ * Pinned to a commit, not `main`: a branch ref means upstream retraining the
+ * model silently changes what every device downloads next time this script
+ * runs, with no diff to review. Bump the SHA deliberately when it matters. */
+const TRAINEDDATA_COMMIT = '87416418657359cb625c412a48b6e1d6d41c29bd'
+const TRAINEDDATA_URL = `https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/${TRAINEDDATA_COMMIT}/eng.traineddata`
 
 interface Asset {
   /** Filename under public/ocr/. */
@@ -40,6 +44,37 @@ interface Asset {
   role: 'worker' | 'core' | 'lang' | 'notice'
 }
 
+// The core set is exactly what the vendored worker.min.js can request — see
+// tesseract.js's worker-script/browser/getCore.js: with the LSTM-only OEM
+// this app always uses (tessdata_fast has no legacy model), it feature-detects
+// relaxed-SIMD, then plain SIMD, then falls back to no SIMD, and asks for the
+// matching *-lstm.wasm.js file. Each is self-contained (wasm inlined as a data
+// URL in the JS, no companion .wasm fetch) — that's the split-pair predecessor
+// this replaces. The non-LSTM cores (`tesseract-core.wasm.js` etc.) exist in
+// the same npm package but are never requested and are deliberately excluded;
+// manifest.test.ts checks that exclusion against the worker's own byte code so
+// this stays honest if tesseract.js's feature detection ever changes.
+const CORE_ASSETS: Asset[] = [
+  {
+    path: 'tesseract-core-relaxedsimd-lstm.wasm.js',
+    from: { file: 'tesseract.js-core/tesseract-core-relaxedsimd-lstm.wasm.js' },
+    label: 'Recognition core (relaxed SIMD)',
+    role: 'core',
+  },
+  {
+    path: 'tesseract-core-simd-lstm.wasm.js',
+    from: { file: 'tesseract.js-core/tesseract-core-simd-lstm.wasm.js' },
+    label: 'Recognition core (SIMD)',
+    role: 'core',
+  },
+  {
+    path: 'tesseract-core-lstm.wasm.js',
+    from: { file: 'tesseract.js-core/tesseract-core-lstm.wasm.js' },
+    label: 'Recognition core (no SIMD)',
+    role: 'core',
+  },
+]
+
 const ASSETS: Asset[] = [
   {
     path: 'worker.min.js',
@@ -47,32 +82,15 @@ const ASSETS: Asset[] = [
     label: 'Recognition worker',
     role: 'worker',
   },
-  // Two core builds: tesseract.js feature-detects SIMD and asks for whichever
-  // the browser supports, so shipping only one would fail on the other.
+  // Not fetched at runtime — attribution for the bundlers named in
+  // worker.min.js's own header comment (line 1 points here).
   {
-    path: 'tesseract-core-simd-lstm.wasm',
-    from: { file: 'tesseract.js-core/tesseract-core-simd-lstm.wasm' },
-    label: 'Recognition core (SIMD)',
-    role: 'core',
+    path: 'worker.min.js.LICENSE.txt',
+    from: { file: 'tesseract.js/dist/worker.min.js.LICENSE.txt' },
+    label: 'Recognition worker bundled-dependency notices',
+    role: 'notice',
   },
-  {
-    path: 'tesseract-core-simd-lstm.js',
-    from: { file: 'tesseract.js-core/tesseract-core-simd-lstm.js' },
-    label: 'Recognition core loader (SIMD)',
-    role: 'core',
-  },
-  {
-    path: 'tesseract-core-lstm.wasm',
-    from: { file: 'tesseract.js-core/tesseract-core-lstm.wasm' },
-    label: 'Recognition core',
-    role: 'core',
-  },
-  {
-    path: 'tesseract-core-lstm.js',
-    from: { file: 'tesseract.js-core/tesseract-core-lstm.js' },
-    label: 'Recognition core loader',
-    role: 'core',
-  },
+  ...CORE_ASSETS,
   {
     path: 'eng.traineddata',
     from: { url: TRAINEDDATA_URL },
@@ -132,11 +150,30 @@ async function main(): Promise<void> {
     await readFile(join(NODE_MODULES, 'tesseract.js/package.json'), 'utf8'),
   ).version
 
+  // `version` is the tesseract.js package version, not a fingerprint of what's
+  // actually vendored — this repo shipped a wrong core-file *set* under the
+  // same "7.0.0" once already (see this script's history). A device compares
+  // this digest, not `version`, before trusting assets it already verified
+  // (`ocr-assets.ts`'s `assetsEnabled`), so it has to move whenever any
+  // vendored file does, independent of any upstream version bump.
+  const revision = createHash('sha256')
+    .update(
+      JSON.stringify(
+        files
+          .map((f) => ({ path: f.path, sha256: f.sha256 }))
+          .sort((a, b) => a.path.localeCompare(b.path)),
+      ),
+    )
+    .digest('hex')
+
   const manifest = {
     version: tesseractVersion,
+    revision,
     generated_at: new Date().toISOString(),
     /** What the language data was built from, so a bump is traceable. */
     traineddata_source: TRAINEDDATA_URL,
+    /** The tessdata_fast commit `traineddata_source` is pinned to. */
+    traineddata_commit: TRAINEDDATA_COMMIT,
     files,
   }
   await writeFile(join(OUT_DIR, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)

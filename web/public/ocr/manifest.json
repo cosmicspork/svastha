@@ -1,7 +1,9 @@
 {
   "version": "7.0.0",
-  "generated_at": "2026-07-28T16:09:33.967Z",
-  "traineddata_source": "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/eng.traineddata",
+  "revision": "acb029c0767eae605e9f891c6b71808e14beb87ac49890adb01a9a018eee3beb",
+  "generated_at": "2026-07-29T11:59:39.391Z",
+  "traineddata_source": "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/87416418657359cb625c412a48b6e1d6d41c29bd/eng.traineddata",
+  "traineddata_commit": "87416418657359cb625c412a48b6e1d6d41c29bd",
   "files": [
     {
       "path": "worker.min.js",
@@ -11,31 +13,31 @@
       "role": "worker"
     },
     {
-      "path": "tesseract-core-simd-lstm.wasm",
-      "bytes": 2857601,
-      "sha256": "34e8d50cac216427d86bf397d610fdd9f49492539bbcdfbfccc4eda20c810bea",
+      "path": "worker.min.js.LICENSE.txt",
+      "bytes": 466,
+      "sha256": "45f54171aeaa1d10c0c1a66f374b7bba1f02472b1487fbe892eec04f840002ac",
+      "label": "Recognition worker bundled-dependency notices",
+      "role": "notice"
+    },
+    {
+      "path": "tesseract-core-relaxedsimd-lstm.wasm.js",
+      "bytes": 3905767,
+      "sha256": "861a536cf9ef8e63cb644d57bab39c388f37f7d6b6f60024b741c5f6b39a59b3",
+      "label": "Recognition core (relaxed SIMD)",
+      "role": "core"
+    },
+    {
+      "path": "tesseract-core-simd-lstm.wasm.js",
+      "bytes": 3899472,
+      "sha256": "c58b46a4c796c0b8afccf77591d5b875b6896b45d402bbce8caa6f5362447b38",
       "label": "Recognition core (SIMD)",
       "role": "core"
     },
     {
-      "path": "tesseract-core-simd-lstm.js",
-      "bytes": 89271,
-      "sha256": "e48e2f02ddae3716c8dd24bf41cd290d4efa96892d689cdc4013c2545d63f469",
-      "label": "Recognition core loader (SIMD)",
-      "role": "core"
-    },
-    {
-      "path": "tesseract-core-lstm.wasm",
-      "bytes": 2855361,
-      "sha256": "66b17df6e20c5329a17ffa9c202a47eaa3e32500b253d4c7f38e7f2bc01457c3",
-      "label": "Recognition core",
-      "role": "core"
-    },
-    {
-      "path": "tesseract-core-lstm.js",
-      "bytes": 89261,
-      "sha256": "6510efc4e8b45c5465df30679b9911ffe0071cd2ee982fa064e6f5136ef2de85",
-      "label": "Recognition core loader",
+      "path": "tesseract-core-lstm.wasm.js",
+      "bytes": 3896484,
+      "sha256": "eef5f8b2f8e20e150680b20adaec4a60babafee3adbe8a94583c81fee46e8680",
+      "label": "Recognition core (no SIMD)",
       "role": "core"
     },
     {
