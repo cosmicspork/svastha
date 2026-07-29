@@ -399,14 +399,25 @@
     flex: none;
   }
 
+  /* flex: none + nowrap so a long sibling value (a journal entry, a document
+     note) can't collapse this into letter-per-line wrapping — the label is
+     always short and should size to its own content, not fight for space. */
   .llabel {
-    flex: 1;
-    min-width: 0;
-    overflow-wrap: anywhere;
+    flex: none;
+    white-space: nowrap;
   }
 
+  /* A glance row shows a preview, not the full entry — clamp long free text
+     rather than pour the whole note into the dashboard card. */
   .lvalue {
+    flex: 1;
+    min-width: 0;
     font-size: var(--text-sm);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
 
   .lago {
