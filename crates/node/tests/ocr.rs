@@ -164,6 +164,19 @@ fn one_bp_finding() -> String {
     .to_string()
 }
 
+/// The same answer plus a second finding that cites line 1 — the letterhead —
+/// for a reading that is not on it. The guard must drop the second and keep the
+/// first.
+fn one_good_and_one_cross_row_finding() -> String {
+    r#"{"findings":[
+        {"kind":"observation","source_line":2,"system":"loinc","code":"8480-6",
+         "display":"Systolic blood pressure","value_quantity":"120","unit":"mm[Hg]"},
+        {"kind":"observation","source_line":1,"system":"loinc","code":"8462-4",
+         "display":"Diastolic blood pressure","value_quantity":"80"}
+    ]}"#
+    .to_string()
+}
+
 // ---- owner-side helpers (the PWA's role) ----
 
 fn hex_ed(id: &Identity) -> String {
@@ -252,6 +265,9 @@ struct Fixture {
     state: Mutex<NodeState>,
     cache: Cache,
     journal_dir: tempfile::TempDir,
+    /// The `att-` source ids of the seeded pages, in order, so a test can ask
+    /// the journal directly whether a page is still eligible.
+    sources: Vec<String>,
 }
 
 fn setup(seed: &[u8], images: &[&[u8]]) -> Fixture {
@@ -265,8 +281,10 @@ fn setup(seed: &[u8], images: &[&[u8]]) -> Fixture {
 
     let data_key = DataKey::generate();
     let ring = Keyring::genesis(&owner.x25519_public(), &data_key);
+    let mut sources = Vec::new();
     for img in images {
-        put_attachment(&owner_client, &ring, &owner, img);
+        let sha = put_attachment(&owner_client, &ring, &owner, img);
+        sources.push(format!("att-{sha}"));
     }
     grant_node(&owner_client, &node);
     deposit_handoff(&owner_client, &owner, &node, &ring);
@@ -285,7 +303,15 @@ fn setup(seed: &[u8], images: &[&[u8]]) -> Fixture {
         state,
         cache,
         journal_dir: tempfile::tempdir().unwrap(),
+        sources,
     }
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
 }
 
 #[test]
@@ -335,8 +361,12 @@ fn ocr_happy_path_deposits_a_parseable_proposal() {
     assert_eq!(jobs.queued, 0);
 }
 
+/// A reply the extractor cannot parse says nothing about the page — it is the
+/// coding model failing to format an answer. Marking the page *empty* would be
+/// terminal, so one formatting quirk would bury a readable page for the life of
+/// the journal. It has to back off like any other transient failure.
 #[test]
-fn malformed_inference_output_proposes_nothing() {
+fn an_unparseable_reply_backs_off_rather_than_burying_the_page() {
     let (base, _calls) = spawn_inference(Mode::Malformed);
     let inf = inference_client(&base);
     let fx = setup(b"ocr owner two", &[b"unreadable page"]);
@@ -353,11 +383,34 @@ fn malformed_inference_output_proposes_nothing() {
     )
     .unwrap();
     assert_eq!(report.proposals, 0, "garbage output → no proposal");
-    assert_eq!(report.empties, 1, "recorded processed-empty, not proposed");
+    assert_eq!(report.failed, 1, "a failure, retryable");
+    assert_eq!(
+        report.empties, 0,
+        "an unparseable reply is not a verdict that the page is blank"
+    );
     assert!(read_proposals(&fx.owner_client, &fx.owner).is_empty());
 
-    // Re-running does not re-process an empty (terminal) source.
-    let report2 = svastha_node::ocr::run(
+    let owner_hex = hex_ed(&fx.owner);
+    assert!(
+        !journal.eligible(&owner_hex, &fx.sources[0], now_secs()),
+        "backing off right now"
+    );
+    assert!(
+        journal.eligible(&owner_hex, &fx.sources[0], now_secs() + 3600),
+        "and eligible again once the back-off elapses — not terminal"
+    );
+}
+
+/// The other half of the same branch: a model that *did* read the page and
+/// found nothing on it is a conclusion about the page, and stays terminal.
+#[test]
+fn a_page_the_model_says_is_blank_stays_terminal() {
+    let (base, _calls) = spawn_inference(Mode::Ok(r#"{"findings":[]}"#.to_string()));
+    let inf = inference_client(&base);
+    let fx = setup(b"ocr owner blank", &[b"blank page"]);
+    let mut journal = Journal::load(fx.journal_dir.path());
+
+    let report = svastha_node::ocr::run(
         &fx.node_client,
         &fx.cache,
         &fx.state,
@@ -367,7 +420,42 @@ fn malformed_inference_output_proposes_nothing() {
         &mut journal,
     )
     .unwrap();
-    assert_eq!(report2.empties, 0, "empty source is terminal");
+    assert_eq!(report.empties, 1, "recorded processed-empty, not proposed");
+    assert_eq!(report.failed, 0);
+    assert!(
+        !journal.eligible(&hex_ed(&fx.owner), &fx.sources[0], now_secs() + 86_400),
+        "empty is terminal"
+    );
+}
+
+/// The source-line guard's rejection path, end to end through the node: a
+/// finding that does not quote the line it cites is dropped and counted, and
+/// only the verified one reaches the owner's mailbox.
+#[test]
+fn a_finding_that_does_not_quote_its_line_never_reaches_the_owner() {
+    let (base, _calls) = spawn_inference(Mode::Ok(one_good_and_one_cross_row_finding()));
+    let inf = inference_client(&base);
+    let fx = setup(b"ocr owner guard", &[b"page bytes"]);
+    let mut journal = Journal::load(fx.journal_dir.path());
+
+    let report = svastha_node::ocr::run(
+        &fx.node_client,
+        &fx.cache,
+        &fx.state,
+        &inf,
+        &StubReader::page(),
+        &resumed(&fx.journal_dir),
+        &mut journal,
+    )
+    .unwrap();
+    assert_eq!(report.dropped_findings, 1, "the guard rejected one finding");
+    assert_eq!(report.proposals, 1, "and the verified one still ships");
+
+    let proposals = read_proposals(&fx.owner_client, &fx.owner);
+    assert_eq!(proposals.len(), 1);
+    let drafts = &proposals[0].1.proposals;
+    assert_eq!(drafts.len(), 1, "only the verified finding was proposed");
+    assert_eq!(drafts[0].event.code.as_ref().unwrap().code, "8480-6");
 }
 
 #[test]
@@ -552,6 +640,10 @@ fn a_failing_page_backs_off_without_wedging_the_queue() {
 /// guard, the journal, and the proposal deposit.
 struct StubReader {
     lines: Vec<String>,
+    unreadable: bool,
+    /// Pages this reader was asked to read — the in-process OCR pass is the
+    /// expensive half, so a test about the per-pass cap has to count it.
+    reads: Arc<AtomicUsize>,
 }
 
 impl StubReader {
@@ -564,12 +656,39 @@ impl StubReader {
                 "Vitals 2026-03-03".to_string(),
                 "Systolic blood pressure 120 mm[Hg]".to_string(),
             ],
+            unreadable: false,
+            reads: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    /// A reader that fails on every page, as the real one does on a photograph
+    /// it cannot make sense of.
+    fn unreadable() -> Self {
+        Self {
+            unreadable: true,
+            ..Self::page()
+        }
+    }
+
+    /// A reader that finds no text at all — a blank or unrecognizable page.
+    fn blank() -> Self {
+        Self {
+            lines: vec![],
+            ..Self::page()
+        }
+    }
+
+    fn reads(&self) -> usize {
+        self.reads.load(Ordering::SeqCst)
     }
 }
 
 impl svastha_node::transcribe::PageReader for StubReader {
     fn transcribe(&self, _bytes: &[u8]) -> anyhow::Result<Vec<String>> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        if self.unreadable {
+            anyhow::bail!("this page could not be read");
+        }
         Ok(self.lines.clone())
     }
 }
@@ -635,6 +754,26 @@ fn a_fresh_node_reads_nothing_until_it_is_resumed() {
     assert_eq!(report.proposals, 3);
 }
 
+/// The cap is read from a process-wide env var at load time, so the tests that
+/// set it serialize through this — otherwise one test's `remove_var` can land
+/// between another's `set_var` and its `load`.
+static CAP_ENV: Mutex<()> = Mutex::new(());
+
+/// A resumed control with the per-pass cap forced to `pages`.
+fn capped(dir: &tempfile::TempDir, pages: usize) -> svastha_node::ocr_control::OcrControl {
+    let mut control = {
+        let _guard = CAP_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: the lock above makes this the only thread touching the var.
+        unsafe { std::env::set_var("SVASTHA_NODE_OCR_MAX_PAGES_PER_PASS", pages.to_string()) };
+        let control = svastha_node::ocr_control::OcrControl::load(dir.path());
+        unsafe { std::env::remove_var("SVASTHA_NODE_OCR_MAX_PAGES_PER_PASS") };
+        control
+    };
+    control.set_paused(false).unwrap();
+    assert_eq!(control.max_pages_per_pass(), pages);
+    control
+}
+
 /// A backlog arrives as reviewable batches, not a flood — and the next pass
 /// picks up exactly where this one stopped.
 #[test]
@@ -646,13 +785,7 @@ fn reads_at_most_the_cap_per_pass() {
         &[b"page one", b"page two", b"page three", b"page four"],
     );
     let mut journal = Journal::load(fx.journal_dir.path());
-
-    // SAFETY: single-threaded test; set before the control is loaded.
-    unsafe { std::env::set_var("SVASTHA_NODE_OCR_MAX_PAGES_PER_PASS", "2") };
-    let mut control = svastha_node::ocr_control::OcrControl::load(fx.journal_dir.path());
-    unsafe { std::env::remove_var("SVASTHA_NODE_OCR_MAX_PAGES_PER_PASS") };
-    control.set_paused(false).unwrap();
-    assert_eq!(control.max_pages_per_pass(), 2);
+    let control = capped(&fx.journal_dir, 2);
 
     let first = svastha_node::ocr::run(
         &fx.node_client,
@@ -691,4 +824,109 @@ fn reads_at_most_the_cap_per_pass() {
     .unwrap();
     assert_eq!(third.proposals, 0, "and then it is done");
     assert_eq!(third.deferred_to_next_pass, 0);
+}
+
+/// The cap has to bound *work*, not successes. A failing page costs the same
+/// full in-process OCR pass as a successful one, so counting only successes let
+/// a vault of failing pages run unbounded reads in one reconcile — the loop the
+/// cap exists to protect.
+#[test]
+fn a_page_that_cannot_be_read_consumes_the_cap_like_any_other() {
+    let (base, _calls) = spawn_inference(Mode::Ok(one_bp_finding()));
+    let inf = inference_client(&base);
+    let fx = setup(
+        b"ocr owner unreadable",
+        &[b"page one", b"page two", b"page three", b"page four"],
+    );
+    let mut journal = Journal::load(fx.journal_dir.path());
+    let control = capped(&fx.journal_dir, 2);
+
+    let reader = StubReader::unreadable();
+    let report = svastha_node::ocr::run(
+        &fx.node_client,
+        &fx.cache,
+        &fx.state,
+        &inf,
+        &reader,
+        &control,
+        &mut journal,
+    )
+    .unwrap();
+    assert_eq!(report.failed, 2, "two attempts, not four");
+    assert_eq!(
+        reader.reads(),
+        2,
+        "the pass actually stopped reading; the accounting is not the point"
+    );
+    assert!(
+        report.deferred_to_next_pass > 0,
+        "the untouched pages are deferred, not lost"
+    );
+}
+
+/// The same defect on the other early-`continue`: a page the reader gets
+/// through but finds no text on still cost a full OCR pass.
+#[test]
+fn a_blank_page_consumes_the_cap_like_any_other() {
+    let (base, _calls) = spawn_inference(Mode::Ok(one_bp_finding()));
+    let inf = inference_client(&base);
+    let fx = setup(
+        b"ocr owner blank pages",
+        &[b"page one", b"page two", b"page three", b"page four"],
+    );
+    let mut journal = Journal::load(fx.journal_dir.path());
+    let control = capped(&fx.journal_dir, 2);
+
+    let reader = StubReader::blank();
+    let report = svastha_node::ocr::run(
+        &fx.node_client,
+        &fx.cache,
+        &fx.state,
+        &inf,
+        &reader,
+        &control,
+        &mut journal,
+    )
+    .unwrap();
+    assert_eq!(report.empties, 2, "two attempts, not four");
+    assert_eq!(reader.reads(), 2);
+    assert!(report.deferred_to_next_pass > 0);
+}
+
+/// `job_status` is a gauge the owner reads over the admin surface. Pausing
+/// stops the reading, not the reporting: an owner who pauses and then asks what
+/// is outstanding must not be shown whatever the number happened to be when
+/// they paused.
+#[test]
+fn a_paused_pass_still_refreshes_job_status() {
+    let (base, _calls) = spawn_inference(Mode::Ok(one_bp_finding()));
+    let inf = inference_client(&base);
+    let fx = setup(b"ocr owner paused status", &[b"page one"]);
+    let mut journal = Journal::load(fx.journal_dir.path());
+
+    // A stale gauge, as a run before the pause would have left it.
+    fx.state.lock().unwrap().record_ocr_run(7, 3, 1);
+
+    let control = svastha_node::ocr_control::OcrControl::load(fx.journal_dir.path());
+    let report = svastha_node::ocr::run(
+        &fx.node_client,
+        &fx.cache,
+        &fx.state,
+        &inf,
+        &StubReader::page(),
+        &control,
+        &mut journal,
+    )
+    .unwrap();
+    assert!(report.paused);
+
+    let jobs = fx.state.lock().unwrap().job_status();
+    assert_eq!(
+        jobs.queued, 0,
+        "the queued gauge is refreshed while paused, not frozen"
+    );
+    // The cumulative totals are a record of work done, and a paused pass did
+    // none — refreshing the gauge must not inflate them.
+    assert_eq!(jobs.processed, 3);
+    assert_eq!(jobs.failed, 1);
 }

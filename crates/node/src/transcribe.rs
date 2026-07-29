@@ -35,6 +35,23 @@ pub const DEFAULT_MODELS_DIR: &str = "/models";
 const DETECTION_MODEL: &str = "text-detection.rten";
 const RECOGNITION_MODEL: &str = "text-recognition.rten";
 
+/// Decode bounds for one page.
+///
+/// `image` already defaults to a 512 MiB allocation ceiling, but that one is
+/// best-effort and a decoder may ignore it; the *dimension* limits are the ones
+/// the crate treats as strict, and there were none — so a page header declaring
+/// 60000 × 60000 was believed all the way to `into_rgb8`, which then asked for
+/// ten gigabytes on a node several households may share.
+///
+/// 12000 px an edge is past any real page — 600 dpi of a twenty-inch scan, and
+/// a 108-megapixel phone photo is 12000 × 9000 — and 12000 × 12000 × 3 ≈ 412 MiB
+/// of output sits under the allocation ceiling, so the two bounds agree instead
+/// of one quietly making the other unreachable. Reading is serial (one page at a
+/// time, per owner), so this is the node's peak rather than a per-page tax that
+/// multiplies.
+const MAX_PAGE_DIMENSION: u32 = 12_000;
+const MAX_PAGE_ALLOC: u64 = 512 * 1024 * 1024;
+
 /// Stage A as the OCR pass sees it.
 ///
 /// A trait rather than a concrete type so the pass can be exercised without
@@ -82,9 +99,7 @@ impl Transcriber {
     }
 
     fn read(&self, bytes: &[u8]) -> Result<Vec<String>> {
-        let image = image::load_from_memory(bytes)
-            .context("could not decode this page as an image")?
-            .into_rgb8();
+        let image = decode_page(bytes, page_limits())?;
         let source = ImageSource::from_bytes(image.as_raw(), image.dimensions())
             .map_err(|e| anyhow!("could not prepare this page for reading: {e}"))?;
         let input = self
@@ -115,6 +130,29 @@ impl PageReader for Transcriber {
     fn transcribe(&self, bytes: &[u8]) -> Result<Vec<String>> {
         self.read(bytes)
     }
+}
+
+/// The bounds every page is decoded under. See [`MAX_PAGE_DIMENSION`].
+fn page_limits() -> image::Limits {
+    let mut limits = image::Limits::no_limits();
+    limits.max_image_width = Some(MAX_PAGE_DIMENSION);
+    limits.max_image_height = Some(MAX_PAGE_DIMENSION);
+    limits.max_alloc = Some(MAX_PAGE_ALLOC);
+    limits
+}
+
+/// Decode one page's bytes under `limits`. A page that exceeds them fails on the
+/// same path as a corrupt one: from the caller's side it is a page that could
+/// not be read, which the OCR pass already knows how to back off from.
+fn decode_page(bytes: &[u8], limits: image::Limits) -> Result<image::RgbImage> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .context("could not decode this page as an image")?;
+    reader.limits(limits);
+    Ok(reader
+        .decode()
+        .context("could not decode this page as an image")?
+        .into_rgb8())
 }
 
 fn load_model(dir: &Path, name: &str) -> Result<Model> {
@@ -154,6 +192,54 @@ mod tests {
     #[test]
     fn an_empty_transcript_numbers_to_nothing() {
         assert_eq!(numbered(&[]), "");
+    }
+
+    /// A real PNG of the given size. One pixel tall keeps it cheap: the point is
+    /// the size the *header* declares, which is what the limits check.
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::RgbImage::new(width, height)
+            .write_to(&mut out, image::ImageFormat::Png)
+            .expect("encode png");
+        out.into_inner()
+    }
+
+    #[test]
+    fn a_page_past_the_dimension_limit_is_refused_rather_than_allocated() {
+        let oversized = png(MAX_PAGE_DIMENSION + 1, 1);
+        let err = decode_page(&oversized, page_limits())
+            .expect_err("an oversized page must be refused, not decoded");
+        assert!(
+            matches!(
+                err.downcast_ref::<image::ImageError>(),
+                Some(image::ImageError::Limits(_))
+            ),
+            "must fail on the declared size before anything is allocated: {err:#}"
+        );
+        // ...and it reaches the caller as an unreadable page, which the OCR pass
+        // already backs off from.
+        assert!(
+            format!("{err:#}").contains("could not decode this page"),
+            "got: {err:#}"
+        );
+        // The same bytes decode without the bounds, so it is the limits doing
+        // the refusing and not something else wrong with the fixture.
+        assert!(decode_page(&oversized, image::Limits::no_limits()).is_ok());
+    }
+
+    #[test]
+    fn a_page_the_size_of_a_real_scan_still_reads() {
+        assert!(decode_page(&png(1200, 1600), page_limits()).is_ok());
+    }
+
+    #[test]
+    fn a_corrupt_page_is_an_error_not_a_panic() {
+        let err = decode_page(b"not an image at all", page_limits())
+            .expect_err("garbage bytes are not a page");
+        assert!(
+            format!("{err:#}").contains("could not decode this page"),
+            "got: {err:#}"
+        );
     }
 
     #[test]

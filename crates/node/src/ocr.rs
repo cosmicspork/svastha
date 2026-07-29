@@ -109,6 +109,11 @@ pub fn run(
     // nothing to do with whether we are reading. Only the reading stops.
     if control.paused() {
         report.paused = true;
+        // `queued` is a gauge, not a record of this pass. Skipping the record
+        // while paused freezes it at whatever it was the moment the owner
+        // paused, so an owner who pauses and then asks what is outstanding is
+        // answered with a stale number.
+        record_run(state, journal, &report);
         return Ok(report);
     }
 
@@ -124,8 +129,8 @@ pub fn run(
             }
             // Stand down for this pass once the cap is reached; the next
             // reconcile picks up where this left off. Counted against pages
-            // actually read, not pages skipped, so a large already-processed
-            // vault still makes progress on its few new pages.
+            // attempted, not pages skipped, so a large already-processed vault
+            // still makes progress on its few new pages.
             if read_this_pass >= control.max_pages_per_pass() {
                 report.deferred_to_next_pass += 1;
                 break 'outer;
@@ -139,6 +144,13 @@ pub fn run(
                     continue;
                 }
             };
+
+            // Counted before the read, not after a successful one: the OCR pass
+            // below costs the same whether the page comes back as text, as
+            // nothing, or as an error, so charging only the successes let a
+            // vault of unreadable pages run unbounded reads in one reconcile —
+            // exactly the loop the cap exists to bound.
+            read_this_pass += 1;
 
             // Stage A, in-process: the page becomes text here and the bytes go
             // no further. A page that cannot be read is terminal for this pass —
@@ -167,8 +179,6 @@ pub fn run(
                 }
             };
 
-            read_this_pass += 1;
-
             // Stage B: only the transcript crosses to the endpoint.
             match inference.code_page(&crate::transcribe::numbered(&lines)) {
                 Err(e) => {
@@ -188,6 +198,22 @@ pub fn run(
                     // proposed. This is what a single read-and-code pass could not do.
                     let extracted = extract::parse_lines(&answer, &lines);
                     report.dropped_findings += extracted.dropped;
+                    // A reply that is not a findings object at all is the coding
+                    // model failing to format an answer, not a verdict that the
+                    // page is blank — and `mark_empty` is terminal, so treating
+                    // it as one would bury a readable page for good over a
+                    // formatting quirk. Back off and try again like any other
+                    // transient failure.
+                    if extracted.unparseable {
+                        journal.mark_failed(&job.owner_hex, &source_id, now_secs)?;
+                        report.failed += 1;
+                        tracing::warn!(
+                            owner = short(&job.owner_hex),
+                            model = inference.model(),
+                            "could not parse the coding model's reply; backing off this page"
+                        );
+                        continue;
+                    }
                     if extracted.drafts.is_empty() {
                         journal.mark_empty(&job.owner_hex, &source_id)?;
                         report.empties += 1;
@@ -219,13 +245,20 @@ pub fn run(
         }
     }
 
-    let queued = journal.awaiting_retry();
+    record_run(state, journal, &report);
+    Ok(report)
+}
+
+/// Fold one pass's outcome into the job-status counters: refresh the `queued`
+/// gauge from the journal and add this pass's work to the cumulative totals.
+/// Called on every path out of [`run`], including the paused one, where the
+/// work is zero but the gauge still has to be current.
+fn record_run(state: &Mutex<NodeState>, journal: &Journal, report: &OcrReport) {
     state.lock().expect("node state mutex").record_ocr_run(
-        queued,
+        journal.awaiting_retry(),
         report.proposals + report.empties,
         report.failed,
     );
-    Ok(report)
 }
 
 /// Snapshot each owner's image-attachment work list under the state lock.

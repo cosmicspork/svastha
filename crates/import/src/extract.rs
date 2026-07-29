@@ -73,40 +73,39 @@ cannot read — omit the finding instead.
 Omit a field rather than guessing. Do not invent codes. Return {\"findings\": []} \
 if nothing is legible.";
 
-/// One finding as the model emits it (all fields optional and tolerant — an
-/// unknown extra key is ignored, a missing key defaults). This is the *only*
-/// place untrusted model JSON is shaped; every field is validated before it
-/// becomes an [`EventDraft`].
-#[derive(Debug, Default, Deserialize)]
+/// One finding, already shaped out of the model's JSON by [`finding_from_json`].
+/// This is the *only* place untrusted model JSON is shaped; every field is
+/// validated before it becomes an [`EventDraft`].
+#[derive(Debug, Default)]
 struct Finding {
-    #[serde(default)]
     kind: String,
     /// The 1-based numbered line this fact was read from. Absent on the legacy
     /// single-pass path, which has no transcript to point at.
-    #[serde(default)]
     source_line: Option<usize>,
-    #[serde(default)]
     system: String,
-    #[serde(default)]
     code: String,
-    #[serde(default)]
     display: String,
-    #[serde(default)]
     value_quantity: String,
-    #[serde(default)]
     unit: String,
-    #[serde(default)]
     value_text: String,
-    #[serde(default)]
     effective_at: String,
-    // `confidence` is accepted (unknown fields are ignored) but intentionally
-    // unused: low confidence is the approval loop's job, not a drop reason.
+    // `confidence` is emitted by the model and intentionally not read: low
+    // confidence is the approval loop's job, not a drop reason.
 }
 
+/// The findings array as it arrives, each element still raw JSON.
+///
+/// Deriving `Deserialize` on [`Finding`] directly looks equivalent and is not.
+/// Serde has no per-field tolerance, so one wrongly-typed field — and
+/// `"value_quantity": 4.1` instead of `"4.1"` is routine model output — fails
+/// the *whole* array, and the answer then arrives as zero drafts and zero
+/// dropped: a page's worth of readings gone, and indistinguishable from a page
+/// with nothing on it. Holding the elements as `Value` lets each one be shaped
+/// on its own, so a malformation costs its own finding and no more.
 #[derive(Debug, Default, Deserialize)]
-struct Findings {
+struct RawFindings {
     #[serde(default)]
-    findings: Vec<Finding>,
+    findings: Vec<serde_json::Value>,
 }
 
 /// The result of parsing one model answer: the valid drafts, and how many
@@ -115,6 +114,12 @@ struct Findings {
 pub struct Extraction {
     pub drafts: Vec<EventDraft>,
     pub dropped: usize,
+    /// The answer held no findings object at all — prose, or JSON of some other
+    /// shape. Distinct from an empty `findings` list, and the distinction is
+    /// load-bearing: "I could not parse this reply" is a formatting failure
+    /// worth retrying, while "this page has nothing on it" is a conclusion
+    /// about the page that a caller may record terminally.
+    pub unparseable: bool,
 }
 
 /// Parse a model answer into draft events, **without** source-line verification.
@@ -137,15 +142,23 @@ pub fn parse_lines(answer: &str, lines: &[String]) -> Extraction {
     parse_inner(answer, Some(lines))
 }
 
-/// Never errors: unparseable output yields an empty extraction, and each
-/// individually-bad finding is dropped and counted, so the worst case is
-/// "nothing proposed", never a bad proposal.
+/// Never errors: an answer that is not a findings object at all yields an empty
+/// extraction flagged [`Extraction::unparseable`], and each individually-bad
+/// finding is dropped and counted, so the worst case is "nothing proposed",
+/// never a bad proposal.
 fn parse_inner(answer: &str, lines: Option<&[String]>) -> Extraction {
-    let Some(parsed) = parse_json_object::<Findings>(answer) else {
-        return Extraction::default();
+    let Some(parsed) = parse_json_object::<RawFindings>(answer) else {
+        return Extraction {
+            unparseable: true,
+            ..Default::default()
+        };
     };
     let mut out = Extraction::default();
-    for finding in parsed.findings {
+    for raw in &parsed.findings {
+        let Some(finding) = finding_from_json(raw) else {
+            out.dropped += 1;
+            continue;
+        };
         let verified = match lines {
             Some(lines) => quotes_back(&finding, lines),
             None => true,
@@ -156,6 +169,54 @@ fn parse_inner(answer: &str, lines: Option<&[String]>) -> Extraction {
         }
     }
     out
+}
+
+/// Shape one raw JSON finding into a [`Finding`], or `None` when it cannot be
+/// read at all — in which case the caller drops and counts it.
+///
+/// Tolerance stops at coercion, not repair. A number or a boolean where the
+/// schema asks for a string is the same claim written in a different JSON type,
+/// so it is read as its literal text and then faces the guard unchanged. A
+/// structure where a scalar belongs (`"display": {"text": "Potassium"}`) is not
+/// a claim this can read without choosing which part of it to believe, so the
+/// finding is dropped rather than guessed into shape — as is an array element
+/// that is not an object at all.
+fn finding_from_json(v: &serde_json::Value) -> Option<Finding> {
+    use serde_json::Value;
+    let obj = v.as_object()?;
+    let field = |key: &str| -> Option<String> {
+        match obj.get(key) {
+            None | Some(Value::Null) => Some(String::new()),
+            Some(Value::String(s)) => Some(s.clone()),
+            Some(Value::Number(n)) => Some(n.to_string()),
+            Some(Value::Bool(b)) => Some(b.to_string()),
+            Some(Value::Array(_) | Value::Object(_)) => None,
+        }
+    };
+    Some(Finding {
+        kind: field("kind")?,
+        source_line: parse_source_line(&field("source_line")?),
+        system: field("system")?,
+        code: field("code")?,
+        display: field("display")?,
+        value_quantity: field("value_quantity")?,
+        unit: field("unit")?,
+        value_text: field("value_text")?,
+        effective_at: field("effective_at")?,
+    })
+}
+
+/// The line a finding cites, as a 1-based index. JSON has one number type, so
+/// `2`, `2.0` and `"2"` are the same citation and all three are read as line 2.
+/// Anything else — a fraction, a zero, a word — cites no line at all, which
+/// [`quotes_back`] then treats as the unverifiable claim it is.
+fn parse_source_line(s: &str) -> Option<usize> {
+    let t = s.trim();
+    if let Ok(n) = t.parse::<usize>() {
+        return (n > 0).then_some(n);
+    }
+    let f = t.parse::<f64>().ok()?;
+    (f.fract() == 0.0 && f >= 1.0 && f <= usize::MAX as f64).then_some(f as usize)
 }
 
 /// Whether a finding's cited line actually contains what it claims to have found.
@@ -730,6 +791,113 @@ mod tests {
         assert_eq!(parse("{ not json").drafts.len(), 0);
     }
 
+    /// Two findings, both correctly cited, as the baseline the tolerance tests
+    /// below vary one field of.
+    fn panel() -> Vec<String> {
+        vec![
+            "Sodium       139   mmol/L   135-145".to_string(),
+            "Potassium    4.1   mmol/L   3.5-5.1".to_string(),
+        ]
+    }
+
+    #[test]
+    fn two_correctly_cited_findings_both_survive() {
+        let answer = r#"{"findings":[
+            {"kind":"observation","source_line":1,"display":"Sodium","value_quantity":"139"},
+            {"kind":"observation","source_line":2,"display":"Potassium","value_quantity":"4.1"}
+        ]}"#;
+        let ex = parse_lines(answer, &panel());
+        assert_eq!(ex.drafts.len(), 2);
+        assert_eq!(ex.dropped, 0);
+    }
+
+    /// The routine failure this tolerance exists for. `serde` has no per-field
+    /// tolerance: one JSON number where the schema asks for a string failed the
+    /// *whole* `findings` deserialize, and the answer came back as zero drafts
+    /// and zero dropped — a page's worth of readings silently gone.
+    #[test]
+    fn a_number_where_a_string_belongs_costs_nothing() {
+        let answer = r#"{"findings":[
+            {"kind":"observation","source_line":1,"display":"Sodium","value_quantity":"139"},
+            {"kind":"observation","source_line":2,"display":"Potassium","value_quantity":4.1}
+        ]}"#;
+        let ex = parse_lines(answer, &panel());
+        assert_eq!(ex.drafts.len(), 2, "the sibling finding must survive");
+        assert_eq!(ex.dropped, 0, "and a number is a value, not a malformation");
+        match ex.drafts[1].value.as_ref().unwrap() {
+            EventValue::Quantity { value, .. } => assert_eq!(value, "4.1"),
+            _ => panic!("expected quantity"),
+        }
+    }
+
+    /// A structure where a scalar belongs is not coercible into anything the
+    /// guard could check, so that finding is dropped — alone, and counted.
+    #[test]
+    fn a_structural_field_drops_its_own_finding_only() {
+        let answer = r#"{"findings":[
+            {"kind":"observation","source_line":1,"display":"Sodium","value_quantity":"139"},
+            {"kind":"observation","source_line":2,"display":{"text":"Potassium"},
+             "value_quantity":"4.1"}
+        ]}"#;
+        let ex = parse_lines(answer, &panel());
+        assert_eq!(ex.drafts.len(), 1);
+        assert_eq!(ex.dropped, 1);
+
+        // Nor may a findings entry that is not an object at all take the rest
+        // of the array down with it.
+        let not_objects = r#"{"findings":[
+            "Sodium 139",
+            {"kind":"observation","source_line":2,"display":"Potassium","value_quantity":"4.1"}
+        ]}"#;
+        let ex = parse_lines(not_objects, &panel());
+        assert_eq!(ex.drafts.len(), 1);
+        assert_eq!(ex.dropped, 1);
+    }
+
+    #[test]
+    fn a_source_line_written_as_a_number_still_cites_its_line() {
+        // JSON has one number type, so a model may write the line as 2, 2.0 or
+        // "2" — all of them mean line 2.
+        for cited in ["2", "2.0", "\"2\""] {
+            let answer = format!(
+                r#"{{"findings":[{{"kind":"observation","source_line":{cited},
+                   "display":"Potassium","value_quantity":"4.1"}}]}}"#
+            );
+            let ex = parse_lines(&answer, &panel());
+            assert_eq!(ex.drafts.len(), 1, "source_line written as {cited}");
+        }
+
+        // A fraction names no line, so it is unverifiable and drops — but only
+        // itself.
+        let mixed = r#"{"findings":[
+            {"kind":"observation","source_line":2.5,"display":"Potassium","value_quantity":"4.1"},
+            {"kind":"observation","source_line":1,"display":"Sodium","value_quantity":"139"}
+        ]}"#;
+        let ex = parse_lines(mixed, &panel());
+        assert_eq!(ex.drafts.len(), 1);
+        assert_eq!(ex.dropped, 1);
+    }
+
+    /// "I could not parse this answer" and "this page has nothing on it" are
+    /// different conclusions, and a caller that records an outcome per page
+    /// (the node's journal marks *empty* terminally) must be able to tell them
+    /// apart. Before this they were the same value.
+    #[test]
+    fn an_unparseable_answer_is_not_a_page_with_nothing_on_it() {
+        assert!(parse("I could not read the image.").unparseable);
+        assert!(parse("").unparseable);
+        // The right shape, the wrong type for `findings` — still no answer.
+        assert!(parse(r#"{"findings":"none"}"#).unparseable);
+
+        let said_nothing = parse(r#"{"findings":[]}"#);
+        assert!(
+            !said_nothing.unparseable,
+            "an empty list is an answer: the model read the page and found nothing"
+        );
+        assert_eq!(said_nothing.drafts.len(), 0);
+        assert_eq!(said_nothing.dropped, 0);
+    }
+
     #[test]
     fn tolerates_prose_and_fences_around_json() {
         let answer = "Here is what I found:\n```json\n{\"findings\":[{\"kind\":\"observation\",\"value_text\":\"note\"}]}\n```\nHope that helps!";
@@ -780,11 +948,15 @@ mod tests {
 
         // A finding that cited nothing would be dropped for the wrong reason and
         // quietly turn the count below into a weaker claim than it reads as.
-        let parsed: Findings = parse_json_object(PANEL_CROSS_ROW).expect("fixture parses");
+        let parsed: RawFindings = parse_json_object(PANEL_CROSS_ROW).expect("fixture parses");
         assert!(
-            parsed.findings.iter().all(|f| f
-                .source_line
-                .is_some_and(|n| (1..=transcript.len()).contains(&n))),
+            parsed
+                .findings
+                .iter()
+                .map(|v| finding_from_json(v).expect("fixture finding is well-formed"))
+                .all(|f| f
+                    .source_line
+                    .is_some_and(|n| (1..=transcript.len()).contains(&n))),
             "every finding in the cross-row fixture must cite a real line"
         );
 
