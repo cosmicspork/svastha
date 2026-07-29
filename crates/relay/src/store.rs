@@ -24,9 +24,22 @@ pub trait BlobStore: Send + Sync {
     /// Fetch a blob, or `None` if this owner has no blob under `id`.
     fn get(&self, owner: &[u8; 32], id: &str) -> io::Result<Option<Vec<u8>>>;
     /// Byte length of a blob, or `None` if this owner has no blob under `id`.
-    /// Lets a caller budget for a blob before reading its bytes — a real
-    /// backend can `stat` rather than buffer (see `FsStore`).
-    fn size(&self, owner: &[u8; 32], id: &str) -> io::Result<Option<u64>>;
+    /// A **racy preflight hint, not authoritative**: nothing pins it to a
+    /// snapshot with a subsequent `get` on the same store, so a concurrent
+    /// `put`/`delete` between the two calls can make the real bytes disagree
+    /// with what this returned — a caller budgeting against it must recheck
+    /// against `get`'s actual result before committing to anything sized by
+    /// this (see `framed_page`).
+    ///
+    /// Defaults to a full `get` (so a `BlobStore` that only implements the
+    /// other four methods still compiles — this trait is public and the crate
+    /// is semver-versioned, and a newly *required* method would break every
+    /// external backend on a non-major release). A real backend should
+    /// override this with a cheap `stat` instead of buffering (see
+    /// `FsStore`).
+    fn size(&self, owner: &[u8; 32], id: &str) -> io::Result<Option<u64>> {
+        Ok(self.get(owner, id)?.map(|blob| blob.len() as u64))
+    }
     /// List the ids this owner has stored.
     fn list(&self, owner: &[u8; 32]) -> io::Result<Vec<String>>;
     /// Delete a blob; returns whether one existed.
@@ -196,6 +209,39 @@ mod tests {
         assert!(store.delete(&o, "rec1").unwrap());
         assert_eq!(store.get(&o, "rec1").unwrap(), None);
         assert!(!store.delete(&o, "rec1").unwrap());
+    }
+
+    /// A `BlobStore` that only implements the four pre-existing methods —
+    /// standing in for an external backend written before `size` existed —
+    /// still compiles and gives a correct (if unstated) answer via the
+    /// trait's default. This is the non-breaking-ness `size` promises, not
+    /// just an aspiration.
+    struct MinimalStore(MemoryStore);
+
+    impl BlobStore for MinimalStore {
+        fn put(&self, owner: &[u8; 32], id: &str, blob: Vec<u8>) -> io::Result<()> {
+            self.0.put(owner, id, blob)
+        }
+        fn get(&self, owner: &[u8; 32], id: &str) -> io::Result<Option<Vec<u8>>> {
+            self.0.get(owner, id)
+        }
+        fn list(&self, owner: &[u8; 32]) -> io::Result<Vec<String>> {
+            self.0.list(owner)
+        }
+        fn delete(&self, owner: &[u8; 32], id: &str) -> io::Result<bool> {
+            self.0.delete(owner, id)
+        }
+        // No `size` override: the default below is exercised.
+    }
+
+    #[test]
+    fn size_defaults_correctly_for_a_store_that_predates_it() {
+        let store = MinimalStore(MemoryStore::new());
+        let o = owner(1);
+        store.put(&o, "rec1", b"hello".to_vec()).unwrap();
+
+        assert_eq!(store.size(&o, "rec1").unwrap(), Some(5));
+        assert_eq!(store.size(&o, "missing").unwrap(), None);
     }
 
     #[test]

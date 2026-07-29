@@ -873,21 +873,24 @@ async fn cors_preflight_is_allowed() {
     assert!(resp.headers().contains_key("access-control-allow-origin"));
 }
 
+/// Write a raw file straight into `owner`'s directory on `store_dir`,
+/// bypassing `PUT` (and its `valid_id` gate entirely) to reproduce
+/// legacy/foreign on-disk data — see the relay README's "Upgrading past
+/// 0.13.0". A raw control byte sorts before every ASCII id, so it lands first
+/// in every fresh sorted walk, and is valid UTF-8 (so `to_string_lossy`
+/// reproduces it losslessly) but not a valid HTTP header value.
+fn plant_unwritable_entry(store_dir: &std::path::Path, owner: &Identity) {
+    let owner_hex = hex::encode(owner.verifying_key().to_bytes());
+    let owner_dir = store_dir.join(&owner_hex);
+    std::fs::create_dir_all(&owner_dir).unwrap();
+    std::fs::write(owner_dir.join("\u{1}bad"), b"junk").unwrap();
+}
+
 #[tokio::test]
-async fn framed_page_omits_next_header_instead_of_panicking_on_a_bad_cursor_id() {
-    // `FsStore::list` trusts `read_dir` + `to_string_lossy` (see
-    // `crates/relay/src/store.rs`), so an id from legacy/foreign data on disk
-    // is not guaranteed to be a valid header value even though it's valid
-    // UTF-8. A raw control byte reproduces that without needing a genuinely
-    // non-UTF-8 filename.
+async fn a_bad_on_disk_entry_is_excluded_from_the_plain_listing() {
     let dir = tempfile::tempdir().unwrap();
     let alice = Identity::from_seed(b"alice");
-    let owner_hex = hex::encode(alice.verifying_key().to_bytes());
-    let owner_dir = dir.path().join(&owner_hex);
-    std::fs::create_dir_all(&owner_dir).unwrap();
-    // A control byte sorts before every ASCII id, so a one-id page ends here
-    // and this id becomes the would-be `next` cursor.
-    std::fs::write(owner_dir.join("\u{1}bad"), b"junk").unwrap();
+    plant_unwritable_entry(dir.path(), &alice);
 
     let app = app(
         Arc::new(FsStore::new(dir.path()).unwrap()),
@@ -898,29 +901,85 @@ async fn framed_page_omits_next_header_instead_of_panicking_on_a_bad_cursor_id()
         None,
         None,
     );
+    put_blobs(
+        &app,
+        &alice,
+        &[("ev-1", b"a".to_vec()), ("ev-2", b"b".to_vec())],
+    )
+    .await;
 
-    let put = app
-        .clone()
-        .oneshot(signed(&alice, "PUT", "/v0/blobs/zzz", b"x", now()))
-        .await
-        .unwrap();
-    assert_eq!(put.status(), StatusCode::NO_CONTENT);
+    let json = list_query(&app, &alice, "").await;
+    let mut ids: Vec<String> = json["ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    ids.sort();
+    assert_eq!(
+        ids,
+        vec!["ev-1", "ev-2"],
+        "an id no write could have produced never surfaces in a listing"
+    );
+}
 
-    let resp = app
-        .oneshot(signed(
+#[tokio::test]
+async fn a_bad_on_disk_entry_never_stalls_the_framed_walk() {
+    // Regression for a version of the fix that only made the cursor header
+    // fallible: the invalid entry sorts first, so if it were still handed to
+    // `paginate_ids`/`framed_page` at all, a client walking one id per page
+    // would see the header omitted on page one and stop there forever,
+    // permanently truncating sync before it ever reached "ev-1"/"ev-2". The
+    // fix is to filter the id out before pagination, not just survive
+    // encoding it.
+    let dir = tempfile::tempdir().unwrap();
+    let alice = Identity::from_seed(b"alice");
+    plant_unwritable_entry(dir.path(), &alice);
+
+    let app = app(
+        Arc::new(FsStore::new(dir.path()).unwrap()),
+        Arc::new(MemoryGrantStore::new()),
+        Arc::new(MemoryMailboxStore::new()),
+        Arc::new(MemoryShareStore::new()),
+        SKEW,
+        None,
+        None,
+    );
+    put_blobs(
+        &app,
+        &alice,
+        &[("ev-1", b"a".to_vec()), ("ev-2", b"b".to_vec())],
+    )
+    .await;
+
+    let mut walked: Vec<String> = Vec::new();
+    let mut cursor: Option<String> = None;
+    let mut pages: u64 = 0;
+    loop {
+        let query = match &cursor {
+            Some(c) => format!("?include=body&limit=1&cursor={c}"),
+            None => "?include=body&limit=1".to_string(),
+        };
+        let (frames, next) = fetch_framed(
+            &app,
             &alice,
-            "GET",
-            "/v0/blobs?include=body&limit=1",
-            b"",
-            now() + 1,
-        ))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    assert!(
-        resp.headers().get("svastha-next").is_none(),
-        "an id that cannot become a header value ends the walk instead of \
-         being sent as a cursor"
+            &format!("/v0/blobs{query}"),
+            now() + 10 + pages,
+        )
+        .await;
+        walked.extend(frames.into_iter().map(|(id, _)| id));
+        pages += 1;
+        assert!(pages <= 5, "walk did not terminate");
+        cursor = next;
+        if cursor.is_none() {
+            break;
+        }
+    }
+
+    assert_eq!(
+        walked,
+        vec!["ev-1", "ev-2"],
+        "both valid ids are reached even though the bad entry sorts before them"
     );
 }
 

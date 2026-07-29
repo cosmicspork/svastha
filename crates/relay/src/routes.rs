@@ -566,6 +566,16 @@ fn framed_page(
             consumed += 1;
             continue;
         };
+        // `size` and `get` are two separate calls, not a snapshot: a
+        // concurrent `put` can replace the blob in between and grow it past
+        // what the preflight above allowed. Recheck against the bytes that
+        // actually came back before committing them — same rule, same
+        // first-frame exemption — so a race can never push a page over
+        // budget; the candidate is simply deferred to the next page instead.
+        let frame_len = 2 + id.len() + 4 + blob.len();
+        if !body.is_empty() && body.len() + frame_len > BATCH_BYTE_BUDGET {
+            break;
+        }
         body.extend_from_slice(&(id.len() as u16).to_be_bytes());
         body.extend_from_slice(id.as_bytes());
         body.extend_from_slice(&(blob.len() as u32).to_be_bytes());
@@ -582,18 +592,33 @@ fn framed_page(
     };
     let mut resp = ([(header::CONTENT_TYPE, "application/octet-stream")], body).into_response();
     if let Some(next) = next {
-        // `next` came off disk (`FsStore::list`), not through `valid_id` — a
-        // legacy or foreign file in the data dir can carry bytes that are
-        // valid UTF-8 but not a valid header value (e.g. a control byte). That
-        // is untrusted data the relay does not control, so degrade rather than
-        // panic: drop the cursor and let the walk end here instead of
-        // resuming.
+        // Every caller filters ids through `valid_id` (see
+        // `drop_unwritable_ids`) before they ever reach here, so `next` is
+        // normally header-safe already. This is defense in depth for that
+        // invariant, not the primary guard: if it ever fails anyway (a filter
+        // call site missed, a future id source), degrade instead of panicking
+        // on data the relay does not fully control — drop the cursor and let
+        // the walk end here rather than resume with a value that can't be
+        // sent.
         if let Ok(value) = HeaderValue::from_str(&next) {
             resp.headers_mut()
                 .insert(HeaderName::from_static(NEXT_HEADER), value);
         }
     }
     Ok(resp)
+}
+
+/// Drop ids a write could never have produced. `BlobStore::list` (`FsStore`
+/// especially — `read_dir` + `to_string_lossy`, see the relay README's
+/// "Upgrading past 0.13.0") reflects whatever is on disk, which for a
+/// pre-namespacing data directory can include mailbox residue or foreign
+/// bytes, not just ids that came through `valid_id`-gated writes. Filtering
+/// here, before pagination or a grant's prefix scope ever sees the list,
+/// keeps such an entry from occupying a page, becoming a cursor, or stalling
+/// the walk at whatever position it sorts to — it simply isn't part of the
+/// vault as far as any listing is concerned.
+fn drop_unwritable_ids(ids: Vec<String>) -> Vec<String> {
+    ids.into_iter().filter(|id| valid_id(id)).collect()
 }
 
 /// List the ids the caller has stored. See [`paginate_ids`] for the optional
@@ -604,10 +629,12 @@ pub async fn list_blobs(
     Extension(owner): Extension<Owner>,
     Query(query): Query<ListQuery>,
 ) -> Result<Response, StatusCode> {
-    let ids = state
-        .store
-        .list(&owner.0)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let ids = drop_unwritable_ids(
+        state
+            .store
+            .list(&owner.0)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+    );
     if wants_bodies(&query) {
         // A framed page is always paginated: byte-compatibility only constrains
         // the JSON shape, and an unbounded body page is the very thing the byte
@@ -833,13 +860,15 @@ pub async fn list_shared_blobs(
 ) -> Result<Response, StatusCode> {
     let owner = valid_pubkey_hex(&owner_hex).ok_or(StatusCode::BAD_REQUEST)?;
     let grant = live_grant(&state, &owner, &caller.0)?;
-    let ids: Vec<String> = state
-        .store
-        .list(&owner)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .into_iter()
-        .filter(|id| grant.admits(id))
-        .collect();
+    let ids: Vec<String> = drop_unwritable_ids(
+        state
+            .store
+            .list(&owner)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+    )
+    .into_iter()
+    .filter(|id| grant.admits(id))
+    .collect();
     if wants_bodies(&query) {
         let limit = Some(query.limit.unwrap_or(DEFAULT_PAGE_SIZE));
         let (page, next) = paginate_ids(ids, limit, query.cursor.as_deref())?;
@@ -1233,6 +1262,96 @@ mod tests {
             store.get_calls.into_inner().unwrap(),
             vec!["a".to_string()],
             "the oversized second blob is rejected by its stat size and never buffered"
+        );
+    }
+
+    #[test]
+    fn framed_page_omits_the_cursor_header_instead_of_panicking_on_an_unencodable_id() {
+        // Defense in depth: every caller filters ids through `valid_id` (see
+        // `drop_unwritable_ids`) before a listing ever reaches `framed_page`,
+        // so this should never fire in practice. Exercised directly here,
+        // bypassing that filter, to prove the fallback itself degrades rather
+        // than panics if it ever does.
+        let owner = [0u8; 32];
+        let bad_id = "\u{1}bad".to_string();
+        let mut blobs = HashMap::new();
+        blobs.insert(bad_id.clone(), b"junk".to_vec());
+        let store = CountingStore {
+            blobs,
+            get_calls: Mutex::new(Vec::new()),
+        };
+        let page = vec![bad_id.clone()];
+
+        // `page_next` mimics `paginate_ids` reporting more ids remain past
+        // this page, with the bad id as the last one seen — the case that
+        // used to reach the removed `.expect()`.
+        let resp = framed_page(&store, &owner, &page, Some(bad_id)).unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(
+            resp.headers().get(NEXT_HEADER).is_none(),
+            "an unencodable cursor is omitted rather than panicking"
+        );
+    }
+
+    /// A `BlobStore` whose `size` can disagree with what `get` actually
+    /// returns — standing in for a concurrent `put` landing between the two
+    /// calls, which `size`'s own contract says can happen (see
+    /// `BlobStore::size`'s doc comment).
+    struct RacyStore {
+        reported_sizes: HashMap<String, u64>,
+        blobs: HashMap<String, Vec<u8>>,
+    }
+
+    impl BlobStore for RacyStore {
+        fn put(&self, _owner: &[u8; 32], _id: &str, _blob: Vec<u8>) -> io::Result<()> {
+            unimplemented!("not exercised by framed_page")
+        }
+
+        fn get(&self, _owner: &[u8; 32], id: &str) -> io::Result<Option<Vec<u8>>> {
+            Ok(self.blobs.get(id).cloned())
+        }
+
+        fn size(&self, _owner: &[u8; 32], id: &str) -> io::Result<Option<u64>> {
+            Ok(self.reported_sizes.get(id).copied())
+        }
+
+        fn list(&self, _owner: &[u8; 32]) -> io::Result<Vec<String>> {
+            unimplemented!("not exercised by framed_page")
+        }
+
+        fn delete(&self, _owner: &[u8; 32], _id: &str) -> io::Result<bool> {
+            unimplemented!("not exercised by framed_page")
+        }
+    }
+
+    #[test]
+    fn framed_page_rechecks_the_real_size_after_a_racy_stat() {
+        let owner = [0u8; 32];
+        let a = vec![1u8; 1024];
+        // "b"'s stat lies: it reports small enough to fit right after "a",
+        // but the bytes `get` actually returns (as if a concurrent `put`
+        // replaced it after the stat ran) would blow the remaining budget.
+        let mut reported_sizes = HashMap::new();
+        reported_sizes.insert("a".to_string(), a.len() as u64);
+        reported_sizes.insert("b".to_string(), 1024);
+        let mut blobs = HashMap::new();
+        blobs.insert("a".to_string(), a.clone());
+        blobs.insert("b".to_string(), vec![2u8; BATCH_BYTE_BUDGET]);
+        let store = RacyStore {
+            reported_sizes,
+            blobs,
+        };
+        let page = vec!["a".to_string(), "b".to_string()];
+
+        let resp = framed_page(&store, &owner, &page, None).unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(NEXT_HEADER)
+                .map(|v| v.to_str().unwrap().to_string()),
+            Some("a".to_string()),
+            "the racy oversized blob is deferred to the next page rather \
+             than appended past the budget its own stat promised"
         );
     }
 }
