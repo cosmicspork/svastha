@@ -718,16 +718,6 @@ describe('batched pull', () => {
     mutStore.clear()
   })
 
-  /** A page fake built straight from decoded frames. The wire framing and its
-   * parser have their own coverage (blob-batch.test.ts), so nothing here needs
-   * a real `Response`. */
-  function fakePage(ids: string[], next: string | null = null): BlobBodyPage {
-    async function* frames(): AsyncGenerator<BatchBlob> {
-      for (const id of ids) yield { id, blob: utf8(`remote-${id}`) }
-    }
-    return { kind: 'page', next, blobs: frames() }
-  }
-
   const batchIds = Array.from({ length: BATCH_PULL_THRESHOLD }, (_, i) => `bat-${i}`)
 
   /** A relay that answers the batched listing, recording every per-id fetch so
@@ -762,7 +752,7 @@ describe('batched pull', () => {
 
   it('walks pages instead of fetching each id once enough are missing', async () => {
     const relay = batchRelay(batchIds, async (cursor) =>
-      cursor === null ? fakePage(batchIds.slice(0, 5), batchIds[4]) : fakePage(batchIds.slice(5)),
+      cursor === null ? pageOf(batchIds.slice(0, 5), batchIds[4]) : pageOf(batchIds.slice(5)),
     )
     configure(relay, passthroughSealKey())
 
@@ -779,7 +769,7 @@ describe('batched pull', () => {
 
   it('marks a batched duplicate done without ticking pulledCount', async () => {
     store.set('bat-0', 'already-local') // localHas -> 'duplicate', never opened
-    const relay = batchRelay(batchIds, async () => fakePage(batchIds))
+    const relay = batchRelay(batchIds, async () => pageOf(batchIds))
     configure(relay, passthroughSealKey())
 
     await pullAll()
@@ -824,7 +814,7 @@ describe('batched pull', () => {
         return sealed
       },
     }
-    const relay = batchRelay(batchIds, async () => fakePage(batchIds))
+    const relay = batchRelay(batchIds, async () => pageOf(batchIds))
     configure(relay, failingKey)
 
     await pullAll()
@@ -845,7 +835,7 @@ describe('batched pull', () => {
     const ids = [...batchIds, 'batmut-a']
     const conditionalGets: string[] = []
     const relay = {
-      ...batchRelay(ids, async () => fakePage(ids)),
+      ...batchRelay(ids, async () => pageOf(ids)),
       async getBlobConditional(id: string): Promise<ConditionalBlob> {
         conditionalGets.push(id)
         return { status: 'missing' }
@@ -862,6 +852,50 @@ describe('batched pull', () => {
     const record = await dbGet<{ state: string; etag?: string }>('sync', 'batmut-a')
     expect(record).toMatchObject({ state: 'done' })
     expect(record?.etag).toBeUndefined()
+  })
+
+  it('clears a cached etag when a batch body arrives without one', async () => {
+    // An etag validates ONE representation. A batch frame carries no validator,
+    // so a cached one must not survive the body it was issued for: that would
+    // bind new content to the old etag, and a relay that rolls back to the old
+    // body then answers the next `If-None-Match` with 304. The device would
+    // never open the rollback, never see its own value win the merge, and never
+    // re-push it — divergence that no error surfaces.
+    mutStore.set('batmut-a', 'body-A')
+    await put('sync', {
+      id: 'batmut-a',
+      state: 'done',
+      updated_at: new Date().toISOString(),
+      etag: 'etag-A',
+    })
+    const ids = [...batchIds, 'batmut-a']
+    const batched = batchRelay(ids, async () => pageOf(ids))
+    configure(batched, passthroughSealKey())
+
+    await pullAll() // applies body B, which came with no etag of its own
+
+    expect(mutStore.get('batmut-a')).toBe('remote-batmut-a')
+    const record = await dbGet<{ etag?: string }>('sync', 'batmut-a')
+    expect(record?.etag).toBeUndefined()
+
+    // So the relay's rollback to body A cannot hide behind a 304: the next pull
+    // asks unconditionally, and sees A.
+    const ifNoneMatchSeen: (string | null)[] = []
+    const conditional = {
+      ...batchRelay(['batmut-a'], async () => {
+        throw new Error('one id is far below the batch threshold')
+      }),
+      async getBlobConditional(_id: string, ifNoneMatch: string | null): Promise<ConditionalBlob> {
+        ifNoneMatchSeen.push(ifNoneMatch)
+        return { status: 'ok', blob: utf8('body-A'), etag: 'etag-A' }
+      },
+    }
+    configure(conditional, passthroughSealKey())
+
+    await pullAll()
+
+    expect(ifNoneMatchSeen).toEqual([null])
+    expect(mutStore.get('batmut-a')).toBe('body-A')
   })
 })
 
@@ -892,5 +926,457 @@ describe('listLocalBlobIds', () => {
     expect(ids).toContain(await curationBlobIdForKey('tag:evt-a'))
     // vault.key is not a codec, so it is never enumerated.
     expect(ids).not.toContain('vault.key')
+  })
+})
+
+// --- pull-side outbox safety, poke re-runs, and walk bounds ---
+
+/** A page fake built straight from decoded frames (the wire framing has its own
+ * coverage in blob-batch.test.ts). Shared by the walk tests below. */
+function pageOf(ids: string[], next: string | null = null): BlobBodyPage {
+  async function* frames(): AsyncGenerator<BatchBlob> {
+    for (const id of ids) yield { id, blob: utf8(`remote-${id}`) }
+  }
+  return { kind: 'page', next, blobs: frames() }
+}
+
+/** Immutable filler so a test can clear `BATCH_PULL_THRESHOLD` without the ids
+ * it actually cares about having to be that numerous. */
+const padStore = new Map<string, string>()
+registerCodec({
+  prefix: 'pad-',
+  async localHas(id) {
+    return padStore.has(id)
+  },
+  async localLoad(id) {
+    const v = padStore.get(id)
+    return v === undefined ? null : utf8(v)
+  },
+  async remoteApply(id, plaintext) {
+    padStore.set(id, new TextDecoder().decode(plaintext))
+  },
+})
+const padIds = Array.from({ length: BATCH_PULL_THRESHOLD }, (_, i) => `pad-${i}`)
+
+describe('a pull whose local value wins the merge keeps its push queued', () => {
+  // Stands in for curation.ts's `remoteApply`: when the LOCAL value wins the LWW
+  // merge it re-enqueues the id, so the relay stops serving the loser. Backed by
+  // a flag rather than a real merge, keeping this about sync.ts's outbox
+  // handling (curation.test.ts owns the merge itself).
+  const localWins = new Set<string>()
+  registerCodec({
+    prefix: 'lww-',
+    mutable: true,
+    async localHas() {
+      return true
+    },
+    async localLoad(id) {
+      return utf8(`local-${id}`)
+    },
+    async remoteApply(id) {
+      if (localWins.has(id)) await enqueue([id])
+    },
+  })
+
+  beforeEach(() => {
+    localWins.clear()
+    padStore.clear()
+  })
+
+  function pushRecorder() {
+    const pushed = new Map<string, string>()
+    return {
+      pushed,
+      async putBlob(id: string, blob: Uint8Array) {
+        pushed.set(id, new TextDecoder().decode(blob))
+      },
+    }
+  }
+
+  it('batch path: the id stays pending, and a drain pushes our value', async () => {
+    localWins.add('lww-a')
+    const ids = [...padIds, 'lww-a']
+    const relay = {
+      ...pushRecorder(),
+      async getBlob(): Promise<Uint8Array | null> {
+        throw new Error('the batch walk covered every id — no per-id fetch expected')
+      },
+      async listBlobs() {
+        return ids
+      },
+      async listBlobsWithBodies() {
+        return pageOf(ids)
+      },
+    }
+    configure(relay, passthroughSealKey())
+
+    await pullAll()
+
+    expect(await dbGet('sync', 'lww-a')).toMatchObject({ state: 'pending' })
+    await drain()
+    expect(relay.pushed.get('lww-a')).toBe('local-lww-a')
+  })
+
+  it('per-id conditional path: the id stays pending, and a drain pushes our value', async () => {
+    localWins.add('lww-b')
+    const relay = {
+      ...pushRecorder(),
+      async getBlob(): Promise<Uint8Array | null> {
+        throw new Error('a conditional get should be used when the relay offers one')
+      },
+      async listBlobs() {
+        return ['lww-b']
+      },
+      async getBlobConditional(): Promise<ConditionalBlob> {
+        return { status: 'ok', blob: utf8('remote-lww-b'), etag: 'etag-b' }
+      },
+    }
+    configure(relay, passthroughSealKey())
+
+    await pullAll()
+
+    expect(await dbGet('sync', 'lww-b')).toMatchObject({ state: 'pending' })
+    await drain()
+    expect(relay.pushed.get('lww-b')).toBe('local-lww-b')
+  })
+
+  it('plain per-id path: the id stays pending, and a drain pushes our value', async () => {
+    localWins.add('lww-c')
+    const relay = {
+      ...pushRecorder(),
+      async getBlob() {
+        return utf8('remote-lww-c')
+      },
+      async listBlobs() {
+        return ['lww-c']
+      },
+    }
+    configure(relay, passthroughSealKey())
+
+    await pullAll()
+
+    expect(await dbGet('sync', 'lww-c')).toMatchObject({ state: 'pending' })
+    await drain()
+    expect(relay.pushed.get('lww-c')).toBe('local-lww-c')
+  })
+})
+
+describe('a poke that arrives mid-pull', () => {
+  const store = new Map<string, string>()
+  registerCodec({
+    prefix: 'poke-',
+    async localHas(id) {
+      return store.has(id)
+    },
+    async localLoad(id) {
+      const v = store.get(id)
+      return v === undefined ? null : utf8(v)
+    },
+    async remoteApply(id, plaintext) {
+      store.set(id, new TextDecoder().decode(plaintext))
+    },
+  })
+
+  beforeEach(() => store.clear())
+
+  it('runs exactly one follow-up pull, which sees the id the first pull missed', async () => {
+    const blobs = new Map<string, Uint8Array>([['poke-a', utf8('remote-poke-a')]])
+    let listCalls = 0
+    let poked = false
+    const relay: BlobClient = {
+      async putBlob() {},
+      async getBlob(id) {
+        if (!poked) {
+          poked = true
+          // A blob written after the in-flight pull took its listing snapshot:
+          // exactly what an SSE poke announces, and exactly what that pull can
+          // never see.
+          blobs.set('poke-b', utf8('remote-poke-b'))
+          void pullAll('poke')
+        }
+        return blobs.get(id) ?? null
+      },
+      async listBlobs() {
+        listCalls++
+        return [...blobs.keys()]
+      },
+    }
+    configure(relay, passthroughSealKey())
+
+    await pullAll()
+
+    expect(store.get('poke-b')).toBe('remote-poke-b')
+    expect(listCalls).toBe(2) // one re-run, not a queue of them
+  })
+
+  it('books its follow-up even when it lands before the listing resolves', async () => {
+    // The listing snapshot is the RELAY's, and it is fixed the moment the relay
+    // answers — while the response is still in transit, another device can write
+    // a blob and its poke can overtake that response. So no local clock can tell
+    // whether the in-flight pull covers a poke; only the trigger's source can.
+    const blobs = new Map<string, Uint8Array>([['poke-a', utf8('remote-poke-a')]])
+    let listCalls = 0
+    const relay: BlobClient = {
+      async putBlob() {},
+      async getBlob(id) {
+        return blobs.get(id) ?? null
+      },
+      async listBlobs() {
+        const snapshot = [...blobs.keys()] // L0, fixed relay-side…
+        if (++listCalls === 1) {
+          await Promise.resolve() // …and still in transit when
+          blobs.set('poke-x', utf8('remote-poke-x')) // device A writes X
+          void pullAll('poke') // and A's poke overtakes it.
+          await Promise.resolve()
+        }
+        return snapshot // L0 resolves, and cannot contain X.
+      },
+    }
+    configure(relay, passthroughSealKey())
+
+    await pullAll()
+
+    expect(store.get('poke-x')).toBe('remote-poke-x')
+    expect(listCalls).toBe(2)
+  })
+
+  it('does not lose a poke that lands at the very tail of a pull', async () => {
+    // The final rerun check and the transition back to idle have to be one
+    // indivisible step. If anything can run between them, a poke firing there
+    // (an SSE `reader.read()` continuation already sitting in the microtask
+    // queue) sets a flag no loop is left to read, and the cleanup right after
+    // discards it — the poke is gone, and the listing that missed X is already
+    // spent.
+    const blobs = new Map<string, Uint8Array>([['poke-a', utf8('remote-poke-a')]])
+    let listCalls = 0
+    const relay: BlobClient = {
+      async putBlob() {},
+      async getBlob(id) {
+        return blobs.get(id) ?? null
+      },
+      async listBlobs() {
+        listCalls++
+        return [...blobs.keys()]
+      },
+    }
+    configure(relay, passthroughSealKey())
+
+    let inFlight: Promise<void> | null = null
+    let pokePull: Promise<void> | null = null
+    let pokeJoined: boolean | null = null
+    // `pullShared` is the last thing a pull awaits, so scheduling from inside it
+    // walks the poke forward one microtask at a time into the pull's tail.
+    // Three hops is what puts it past the final rerun check; `pokeJoined` below
+    // is the canary that says so, and fails loudly if that ever drifts.
+    vi.mocked(pullShared).mockImplementationOnce(async () => {
+      void Promise.resolve()
+        .then(() => {})
+        .then(() => {})
+        .then(() => {
+          blobs.set('poke-x', utf8('remote-poke-x'))
+          pokePull = pullAll('poke')
+          pokeJoined = pokePull === inFlight
+        })
+    })
+
+    inFlight = pullAll()
+    await inFlight
+    await pokePull
+
+    expect(store.get('poke-x')).toBe('remote-poke-x')
+    expect(listCalls).toBe(2)
+    // And the canary: the poke landed after the pull had fully gone idle, which
+    // is the window this test exists for. If a refactor ever lets it arrive
+    // comfortably before the final check instead, this flips and says so rather
+    // than passing for the wrong reason.
+    expect(pokeJoined).toBe(false)
+  })
+})
+
+describe('the batch threshold is a ratio, not a raw count', () => {
+  const store = new Map<string, string>()
+  registerCodec({
+    prefix: 'rat-',
+    async localHas(id) {
+      return store.has(id)
+    },
+    async localLoad(id) {
+      const v = store.get(id)
+      return v === undefined ? null : utf8(v)
+    },
+    async remoteApply(id, plaintext) {
+      store.set(id, new TextDecoder().decode(plaintext))
+    },
+  })
+
+  beforeEach(() => store.clear())
+
+  /** `count` ids this device already holds and has marked done. */
+  async function alreadyHave(count: number): Promise<string[]> {
+    const ids = Array.from({ length: count }, (_, i) => `rat-have-${i}`)
+    const updated_at = new Date().toISOString()
+    await Promise.all(
+      ids.map(async (id) => {
+        store.set(id, `local-${id}`)
+        await put('sync', { id, state: 'done', updated_at })
+      }),
+    )
+    return ids
+  }
+
+  function walkRelay(ids: string[], pages: (cursor: string | null) => BlobBodyPage) {
+    const perIdGets: string[] = []
+    const cursors: (string | null)[] = []
+    return {
+      perIdGets,
+      cursors,
+      async putBlob() {},
+      async getBlob(id: string) {
+        perIdGets.push(id)
+        return utf8(`per-id-${id}`)
+      },
+      async listBlobs() {
+        return ids
+      },
+      async listBlobsWithBodies(cursor: string | null) {
+        cursors.push(cursor)
+        return pages(cursor)
+      },
+    }
+  }
+
+  it('25 missing out of 1200 stays on the per-id path', async () => {
+    // The catastrophic case: a batch walk re-streams all 1200 bodies (every
+    // photographed page in the vault) to apply 25 new events.
+    const have = await alreadyHave(1175)
+    const missing = Array.from({ length: 25 }, (_, i) => `rat-new-${i}`)
+    const relay = walkRelay([...have, ...missing], () => {
+      throw new Error('the batch walk should not run for a 2%-missing vault')
+    })
+    configure(relay, passthroughSealKey())
+
+    await pullAll()
+
+    expect(relay.cursors).toEqual([])
+    expect(relay.perIdGets).toEqual(missing)
+  })
+
+  it('25 missing out of 30 takes the batch path', async () => {
+    const have = await alreadyHave(5)
+    const missing = Array.from({ length: 25 }, (_, i) => `rat-new-${i}`)
+    const all = [...have, ...missing]
+    const relay = walkRelay(all, () => pageOf(all))
+    configure(relay, passthroughSealKey())
+
+    await pullAll()
+
+    expect(relay.cursors).toEqual([null])
+    expect(relay.perIdGets).toEqual([])
+    expect(store.get('rat-new-0')).toBe('remote-rat-new-0')
+  })
+
+  it('stops the walk once every id it was after has been handled', async () => {
+    const have = await alreadyHave(5)
+    const missing = Array.from({ length: 25 }, (_, i) => `rat-new-${i}`)
+    // Everything missing rides the first page; the second holds only ids this
+    // device already has, so fetching it is pure waste.
+    const relay = walkRelay([...have, ...missing], (cursor) =>
+      cursor === null ? pageOf(missing, 'page-2') : pageOf(have),
+    )
+    configure(relay, passthroughSealKey())
+
+    await pullAll()
+
+    expect(relay.cursors).toEqual([null])
+    expect(store.get('rat-new-24')).toBe('remote-rat-new-24')
+  })
+})
+
+describe('an untrusted relay cannot wedge the walk', () => {
+  const store = new Map<string, string>()
+  registerCodec({
+    prefix: 'spin-',
+    async localHas(id) {
+      return store.has(id)
+    },
+    async localLoad(id) {
+      const v = store.get(id)
+      return v === undefined ? null : utf8(v)
+    },
+    async remoteApply(id, plaintext) {
+      store.set(id, new TextDecoder().decode(plaintext))
+    },
+  })
+
+  beforeEach(() => {
+    store.clear()
+    syncStatus.update((s) => ({ ...s, lastError: null }))
+  })
+
+  it('aborts on a cursor that does not strictly advance, and recovers next pull', async () => {
+    const ids = Array.from({ length: BATCH_PULL_THRESHOLD + 5 }, (_, i) => `spin-${i}`)
+    const cursors: (string | null)[] = []
+    let calls = 0
+    const relay = {
+      async putBlob() {},
+      async getBlob(id: string) {
+        return utf8(`per-id-${id}`)
+      },
+      async listBlobs() {
+        return ids
+      },
+      async listBlobsWithBodies(cursor: string | null): Promise<BlobBodyPage> {
+        cursors.push(cursor)
+        // A,B,A,B forever — every page "advances" against the one before it,
+        // but the walk never terminates. The throw only bounds this fake so an
+        // unfixed engine fails the test instead of hanging it.
+        if (++calls > 6) throw new Error('the walk never terminated')
+        return pageOf([], cursor === 'b' ? 'a' : 'b')
+      },
+    }
+    configure(relay, passthroughSealKey())
+
+    await pullAll()
+
+    expect(cursors).toEqual([null, 'b'])
+    expect(storeGet(syncStatus).lastError).toMatch(/cursor/)
+    // The walk aborted, but the pull still finished through the per-id loop…
+    expect(store.get('spin-0')).toBe('per-id-spin-0')
+
+    // …and sync is not wedged: the next pull runs clean.
+    await pullAll()
+    expect(cursors).toEqual([null, 'b'])
+    expect(storeGet(syncStatus).lastError).toBeNull()
+  })
+
+  it('keeps a mid-walk frame failure visible after a later page succeeds', async () => {
+    const ids = Array.from({ length: BATCH_PULL_THRESHOLD }, (_, i) => `spin-${i}`)
+    const decoder = new TextDecoder()
+    const failingKey: SealKey = {
+      seal: (plaintext) => plaintext,
+      open: (sealed, aad) => {
+        if (decoder.decode(aad) === 'spin-2') throw new Error('bad envelope')
+        return sealed
+      },
+    }
+    const relay = {
+      async putBlob() {},
+      async getBlob() {
+        return null
+      },
+      async listBlobs() {
+        return ids
+      },
+      async listBlobsWithBodies(cursor: string | null): Promise<BlobBodyPage> {
+        return cursor === null ? pageOf(ids.slice(0, 5), 'page-2') : pageOf(ids.slice(5))
+      },
+    }
+    configure(relay, failingKey)
+
+    await pullAll()
+
+    expect(store.has('spin-2')).toBe(false)
+    expect(store.get('spin-19')).toBe('remote-spin-19')
+    expect(storeGet(syncStatus).lastError).toContain('bad envelope')
   })
 })

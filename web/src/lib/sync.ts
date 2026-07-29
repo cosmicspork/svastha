@@ -22,7 +22,7 @@ import { pullShared, teardownSharing } from './shared'
 import { pullMailbox, teardownMailbox } from './mailbox'
 import { bytesToBase64, base64ToBytes } from './base64'
 import { runEventStream } from './events-stream'
-import { BATCH_PULL_THRESHOLD, type BlobBodyPage } from './blob-batch'
+import { BATCH_PULL_THRESHOLD, BATCH_PULL_MIN_RATIO, type BlobBodyPage } from './blob-batch'
 
 /** The relay surface this engine needs — narrower than `RelayClient` so
  * tests can supply an in-memory fake without fighting `RelayClient`'s
@@ -449,8 +449,55 @@ async function refreshPendingCount(): Promise<void> {
   patchStatus({ pendingCount: all.filter((r) => r.state === 'pending').length })
 }
 
-async function markDone(id: string): Promise<void> {
-  await put('sync', { id, state: 'done', updated_at: new Date().toISOString() })
+/** Serializes every write to the `sync` store. `markPulled` below has to decide
+ * "is this id already queued for a push?" and act on that decision, and the read
+ * and the write are separate IDB transactions with an await between them (a
+ * store handle does not survive one). Without this, an `enqueue` landing in that
+ * gap is silently overwritten. Every writer of the store lives in this module,
+ * so one promise chain covers all of them. */
+let outboxWrites: Promise<unknown> = Promise.resolve()
+
+function withOutbox<T>(fn: () => Promise<T>): Promise<T> {
+  const next = outboxWrites.then(fn, fn)
+  outboxWrites = next.catch(() => {})
+  return next
+}
+
+/** Push-side completion: the relay now holds what we sealed, so the queue entry
+ * is spent. Unconditional — the record is `pending` here by construction, since
+ * that is how `drain` found it. */
+function markDone(id: string): Promise<void> {
+  return withOutbox(() => put('sync', { id, state: 'done', updated_at: new Date().toISOString() }))
+}
+
+/**
+ * Pull-side completion: this device now holds the relay's copy of `id`.
+ *
+ * Never downgrades a `pending` record. Applying a `cur-` blob whose LOCAL value
+ * wins the LWW merge re-enqueues that id (curation.ts) precisely so the relay
+ * stops serving the loser; writing `done` over that entry drops the push, and
+ * the winning edit then never leaves this device while every other device
+ * converges on the losing value. An immutable id is never pending at this point,
+ * so the check costs it nothing.
+ */
+function markPulled(id: string, etag?: string): Promise<void> {
+  return withOutbox(async () => {
+    const existing = await get<SyncRecord>('sync', id)
+    if (existing?.state === 'pending') return
+    await put('sync', {
+      id,
+      state: 'done',
+      updated_at: new Date().toISOString(),
+      // Only ever the validator handed back with *this exact* representation —
+      // a batch frame carries none, so any cached one is dropped here. Carrying
+      // it forward would bind the body just applied to the etag of the body
+      // before it, and a relay that rolled back to that older body could then
+      // answer the next `If-None-Match` with a 304 this device believes: it
+      // would never open the rollback, never see its own value win the merge,
+      // and never re-push it.
+      etag,
+    })
+  })
 }
 
 /** Queue blobs for push. Already-`done` ids are left alone — re-enqueuing a
@@ -464,16 +511,18 @@ async function markDone(id: string): Promise<void> {
  * for tests, and for anything that wants to know the queue write landed
  * without racing `drain`'s own reentrancy guard. */
 export async function enqueue(blobIds: string[]): Promise<void> {
-  const now = new Date().toISOString()
-  for (const id of blobIds) {
-    const existing = await get<SyncRecord>('sync', id)
-    // A mutable id (see `Codec.mutable`) can be 'done' from a stale pull or
-    // an earlier push of an older value; a fresh local write always has
-    // something new to push regardless, so it bypasses the "already done"
-    // skip that's correct for a content-addressed (immutable) blob id.
-    if (existing?.state === 'done' && !isMutableId(id)) continue
-    await put('sync', { id, state: 'pending', updated_at: now })
-  }
+  await withOutbox(async () => {
+    const now = new Date().toISOString()
+    for (const id of blobIds) {
+      const existing = await get<SyncRecord>('sync', id)
+      // A mutable id (see `Codec.mutable`) can be 'done' from a stale pull or
+      // an earlier push of an older value; a fresh local write always has
+      // something new to push regardless, so it bypasses the "already done"
+      // skip that's correct for a content-addressed (immutable) blob id.
+      if (existing?.state === 'done' && !isMutableId(id)) continue
+      await put('sync', { id, state: 'pending', updated_at: now })
+    }
+  })
   await refreshPendingCount()
 }
 
@@ -547,46 +596,99 @@ async function pushOne(blobId: string): Promise<void> {
   await markDone(blobId)
 }
 
-/** List the relay, pull anything new, and enqueue any local event missing
- * remotely (the reconcile step that makes two devices converge). */
-export async function pullAll(): Promise<void> {
-  // Single-flight. Every trigger funnels here — the SSE poke, `visibilitychange`,
-  // the 5-minute timer, Onboard's restore, and "Sync now" — and a cold vault's
-  // pull is one authenticated round trip per blob, hundreds of them. Unguarded,
-  // a phone that backgrounds and foregrounds a few times stacks whole concurrent
-  // pulls over the same ids: each re-fetches what the others are already
-  // fetching, `pulledCount` and the pending count flap as they interleave, and
-  // the device burns battery racing itself. Later callers join the in-flight
-  // pull instead of starting a rival one. `drain` has had this guard from the
-  // start; the pull side needs it more, being the long one.
-  if (pulling) return pulling
-  pulling = pullOnce().finally(() => {
-    pulling = null
-  })
-  return pulling
+/**
+ * List the relay, pull anything new, and enqueue any local event missing
+ * remotely (the reconcile step that makes two devices converge).
+ *
+ * Single-flight: every trigger funnels here, and concurrent pulls would just
+ * re-fetch each other's ids while `pulledCount` flaps between them.
+ *
+ * What a joining caller may assume depends on why it fired, which is what
+ * `trigger` carries. A `'refresh'` (`visibilitychange`, the 5-minute timer,
+ * Onboard's restore, "Sync now") asks for "whatever is there now" and names no
+ * particular blob, so joining an in-flight pull answers it. A `'poke'` names one:
+ * some other device wrote a blob and said so. The in-flight pull cannot be
+ * assumed to cover it at any point in its life — the listing snapshot is the
+ * relay's, fixed when the relay answers, and a write plus its poke can overtake
+ * that response in transit — so a poke always books a follow-up run. One,
+ * never a queue: any number of pokes collapse into a single re-run.
+ */
+export function pullAll(trigger: PullTrigger = 'refresh'): Promise<void> {
+  if (pulling) {
+    if (trigger === 'poke') rerunRequested = true
+    return pulling
+  }
+  // `pullUntilQuiet` clears `pulling` itself rather than a `.finally` here,
+  // which would run in a job of its own — see its own comment. Assigning after
+  // the call is still safe: its first `await` yields unconditionally, so the
+  // body cannot reach that cleanup before this assignment lands.
+  return (pulling = pullUntilQuiet())
 }
 
+/** Why a pull was asked for. See {@link pullAll} — it decides whether joining
+ * the in-flight pull is an honest answer. */
+export type PullTrigger = 'refresh' | 'poke'
+
 let pulling: Promise<void> | null = null
+let rerunRequested = false
+
+async function pullUntilQuiet(): Promise<void> {
+  try {
+    for (;;) {
+      rerunRequested = false
+      await pullOnce()
+      // Nothing may run between reading the flag and going idle below. A poke
+      // is one bit with no queue behind it, so one landing in such a gap would
+      // set a flag with no loop left to read it, and the cleanup would then
+      // clear it — the poke silently dropped, its blob unlisted until the
+      // 5-minute timer. `return` runs the `finally` synchronously in this same
+      // job, leaving no gap: a poke either arrives before this check (and the
+      // loop serves it) or after `pulling` is null (and starts its own run).
+      if (!rerunRequested) return
+    }
+  } finally {
+    pulling = null
+    rerunRequested = false
+  }
+}
+
+/** A bound on the walk itself, independent of the cursor check below: an
+ * untrusted relay can also hand back a strictly-advancing cursor forever. Far
+ * above any real vault's page count (the relay's own `MAX_PAGE_SIZE` puts a
+ * million blobs inside this). */
+const MAX_BATCH_PAGES = 1000
 
 /**
  * Walk the relay's batched pages, applying each frame as it streams in, and
- * report which ids the caller no longer needs to fetch one at a time.
+ * report which ids the caller no longer needs to fetch one at a time. `wanted`
+ * is what this pull is after: the walk stops as soon as all of it is handled,
+ * rather than reading the rest of a namespace this device already holds.
  *
  * "Handled" is deliberately wider than "applied": an id whose frame failed is
  * handled too, because re-fetching it per-id in the same cycle would just fail
  * the same way. It is left un-`done` instead, which is what gets it retried on
  * the next pull. Anything the walk never reached (a transport error, an old
- * relay, a truncated page) stays out of the set and falls through to the per-id
- * loop, so a partial walk is always safe.
+ * relay, a truncated page, a stop) stays out of the set and falls through to the
+ * per-id loop, so a partial walk is always safe.
  */
-async function batchPullOwn(relay: BlobClient & BatchListClient, key: SealKey): Promise<Set<string>> {
+async function batchPullOwn(
+  relay: BlobClient & BatchListClient,
+  key: SealKey,
+  wanted: ReadonlySet<string>,
+): Promise<Set<string>> {
   const handled = new Set<string>()
+  const outstanding = new Set(wanted)
+  // A frame that failed mid-walk has to still be visible when the walk ends: a
+  // later page's `noteContact` would otherwise clear the message and report a
+  // clean pull that silently skipped a blob.
+  let failed = false
   let cursor: string | null = null
-  for (;;) {
+  for (let pages = 0; ; pages++) {
     let page: BlobBodyPage
     try {
       page = await relay.listBlobsWithBodies(cursor)
-      noteContact()
+      if (failed) patchStatus({ reachable: true })
+      else noteContact()
     } catch (err) {
       noteFailure(err)
       return handled
@@ -606,12 +708,7 @@ async function batchPullOwn(relay: BlobClient & BatchListClient, key: SealKey): 
         try {
           const outcome = await applySealedBlob(id, blob, key)
           if (outcome === 'unknown') continue
-          // `markDone` stores no etag, which trades away a `cur-` id's cached
-          // validator: after a warm-vault pull big enough to cross the batch
-          // threshold, that id's next conditional GET pays one full body
-          // instead of a 304. Cheap next to the round trips this walk just
-          // saved, and only on a vault already over the threshold.
-          await markDone(id)
+          await markPulled(id)
           handled.add(id)
           // A `duplicate` was never opened and changed nothing locally, so it
           // doesn't tick — matching the per-id loop's `localHas` shortcut.
@@ -621,8 +718,14 @@ async function batchPullOwn(relay: BlobClient & BatchListClient, key: SealKey): 
         } catch (err) {
           // One bad frame doesn't end the page: the rest still apply.
           noteFailure(err)
+          failed = true
           handled.add(id)
         }
+        // Everything this pull was after is accounted for; the rest of the
+        // namespace is bytes this device already holds. Leaving the page
+        // mid-stream cancels the response body (see blob-batch.ts).
+        outstanding.delete(id)
+        if (outstanding.size === 0) return handled
       }
     } catch (err) {
       // A truncated page (the parser's `finish()` throwing) or a mid-read
@@ -631,11 +734,31 @@ async function batchPullOwn(relay: BlobClient & BatchListClient, key: SealKey): 
       return handled
     }
 
-    // A relay that keeps handing back the cursor it was given must not spin
-    // this walk forever.
-    if (page.next === null || page.next === cursor) return handled
+    if (page.next === null) return handled
+    // The relay is untrusted (docs/ARCHITECTURE.md). An honest one's `next` is
+    // the page's own last id under a lexicographic sort (`paginate_ids`), so it
+    // strictly advances; anything else — a repeated cursor, an A/B alternation —
+    // spins this walk inside the single-flight promise and kills sync until the
+    // tab reloads. Abort loudly instead, and let the per-id loop finish the
+    // cycle.
+    if (cursor !== null && page.next <= cursor) {
+      noteFailure(new Error(`relay page cursor did not advance (${page.next} after ${cursor})`))
+      return handled
+    }
+    if (pages >= MAX_BATCH_PAGES) {
+      noteFailure(new Error(`relay page walk exceeded ${MAX_BATCH_PAGES} pages`))
+      return handled
+    }
     cursor = page.next
   }
+}
+
+/** Whether a batch walk is worth it for this pull. See
+ * {@link BATCH_PULL_THRESHOLD} and {@link BATCH_PULL_MIN_RATIO} for why both a
+ * floor and a share are needed. Multiplied rather than divided so an empty
+ * relay can't produce a NaN. */
+function shouldBatchPull(missing: number, total: number): boolean {
+  return missing >= BATCH_PULL_THRESHOLD && missing >= total * BATCH_PULL_MIN_RATIO
 }
 
 async function pullOnce(): Promise<void> {
@@ -666,8 +789,8 @@ async function pullOnce(): Promise<void> {
 
     patchStatus({ pulledCount: 0 })
     let toPull = idsToPull(remoteIds, doneIds)
-    if (toPull.length >= BATCH_PULL_THRESHOLD && supportsBatchList(relayClient)) {
-      const handled = await batchPullOwn(relayClient, vaultKey)
+    if (shouldBatchPull(toPull.length, remoteIds.length) && supportsBatchList(relayClient)) {
+      const handled = await batchPullOwn(relayClient, vaultKey, new Set(toPull))
       // Subtracting what the walk handled is what keeps the loop below from
       // immediately re-fetching a `cur-` id: being mutable, it is never
       // filtered out by `doneIds`, so without this it would take a conditional
@@ -687,7 +810,7 @@ async function pullOnce(): Promise<void> {
         if (!codec.mutable && (await codec.localHas(id))) {
           // Already have it (e.g. logged before sync was configured) — record
           // done without a redundant round trip.
-          await markDone(id)
+          await markPulled(id)
           continue
         }
         if (codec.mutable && supportsConditionalGet(relayClient)) {
@@ -701,12 +824,7 @@ async function pullOnce(): Promise<void> {
           if (result.status === 'missing') continue
           if (result.status === 'ok') {
             await applySealedBlob(id, result.blob, vaultKey)
-            await put('sync', {
-              id,
-              state: 'done',
-              updated_at: new Date().toISOString(),
-              etag: result.etag ?? undefined,
-            })
+            await markPulled(id, result.etag ?? undefined)
             syncStatus.update((s) => ({ ...s, pulledCount: s.pulledCount + 1 }))
           }
           // 'not-modified': nothing changed since `existing.etag` — already
@@ -716,7 +834,7 @@ async function pullOnce(): Promise<void> {
         const blob = await relayClient.getBlob(id)
         if (!blob) continue
         await applySealedBlob(id, blob, vaultKey)
-        await markDone(id)
+        await markPulled(id)
         syncStatus.update((s) => ({ ...s, pulledCount: s.pulledCount + 1 }))
       } catch (err) {
         // Left un-done on failure (bad open, failed verify, network hiccup) —
@@ -766,7 +884,7 @@ function startEventStream(relay: BlobClient): void {
     openStream,
     onPoke: (poke) => {
       if (poke === 'mailbox') void pullMailbox()
-      else void pullAll()
+      else void pullAll('poke')
     },
     signal: streamAbort.signal,
   })
