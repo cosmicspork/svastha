@@ -11,8 +11,10 @@ guarantee that every rendered item carries the exact event id it was drawn from,
 so an answer can only ever cite a record that was actually supplied as context.
 
 Matching is over unicode alphanumeric words, lowercased, with CJK runs segmented
-into character bigrams because those scripts do not space their words. Two limits
-worth stating plainly: that segmentation is script-based rather than
+into character bigrams because those scripts do not space their words. A term
+that is a single CJK character on its own also matches a bigram containing it,
+so a one-character name stays reachable from a longer question and vice versa.
+Two limits worth stating plainly: the segmentation is script-based rather than
 dictionary-based, so a CJK bigram can straddle a word boundary and match loosely;
 and there is no diacritic folding, so "Ibuprofène" matches "ibuprofène" but not
 "Ibuprofene".

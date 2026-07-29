@@ -43,6 +43,31 @@ export interface GroundedAnswer {
   /** Event content ids — always a subset of what was sent as context. Empty
    * means the answer could not be grounded, and `text` is the honest refusal. */
   citations: string[]
+  /** Set when retrieval had to skip records this build cannot decode, so the
+   * answer (or the refusal) was drawn from an incomplete record. Absent when the
+   * whole vault was readable. The caller must show it alongside `text`. */
+  caveat?: string
+}
+
+/** What `rank_context` returns: the items to send, and how many candidates this
+ * build could not decode. */
+interface Ranked {
+  items: unknown[]
+  unreadable: number
+}
+
+/**
+ * What to tell the owner when `n` of their records could not be read.
+ *
+ * Said plainly and with the count, because the alternative is the app quietly
+ * answering from part of the record and sounding as certain as if it had all of
+ * it — and the one case that matters most is `n` records skipped and *nothing*
+ * retrieved, where an uncaveated refusal reads as "you have none of that".
+ */
+export function unreadableCaveat(n: number): string {
+  const [record, they, them] =
+    n === 1 ? ['record', 'it was', 'it'] : ['records', 'they were', 'them']
+  return `${n} ${record} on this device couldn't be read by this version of the app, so ${they} left out of this answer. Update the app to include ${them}.`
 }
 
 interface Candidate {
@@ -149,10 +174,18 @@ export async function askLocally(question: string): Promise<GroundedAnswer> {
 
   await initSvastha()
   const candidates = await gatherCandidates()
-  const contextJson = rank_context(JSON.stringify(candidates), question, MAX_CONTEXT)
-  const context = JSON.parse(contextJson) as unknown[]
-  if (context.length === 0) {
-    return { text: cant_answer_text(), citations: [] }
+  const ranked = JSON.parse(
+    rank_context(JSON.stringify(candidates), question, MAX_CONTEXT),
+  ) as Ranked
+  // Rides every return below, including the refusals: a record that could not be
+  // read is a record missing from the answer, and "nothing found" over a partial
+  // vault is the most misleading thing this screen can say.
+  const caveat = ranked.unreadable > 0 ? { caveat: unreadableCaveat(ranked.unreadable) } : {}
+
+  // The prompt and the grounding both read the items, not the wrapper.
+  const contextJson = JSON.stringify(ranked.items)
+  if (ranked.items.length === 0) {
+    return { text: cant_answer_text(), citations: [], ...caveat }
   }
 
   const raw = await chatComplete(
@@ -169,7 +202,7 @@ export async function askLocally(question: string): Promise<GroundedAnswer> {
   // Uncited prose is never forwarded, however fluent — the whole point of the
   // citation contract is that an answer points at records you can open.
   if (!grounded || grounded.citations.length === 0) {
-    return { text: cant_answer_text(), citations: [] }
+    return { text: cant_answer_text(), citations: [], ...caveat }
   }
-  return { text: grounded.answer, citations: grounded.citations }
+  return { text: grounded.answer, citations: grounded.citations, ...caveat }
 }

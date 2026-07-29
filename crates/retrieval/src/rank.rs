@@ -54,7 +54,7 @@ fn score(candidate: &Candidate<'_>, query: &[String], intent: Intent) -> Option<
     let item_tokens = tokenize(&text);
     let overlap = query
         .iter()
-        .filter(|q| item_tokens.iter().any(|t| t == *q))
+        .filter(|q| item_tokens.iter().any(|t| tokens_match(t, q)))
         .count();
     if overlap == 0 {
         return None;
@@ -299,6 +299,27 @@ fn words(text: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// Whether a query token and an item token count as the same term. Equality,
+/// except that a **single-character CJK term** also matches a bigram containing
+/// it.
+///
+/// That exception is what keeps bigram segmentation from hiding one-character
+/// terms in both directions: a name of `癌` never appears in a longer question's
+/// bigrams, and a question of `癌` never appears in a longer name's. The term is
+/// genuinely present in both — only the window differs. Restricting the rule to
+/// tokens that are a single character on their own (a whole CJK run of length
+/// one, never a segmented bigram) keeps multi-character scoring exactly as it
+/// was: two three-character names sharing one middle character still do not
+/// match.
+fn tokens_match(a: &str, b: &str) -> bool {
+    a == b || (is_cjk_singleton(a) && b.contains(a)) || (is_cjk_singleton(b) && a.contains(b))
+}
+
+fn is_cjk_singleton(token: &str) -> bool {
+    let mut chars = token.chars();
+    matches!((chars.next(), chars.next()), (Some(c), None) if is_cjk(c))
 }
 
 /// Push one run's tokens: non-CJK stretches whole, CJK stretches as bigrams.
@@ -625,6 +646,52 @@ mod tests {
             rank(&candidates, "糖尿病について教えて", 10).is_empty(),
             "an unrelated CJK question still retrieves nothing"
         );
+    }
+
+    /// Bigram segmentation windows a CJK run two characters at a time, which on
+    /// its own makes a one-character term unreachable in both directions: a name
+    /// of `癌` never appears in a longer question's bigrams, and a question of
+    /// `癌` never appears in a longer name's. The term is present either way —
+    /// only the window differs — so a single-character CJK term matches a bigram
+    /// containing it.
+    #[test]
+    fn a_single_character_cjk_term_matches_across_the_bigram_window() {
+        let a = med("111", "2024-01-01T00:00:00Z");
+
+        let one_char_name = vec![candidate(&a, "癌", ConceptStatus::Active)];
+        assert_eq!(
+            rank(&one_char_name, "我有癌吗", 10).len(),
+            1,
+            "a one-character name, asked for inside a longer question"
+        );
+
+        let longer_name = vec![candidate(&a, "肺癌", ConceptStatus::Active)];
+        assert_eq!(
+            rank(&longer_name, "癌", 10).len(),
+            1,
+            "a one-character question, against a longer name"
+        );
+
+        assert!(
+            rank(&one_char_name, "我有糖尿病吗", 10).is_empty(),
+            "still no match where the term is absent"
+        );
+    }
+
+    /// The singleton rule is an addition, not a loosening: multi-character terms
+    /// keep matching on whole bigrams only, so an unrelated CJK name does not
+    /// start scoring off a shared character.
+    #[test]
+    fn multi_character_cjk_scoring_is_unchanged() {
+        let a = med("111", "2024-01-01T00:00:00Z");
+        let candidates = vec![candidate(&a, "低血糖", ConceptStatus::Active)];
+        assert!(
+            rank(&candidates, "高血圧の薬", 10).is_empty(),
+            "sharing only the character 血 is not a match"
+        );
+
+        let same = vec![candidate(&a, "高血圧", ConceptStatus::Active)];
+        assert_eq!(rank(&same, "私の高血圧の薬は何ですか", 10).len(), 1);
     }
 
     /// A name whose accents split it into fragments shorter than the minimum

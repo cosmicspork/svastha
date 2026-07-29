@@ -246,9 +246,15 @@ mod tests {
     /// 2024-01-01 allergy_intolerance Peanut") and the model on the node read a
     /// worse line than the model in the browser for the same event.
     ///
-    /// This drives the real browser path — `svastha_wasm::rank_context`, with the
-    /// candidate JSON shape `ask.ts` sends and the name its `resolveName` chain
-    /// yields — and requires the rendered lines to be byte-identical.
+    /// This drives the real browser entry point — `svastha_wasm::rank_context`,
+    /// with the candidate JSON shape `ask.ts` sends — and requires the rendered
+    /// lines to be byte-identical.
+    ///
+    /// The `name` here is a fixture, not a claim: what proves the *browser*
+    /// resolves this event to "Peanut" is `rank-boundary.test.ts`'s
+    /// "renders an allergy exactly as the node renders it", which builds the
+    /// candidate through the real `buildCandidates`/`resolveName` and asserts the
+    /// same line literal. The two tests are pinned to each other by that string.
     #[test]
     fn an_allergy_renders_identically_on_the_node_and_in_the_browser() {
         let o = owner();
@@ -278,11 +284,13 @@ mod tests {
             "status": "active",
         }]))
         .unwrap();
-        let browser: Vec<ContextItem> = serde_json::from_str(
+        let ranked: serde_json::Value = serde_json::from_str(
             &svastha_wasm::rank_context(&browser_input, "peanut allergy", 10).unwrap(),
         )
         .unwrap();
+        let browser: Vec<ContextItem> = serde_json::from_value(ranked["items"].clone()).unwrap();
         assert_eq!(browser.len(), 1);
+        assert_eq!(ranked["unreadable"], 0);
 
         assert_eq!(node[0].text, browser[0].text, "one line for both clients");
         assert_eq!(node[0].text, "allergy_intolerance 2024-01-01 Peanut");
