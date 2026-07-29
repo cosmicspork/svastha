@@ -145,8 +145,40 @@ function unit(x: number, y: number): [number, number] {
   return length > 0 ? [x / length, y / length] : [0, 0]
 }
 
+/** The quarter turns a baseline can sit on, as display-space unit vectors (y
+ * downward), indexed by turn. */
+const TURN_COS = [1, 0, -1, 0]
+const TURN_SIN = [0, 1, 0, -1]
+
+/** How far a baseline may sit off a quarter turn and still be read as part of
+ * that turn's stream. A generated text layer's matrices are exact, so this is
+ * slack for converter noise only — and deliberately tight: a run admitted at a
+ * wider angle keeps part of its length in its vertical band, which is the
+ * mechanism this whole split exists to defuse. */
+const TURN_SLACK_RAD = (2 * Math.PI) / 180
+
+/** Which quarter turn a baseline sits on, or `null` for a run on no axis at
+ * all (a diagonal watermark). */
+function quarterTurn(ax: number, ay: number): number | null {
+  const angle = Math.atan2(ay, ax)
+  const turns = Math.round(angle / (Math.PI / 2))
+  if (Math.abs(angle - turns * (Math.PI / 2)) > TURN_SLACK_RAD) return null
+  return ((turns % 4) + 4) % 4
+}
+
+/** Slide a group's frame so it starts at x = 0. Once the frame is not the
+ * page's, its coordinates are synthetic — and left where they fall (a half turn
+ * puts them at negative x) they would stretch the horizontal extent a column
+ * render scales against, flattening the upright table on the same page. */
+function shiftToOrigin(words: OcrWord[]): OcrWord[] {
+  const minX = Math.min(...words.map((w) => w.x0))
+  return words.map((w) => ({ ...w, x0: w.x0 - minX, x1: w.x1 - minX }))
+}
+
 /**
- * Positioned runs from one page's embedded text layer, in display space.
+ * Positioned runs from one page's embedded text layer, grouped by the
+ * orientation of their baselines: the upright reading stream first, then each
+ * quarter turn present, then any off-axis run on its own.
  *
  * `viewportTransform` is `page.getViewport({ scale: 1 }).transform`, and it is
  * the only thing that knows about the page's `/Rotate`: a text item's own
@@ -156,19 +188,28 @@ function unit(x: number, y: number): [number, number] {
  * lands every run outside its band, which reaches the reader as a lab value
  * paired with the wrong analyte.
  *
- * The composed matrix also gives the run's direction, so its box is the extent
- * of `width` along the advance and `height` along the ascender rather than an
- * assumed horizontal run. Output is top-down (y grows downward), matching what
- * image engines report, so `ocr-layout.ts` never sees two conventions.
+ * **Why groups and not one list.** A box is axis-aligned, so a quarter-turned
+ * run's box is as tall as its text is long: a margin label down the side of a
+ * lab report spans every row it passes, and a grouper that reads bands of
+ * vertical overlap will take it as the anchor and merge those rows into one
+ * line. Each group is therefore measured in the frame its own baseline is
+ * horizontal in, where a run's box is the band the text actually occupies, and
+ * only runs that share an orientation are ever compared. Nothing is dropped:
+ * a side stamp can say "AMENDED", and an off-axis run alone in its group can
+ * still be read and cited while being unable to merge anything.
+ *
+ * Within a group, output is top-down (y grows downward), matching what image
+ * engines report, so `ocr-layout.ts` never sees two conventions.
  *
  * Confidence is 1: an embedded text layer is what the document says, not a
  * guess at it.
  */
-export function pageWords(items: unknown[], viewportTransform: number[]): OcrWord[] {
+export function pageWordGroups(items: unknown[], viewportTransform: number[]): OcrWord[][] {
   // A run's width and height are user-space magnitudes, so they follow the
   // viewport's scale but not its rotation.
   const scale = Math.hypot(viewportTransform[0], viewportTransform[1]) || 1
-  const words: OcrWord[] = []
+  const byTurn = new Map<number, OcrWord[]>()
+  const offAxis: OcrWord[][] = []
 
   for (const item of items) {
     if (!isPositionedText(item)) continue
@@ -180,19 +221,43 @@ export function pageWords(items: unknown[], viewportTransform: number[]): OcrWor
     const [ux, uy] = unit(m[2], m[3])
     const advance = item.width * scale
     const rise = item.height * scale
-    const xs = [m[4], m[4] + ax * advance, m[4] + ux * rise, m[4] + ax * advance + ux * rise]
-    const ys = [m[5], m[5] + ay * advance, m[5] + uy * rise, m[5] + ay * advance + uy * rise]
+    const corners: [number, number][] = [
+      [m[4], m[5]],
+      [m[4] + ax * advance, m[5] + ay * advance],
+      [m[4] + ux * rise, m[5] + uy * rise],
+      [m[4] + ax * advance + ux * rise, m[5] + ay * advance + uy * rise],
+    ]
 
-    words.push({
+    // Measure in the frame this run reads horizontally in: for the upright
+    // stream that is display space unchanged.
+    const turn = quarterTurn(ax, ay)
+    const [cos, sin] = turn === null ? [ax, ay] : [TURN_COS[turn], TURN_SIN[turn]]
+    const xs = corners.map(([x, y]) => x * cos + y * sin)
+    const ys = corners.map(([x, y]) => y * cos - x * sin)
+    const word: OcrWord = {
       text,
       x0: Math.min(...xs),
       x1: Math.max(...xs),
       y0: Math.min(...ys),
       y1: Math.max(...ys),
       conf: 1,
-    })
+    }
+
+    if (turn === null) {
+      offAxis.push([word])
+      continue
+    }
+    const group = byTurn.get(turn)
+    if (group) group.push(word)
+    else byTurn.set(turn, [word])
   }
-  return words
+
+  return [
+    ...[...byTurn.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([turn, words]) => (turn === 0 ? words : shiftToOrigin(words))),
+    ...offAxis.map(shiftToOrigin),
+  ]
 }
 
 /**
@@ -220,13 +285,13 @@ export async function textLayerPages(bytes: Uint8Array): Promise<OcrLine[][]> {
       const page = await doc.getPage(pageNumber)
       const viewport = page.getViewport({ scale: 1 })
       const content = await page.getTextContent()
-      // groupLines numbers from 1 per page; renumber onto the running total.
-      pages.push(
-        groupLines(pageWords(content.items, viewport.transform)).map((line) => ({
-          ...line,
-          index: ++numbered,
-        })),
+      // One grouping pass per orientation: `groupLines` compares vertical
+      // bands, which only means the same thing within a single orientation.
+      const lines = pageWordGroups(content.items, viewport.transform).flatMap((words) =>
+        groupLines(words),
       )
+      // groupLines numbers from 1 per group; renumber onto the running total.
+      pages.push(lines.map((line) => ({ ...line, index: ++numbered })))
     }
     return pages
   } finally {

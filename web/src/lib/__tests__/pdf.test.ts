@@ -12,7 +12,7 @@ vi.mock('pdfjs-dist', () => pdfjs)
 // Worker constructor and the wiring is not what these tests are about.
 vi.stubGlobal('Worker', class {})
 
-import { pageWords, textLayer, textLayerPages, pdfTextEngine } from '../pdf'
+import { pageWordGroups, textLayer, textLayerPages, pdfTextEngine } from '../pdf'
 import { UnreadablePageError } from '../ocr'
 
 /** pdf.js's own viewport matrix for an upright page: flip y, origin top-left. */
@@ -38,6 +38,29 @@ const sideways = (str: string, x: number, y: number, width: number) => ({
   height: 10,
   transform: [0, 10, -10, 0, x, y],
 })
+
+/** A run set at a quarter turn to an otherwise upright page — the margin label
+ * or side stamp a lab report puts down the edge of the sheet. */
+const margin = (str: string, x: number, y: number, width: number) => ({
+  str,
+  width,
+  height: 10,
+  transform: [0, -10, 10, 0, x, y],
+})
+
+/** A watermark run on no axis at all. */
+const diagonal = (str: string, x: number, y: number, width: number) => ({
+  str,
+  width,
+  height: 10,
+  transform: [10, -10, 10, 10, x, y],
+})
+
+/** One lab row: analyte and value sharing a baseline. */
+const labRow = (analyte: string, value: string, baseline: number) => [
+  run(analyte, 100, baseline, 60),
+  run(value, 200, baseline, 20),
+]
 
 interface FakePage {
   items: unknown[]
@@ -76,16 +99,20 @@ beforeEach(() => {
   pdfjs.getDocument.mockReset()
 })
 
-describe('pageWords', () => {
+describe('pageWordGroups', () => {
+  /** The upright reading stream — the page as a person holds it. */
+  const uprightWords = (items: unknown[], transform: number[]) =>
+    pageWordGroups(items, transform)[0] ?? []
+
   // pdf.js reports a bottom-up baseline; every other engine reports top-down.
   // Getting this backwards would silently invert the whole page's line order.
   it('flips pdf.js bottom-up baselines to top-down boxes', () => {
-    const [word] = pageWords([run('Potassium', 20, 700, 60)], upright(800))
+    const [word] = uprightWords([run('Potassium', 20, 700, 60)], upright(800))
     expect(word).toEqual({ text: 'Potassium', x0: 20, x1: 80, y0: 90, y1: 100, conf: 1 })
   })
 
   it('orders a page top-down after the flip', () => {
-    const words = pageWords([run('bottom', 0, 100, 10), run('top', 0, 700, 10)], upright(800))
+    const words = uprightWords([run('bottom', 0, 100, 10), run('top', 0, 700, 10)], upright(800))
     expect(words.map((w) => [w.text, w.y0])).toEqual([
       ['bottom', 690],
       ['top', 90],
@@ -94,19 +121,19 @@ describe('pageWords', () => {
 
   it('skips marked-content items and blank runs', () => {
     const items = [{ type: 'beginMarkedContent' }, run('   ', 0, 700, 10), run('real', 0, 600, 10)]
-    expect(pageWords(items, upright(800)).map((x) => x.text)).toEqual(['real'])
+    expect(uprightWords(items, upright(800)).map((x) => x.text)).toEqual(['real'])
   })
 
   // The viewport matrix carries the page's /Rotate; the item transforms do not.
   // Flipping against the (rotation-aware) viewport height while ignoring the
   // rotation puts every run outside the page band it belongs to.
   it('places a /Rotate 90 page in display space, not content space', () => {
-    const [word] = pageWords([sideways('Potassium', 500, 100, 60)], ROTATED_90)
+    const [word] = uprightWords([sideways('Potassium', 500, 100, 60)], ROTATED_90)
     expect(word).toEqual({ text: 'Potassium', x0: 100, x1: 160, y0: 490, y1: 500, conf: 1 })
   })
 
   it("keeps a rotated page's rows apart and its columns ordered", () => {
-    const words = pageWords(
+    const words = uprightWords(
       [
         sideways('Potassium', 500, 100, 60),
         sideways('4.1', 500, 180, 20),
@@ -122,6 +149,36 @@ describe('pageWords', () => {
       ['Sodium', 470, 100],
       ['139', 470, 180],
     ])
+  })
+
+  // A quarter-turned run's display box is as tall as its text is long. Read in
+  // its own frame it is what it looks like on paper: one short band.
+  it('reads a quarter-turned run in its own frame', () => {
+    const groups = pageWordGroups([margin('REFERENCE RANGE', 20, 620, 120)], upright(792))
+    expect(groups).toEqual([
+      [{ text: 'REFERENCE RANGE', x0: 0, x1: 120, y0: -30, y1: -20, conf: 1 }],
+    ])
+  })
+
+  it('keeps each orientation in a group of its own, upright first', () => {
+    const groups = pageWordGroups(
+      [margin('SPECIMEN', 20, 620, 80), ...labRow('Sodium', '139', 602)],
+      upright(792),
+    )
+    expect(groups.map((g) => g.map((w) => w.text))).toEqual([
+      ['Sodium', '139'],
+      ['SPECIMEN'],
+    ])
+  })
+
+  // On no axis at all, so no orientation can read it as part of a line. Alone
+  // in a group it still reaches the transcript and can merge nothing.
+  it('gives an off-axis run a group to itself', () => {
+    const groups = pageWordGroups(
+      [...labRow('Sodium', '139', 602), diagonal('VOID', 100, 400, 60)],
+      upright(792),
+    )
+    expect(groups.map((g) => g.map((w) => w.text))).toEqual([['Sodium', '139'], ['VOID']])
   })
 })
 
@@ -140,6 +197,48 @@ describe('textLayer', () => {
         sideways('4.1', 500, 180, 20),
         sideways('Sodium', 480, 100, 60),
         sideways('139', 480, 180, 20),
+      ]),
+    ])
+    const lines = await textLayer(new Uint8Array([1]))
+    expect(lines.map((l) => l.text)).toEqual(['Sodium 139', 'Potassium 4.1'])
+  })
+
+  // The regression the reviewer caught: a 90° margin run's display box is as
+  // tall as its text is long, so an orientation-blind grouper takes it as the
+  // band's anchor and every horizontal row it crosses collapses into it — one
+  // line holding three analytes and three values, which is the mis-pairing this
+  // module exists to prevent.
+  it('keeps a 90° margin run from swallowing the lab rows it crosses', async () => {
+    stubDocument([
+      letter([
+        margin('REFERENCE RANGE', 20, 620, 120),
+        ...labRow('Sodium', '139', 602),
+        ...labRow('Potassium', '4.1', 572),
+        ...labRow('Chloride', '104', 542),
+      ]),
+    ])
+    const lines = await textLayer(new Uint8Array([1]))
+    expect(lines.map((l) => l.text)).toEqual([
+      'Sodium 139',
+      'Potassium 4.1',
+      'Chloride 104',
+      // Kept, and numbered after the page it sits beside: a side stamp can say
+      // "AMENDED" and dropping it would be its own kind of wrong.
+      'REFERENCE RANGE',
+    ])
+    expect(lines.map((l) => l.index)).toEqual([1, 2, 3, 4])
+  })
+
+  // A fax that arrived sideways with no /Rotate to correct it: every run is a
+  // quarter turn off, and read in that turn's frame the page comes out whole.
+  // Dropping non-horizontal runs would have made this page unreadable instead.
+  it('reads a page whose whole text layer is sideways', async () => {
+    stubDocument([
+      letter([
+        margin('Sodium', 120, 620, 60),
+        margin('139', 120, 540, 20),
+        margin('Potassium', 100, 620, 60),
+        margin('4.1', 100, 540, 20),
       ]),
     ])
     const lines = await textLayer(new Uint8Array([1]))
