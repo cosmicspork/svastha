@@ -114,14 +114,22 @@ export async function recognizeImage(bytes: Uint8Array, mime: string): Promise<O
   const { createWorker } = await import('tesseract.js')
 
   // tesseract.js spawns its underlying Worker synchronously inside
-  // createWorker, but only ever hands it back to us if init succeeds — a
-  // failed init (bad path, 404, corrupt core) rejects with a bare error
-  // string, and the Worker it already started stays alive with no way for a
-  // caller to reach it through the public API. Watching for the `new Worker`
-  // it makes internally, for just the duration of this call, is the only way
-  // to get a handle on that worker so a failed init can still be stopped.
+  // createWorker — before any await, see its source — but only ever hands it
+  // back to us if init succeeds; a failed init (bad path, 404, corrupt core)
+  // rejects with a bare error string, and the Worker it already started stays
+  // alive with no way for a caller to reach it through the public API.
+  // Watching for the `new Worker` it makes internally is the only way to get
+  // a handle on that worker so a failed init can still be stopped — but the
+  // swap has to be scoped to exactly the synchronous call expression below,
+  // never across the subsequent `await`. A wider window would catch anything
+  // else that constructs a Worker while this call's init is still pending
+  // (a pdf.js worker, say, or another overlapping OCR call), and — since
+  // `globalThis.Worker` is one shared mutable slot — two overlapping calls'
+  // install/restore could interleave and leave a stale proxy installed after
+  // both are done.
   const spawned: Worker[] = []
   const RealWorker = globalThis.Worker
+  let workerPromise: ReturnType<typeof createWorker>
   globalThis.Worker = new Proxy(RealWorker, {
     construct(target, args) {
       const instance = Reflect.construct(target, args) as Worker
@@ -129,10 +137,8 @@ export async function recognizeImage(bytes: Uint8Array, mime: string): Promise<O
       return instance
     },
   }) as typeof Worker
-
-  let worker: Awaited<ReturnType<typeof createWorker>>
   try {
-    worker = await createWorker('eng', undefined, {
+    workerPromise = createWorker('eng', undefined, {
       // Every one of these is same-origin. The library's defaults are not.
       workerPath: `${ASSET_BASE}/worker.min.js`,
       corePath: ASSET_BASE,
@@ -140,11 +146,16 @@ export async function recognizeImage(bytes: Uint8Array, mime: string): Promise<O
       // The language data is committed uncompressed, so do not look for a .gz.
       gzip: false,
     })
+  } finally {
+    globalThis.Worker = RealWorker
+  }
+
+  let worker: Awaited<typeof workerPromise>
+  try {
+    worker = await workerPromise
   } catch (err) {
     for (const w of spawned) w.terminate()
     throw err
-  } finally {
-    globalThis.Worker = RealWorker
   }
 
   try {
