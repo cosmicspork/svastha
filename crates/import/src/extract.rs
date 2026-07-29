@@ -167,13 +167,17 @@ fn parse_inner(answer: &str, lines: Option<&[String]>) -> Extraction {
 /// - `display`, when it has a word in it, must share a whole token with the
 ///   line. Overlap rather than equality, so "Serum potassium" still matches a
 ///   line reading "Potassium" — while "Sodium" does not, which is the case that
-///   matters. One- and two-letter labels (`K`, `Na`) are checked the same way
-///   rather than dismissed as too short to be worth checking.
+///   matters. The overlap has to be on a word that distinguishes the label when
+///   the label has one: `Hb A1c` does not verify against a plain `Hb` line.
+///   One- and two-letter labels (`K`, `Na`, `β`) carry the check themselves when
+///   that is the whole label, rather than being dismissed as too short.
 /// - `value_quantity`, when given, must equal a whole token, or a contiguous run
 ///   of them joined as the claim is and with no dash reaching out of the run.
 ///   `13` is therefore not "found" inside `139`, `5.1` is not found in
 ///   `3.5-5.1`, and `5` is not found in `.5` — while a result that is itself an
-///   interval (`0-2`) verifies when quoted whole, and only as printed.
+///   interval (`0-2`) verifies when quoted whole, and only as printed. A unit
+///   printed against the number (`4.1mmol/L`) lexes apart from it; a name that
+///   merely begins with digits (`5HIAA`) does not.
 /// - `value_text`, when given, must share more than half its tokens with the
 ///   line, so free text is bound to its citation the way a value is.
 ///
@@ -197,7 +201,16 @@ fn quotes_back(f: &Finding, lines: &[String]) -> bool {
         .map(|t| t.text)
         .collect();
     if !display.is_empty() {
-        if !display.iter().any(|d| tokens.iter().any(|t| &t.text == d)) {
+        // A label that has a distinguishing word must match on one of them:
+        // `Hb A1c` shares `hb` with a plain haemoglobin line, and only `a1c`
+        // tells a haemoglobin from an A1c. A one- or two-letter token carries
+        // the check by itself only when that is the whole label.
+        let distinguishing = display.iter().any(|d| d.chars().count() >= 3);
+        let matched = display
+            .iter()
+            .filter(|d| !distinguishing || d.chars().count() >= 3)
+            .any(|d| tokens.iter().any(|t| &t.text == d));
+        if !matched {
             return false;
         }
         checked_something = true;
@@ -291,6 +304,14 @@ fn tokenize(s: &str) -> Vec<Token> {
                 }
             }
             dots = 0;
+            // `4.1mmol/L`: labs print the unit against the number as often as
+            // beside it. A digit run carrying a decimal point is a quantity, so
+            // letters after it begin a new token — while a name that merely
+            // starts with digits (`5HIAA`) is left whole, since splitting it
+            // would let a claim of `5` quote a line whose result is 6.
+            if c.is_alphabetic() && is_number(&current) && current.contains('.') {
+                flush(&mut out, &mut gaps, &mut gap, &mut current);
+            }
             current.extend(c.to_lowercase());
         } else if c == '.' {
             dots += 1;
@@ -780,6 +801,51 @@ mod tests {
         );
         assert_eq!(
             parse_lines(&observation(1, "Digoxin", ".5"), &whole).dropped,
+            1
+        );
+    }
+
+    /// Labs print the unit against the number as often as beside it, and the
+    /// finding that quotes it back has the two in separate fields.
+    #[test]
+    fn a_unit_printed_against_the_number_does_not_swallow_it() {
+        let t = vec!["Potassium   4.1mmol/L   3.5-5.1".to_string()];
+        let claim = r#"{"findings":[{"kind":"observation","source_line":1,
+            "system":"loinc","code":"2823-3","display":"Potassium",
+            "value_quantity":"4.1","unit":"mmol/L"}]}"#;
+        assert_eq!(parse_lines(claim, &t).drafts.len(), 1);
+        // Splitting the unit off must not unstick the range beside it.
+        assert_eq!(
+            parse_lines(&observation(1, "Potassium", "5.1"), &t).dropped,
+            1
+        );
+
+        // A name that merely begins with digits is not a number and a unit.
+        let hiaa = vec!["5HIAA   6 mg".to_string()];
+        assert_eq!(parse_lines(&observation(1, "5HIAA", "5"), &hiaa).dropped, 1);
+        assert_eq!(
+            parse_lines(&observation(1, "5HIAA", "6"), &hiaa)
+                .drafts
+                .len(),
+            1
+        );
+    }
+
+    /// Hb 12.0 g/dL is an ordinary haemoglobin; HbA1c 12.0% is badly
+    /// uncontrolled diabetes. `a1c` is the token that tells them apart, so a
+    /// label carrying one must not verify on the part it shares with another
+    /// analyte.
+    #[test]
+    fn a_short_token_does_not_stand_in_for_a_longer_label() {
+        let t = vec!["Hb   12.0 g/dL".to_string()];
+        let a1c = r#"{"findings":[{"kind":"observation","source_line":1,
+            "system":"loinc","code":"4548-4","display":"Hb A1c",
+            "value_quantity":"12.0","unit":"%"}]}"#;
+        assert_eq!(parse_lines(a1c, &t).dropped, 1);
+
+        // The label that is actually printed still verifies.
+        assert_eq!(
+            parse_lines(&observation(1, "Hb", "12.0"), &t).drafts.len(),
             1
         );
     }
