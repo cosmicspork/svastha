@@ -27,9 +27,13 @@ import type { StoredEvent } from './events'
  * closes it to answers and gives it a switch in one edit. */
 export const OPT_IN_CATEGORIES: Category[] = CATEGORIES.filter((c) => CATEGORY_META[c].sensitive)
 
-/** `prefs` key for the owner's opt-ins. Device-local: it is a setting, not
- * record content, and it is the same shape the node is told separately. */
-const OPT_INS_KEY = 'ai-answer-opt-ins'
+/** `prefs` key for {@link AnswerScopeRecord}. Device-local: a setting, not
+ * record content. */
+const SCOPE_KEY = 'ai-answer-scope'
+
+/** The two-key shape an earlier build of this branch wrote; read once, for
+ * migration, and never written again. See {@link loadAnswerScope}. */
+const LEGACY_OPT_INS_KEY = 'ai-answer-opt-ins'
 
 /**
  * Drop the events retrieval may not read: an entry in a sensitive category the
@@ -55,17 +59,9 @@ export function filterSensitive(
  * turned on. A stored category that is no longer sensitive is dropped, so the
  * stored value can never re-open something the taxonomy has moved. */
 export async function loadOptIns(): Promise<Set<Category>> {
-  const stored = await get<Category[]>('prefs', OPT_INS_KEY)
-  if (!Array.isArray(stored)) return new Set()
-  return new Set(stored.filter((c) => OPT_IN_CATEGORIES.includes(c)))
-}
-
-/** Persist the owner's opt-ins as an explicit list in {@link OPT_IN_CATEGORIES}
- * order — the same list the node is sent, so the two can be read side by side. */
-export async function saveOptIns(optIns: ReadonlySet<Category>): Promise<Category[]> {
-  const include = includeList(optIns)
-  await put('prefs', include, OPT_INS_KEY)
-  return include
+  const record = await loadAnswerScope()
+  if (!record) return new Set()
+  return new Set(record.include.filter((c) => OPT_IN_CATEGORIES.includes(c)))
 }
 
 /** The `include` array for an `admin_cmd` `set_answer_scope`: the whole set of
@@ -90,8 +86,25 @@ export function includeList(optIns: ReadonlySet<Category>): Category[] {
 // only evidence that exists, so it is tracked, and everything short of a
 // confirming reply is shown as exactly that.
 
-/** `prefs` key for the last `set_answer_scope` this device sent (or tried to). */
-const PENDING_KEY = 'ai-answer-scope-pending'
+// ## Why this is ONE record and not two
+//
+// The desired scope and the command tracking it used to be two `prefs` keys,
+// written one after the other. Each `put` is its own IndexedDB transaction, so
+// the pair could land half-written — and the half that mattered was the second:
+// an opt-out could save `[]`, fail to reach the relay, and fail to overwrite the
+// *previous* command's record, leaving that command's id (and its `ok: true`
+// reply) still matchable. The screen then said "Your node has applied this"
+// about a node that was still reading Cycle. A false reassurance about the exact
+// disclosure the owner had just tried to stop, which is worse than no reassurance
+// at all. With no earlier command the same swallowed write degraded to `idle`,
+// which is silent in a different way.
+//
+// So the desired scope and the tracking are one value under one key, written in
+// a single `put`. Committing a new scope *is* invalidating the old confirmation;
+// there is no window in which one has happened and the other has not. The id is
+// filled in by a second, best-effort write after delivery — and if that one
+// fails, what stays durable is `unsent`, which under-claims. Every partial
+// failure has to land on the side of "your node may not have this yet".
 
 /** How long to wait for a node's `admin_reply` before calling it unconfirmed.
  * Generous next to the node's reconcile cadence: the point is to stop waiting
@@ -101,11 +114,27 @@ export const CONFIRM_WINDOW_MS = 90_000
 /** The last scope command this device issued, kept so a reload can still tell
  * the owner whether the node ever confirmed it. `id` is the `admin_cmd`
  * envelope message id the reply carries as `in_reply_to`, or null when the
- * command never left this device at all. */
+ * command never left this device at all.
+ *
+ * `include` is the set *this command carried*. It is stored even though the
+ * record's own `include` is written alongside it: a reply only counts as
+ * confirming the current desire if the command it answers asked for the current
+ * desire, and comparing the two is what enforces that rather than assuming it.
+ */
 export interface PendingScopeCommand {
   id: string | null
   include: Category[]
   sentAt: string
+}
+
+/** The whole of this device's answer-scope state, written as one value. See the
+ * note above on why it is not two. */
+export interface AnswerScopeRecord {
+  /** What the owner wants — the set `ask.ts` filters by. */
+  include: Category[]
+  /** The last command issued about it. Always present once anything has been
+   * chosen, so "chosen but never tracked" is not a representable state. */
+  pending: PendingScopeCommand
 }
 
 /** What this device knows about the node's agreement with the local choice. */
@@ -136,22 +165,33 @@ export interface ScopeReplyLookup {
 }
 
 /**
- * Resolve what this device can honestly say about the node, from the last
- * command it issued and the admin log's replies. Pure — the caller supplies
- * `now` — so every branch is directly testable.
+ * Resolve what this device can honestly say about the node, from its own scope
+ * record and the admin log's replies. Pure — the caller supplies `now` — so
+ * every branch is directly testable.
  *
- * Note what is deliberately absent: there is no "assume it worked" branch. A
- * missing reply resolves to `unconfirmed`, never to `confirmed`.
+ * Two things are deliberately absent. There is no "assume it worked" branch: a
+ * missing reply resolves to `unconfirmed`, never `confirmed`. And a reply only
+ * confirms when the command it answers carried **the set the owner currently
+ * wants** — a reply to a superseded command says nothing about the current one,
+ * so the tracked `include` must match the record's before any confirmation is
+ * honoured.
  */
 export function resolveNodeScopeState(
-  pending: PendingScopeCommand | undefined,
+  record: AnswerScopeRecord | undefined,
   log: ScopeReplyLookup[],
   hasNode: boolean,
   now: number,
 ): NodeScopeState {
   if (!hasNode) return { state: 'no-node' }
-  if (!pending) return { state: 'idle' }
+  // Nothing has ever been chosen. Once anything has, `pending` is written with
+  // it in the same put, so this cannot be reached by a half-written choice.
+  if (!record) return { state: 'idle' }
+
+  const { include, pending } = record
   if (pending.id === null) return { state: 'unsent' }
+  // Belt and braces over the atomic write: if the tracked command is for some
+  // other set, it is not evidence about this one.
+  if (!sameInclude(pending.include, include)) return { state: 'unsent' }
 
   const reply = log.find((e) => e.id === pending.id)?.reply
   if (reply) return reply.ok ? { state: 'confirmed' } : { state: 'refused', detail: reply.detail }
@@ -159,10 +199,67 @@ export function resolveNodeScopeState(
   return age < CONFIRM_WINDOW_MS ? { state: 'pending' } : { state: 'unconfirmed' }
 }
 
-export async function loadPendingScopeCommand(): Promise<PendingScopeCommand | undefined> {
-  return get<PendingScopeCommand>('prefs', PENDING_KEY)
+/** Both lists are built by {@link includeList}, so they are already in a stable
+ * order; compared element-wise rather than by identity. */
+function sameInclude(a: Category[], b: Category[]): boolean {
+  return a.length === b.length && a.every((c, i) => c === b[i])
 }
 
-export async function savePendingScopeCommand(pending: PendingScopeCommand): Promise<void> {
-  await put('prefs', pending, PENDING_KEY)
+/**
+ * Read the record, migrating the two-key shape an earlier build of this branch
+ * wrote. A legacy value carries no trustworthy tracking, so it is read as
+ * `unsent` — the node may or may not have been told, and `unsent` is the reading
+ * that does not over-claim.
+ */
+export async function loadAnswerScope(): Promise<AnswerScopeRecord | undefined> {
+  const record = await get<AnswerScopeRecord>('prefs', SCOPE_KEY)
+  if (record && Array.isArray(record.include) && record.pending) return record
+
+  const legacy = await get<Category[]>('prefs', LEGACY_OPT_INS_KEY)
+  if (!Array.isArray(legacy)) return undefined
+  const include = legacy.filter((c) => OPT_IN_CATEGORIES.includes(c))
+  return { include, pending: { id: null, include, sentAt: new Date(0).toISOString() } }
+}
+
+/** Write the record — the single put that is the commit point. Never wrapped by
+ * callers committing a choice: a failure here means nothing changed. */
+export async function saveAnswerScope(record: AnswerScopeRecord): Promise<void> {
+  await put('prefs', record, SCOPE_KEY)
+}
+
+/**
+ * Commit `optIns` as the desired scope **and** invalidate any previous
+ * confirmation, in one write.
+ *
+ * This is the commit point in both senses: after it, `ask.ts` filters by the new
+ * set, and no earlier command's reply can be mistaken for agreement with it.
+ * Returns the record so the caller can fill in the command id after delivery
+ * without re-reading.
+ */
+export async function commitScopeLocally(
+  optIns: ReadonlySet<Category>,
+): Promise<AnswerScopeRecord> {
+  const include = includeList(optIns)
+  const record: AnswerScopeRecord = {
+    include,
+    pending: { id: null, include, sentAt: new Date().toISOString() },
+  }
+  await saveAnswerScope(record)
+  return record
+}
+
+/** Record that `record`'s command reached the relay under `id`. Best-effort by
+ * design: the caller treats a failure as `unsent`, which is the state already
+ * durably on disk, so a failure here costs the owner a needless retry and never
+ * a false confirmation. Returns whether it landed. */
+export async function trackScopeDelivery(
+  record: AnswerScopeRecord,
+  id: string,
+): Promise<boolean> {
+  try {
+    await saveAnswerScope({ ...record, pending: { ...record.pending, id } })
+    return true
+  } catch {
+    return false
+  }
 }

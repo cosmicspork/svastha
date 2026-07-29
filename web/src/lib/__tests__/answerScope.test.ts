@@ -6,7 +6,15 @@
 // disclosure, not a wrong answer.
 import { beforeEach, describe, expect, it } from 'vitest'
 import { deleteDb, get } from '../db'
-import { filterSensitive, includeList, loadOptIns, saveOptIns, OPT_IN_CATEGORIES } from '../answerScope'
+import {
+  filterSensitive,
+  includeList,
+  loadOptIns,
+  commitScopeLocally,
+  loadAnswerScope,
+  OPT_IN_CATEGORIES,
+  type AnswerScopeRecord,
+} from '../answerScope'
 import { CATEGORIES, CATEGORY_META, type Category } from '../category'
 import { BP_SYSTOLIC, CYCLE_START, CYCLE_FLOW, MOOD, GRATITUDE } from '../codes'
 import type { StoredEvent } from '../events'
@@ -76,26 +84,45 @@ describe('the stored choice', () => {
     expect(await loadOptIns()).toEqual(new Set())
   })
 
-  it('round-trips through the prefs store as an explicit ordered list', async () => {
-    await saveOptIns(set('mind', 'cycle'))
-    expect(await get<Category[]>('prefs', 'ai-answer-opt-ins')).toEqual(['cycle', 'mind'])
+  it('round-trips as one record holding the list and its tracking together', async () => {
+    await commitScopeLocally(set('mind', 'cycle'))
+    // One key, one value: the desired set and the command about it cannot be
+    // written apart, so they cannot be read apart either.
+    const stored = await get<AnswerScopeRecord>('prefs', 'ai-answer-scope')
+    expect(stored?.include).toEqual(['cycle', 'mind'])
+    expect(stored?.pending).toMatchObject({ id: null, include: ['cycle', 'mind'] })
     expect(await loadOptIns()).toEqual(set('cycle', 'mind'))
   })
 
   it('records turning the last category back off, rather than leaving the old one', async () => {
-    await saveOptIns(set('cycle'))
-    await saveOptIns(set())
+    await commitScopeLocally(set('cycle'))
+    await commitScopeLocally(set())
     expect(await loadOptIns()).toEqual(new Set())
   })
 
   it('drops a stored category that is no longer opt-in', async () => {
     // A value written by a build with a different taxonomy must never re-open
     // something the current one does not treat as a switch.
-    await get('prefs', 'ai-answer-opt-ins')
-    await saveOptIns(set('cycle'))
     const { put } = await import('../db')
-    await put('prefs', ['cycle', 'vital'], 'ai-answer-opt-ins')
+    await put(
+      'prefs',
+      { include: ['cycle', 'vital'], pending: { id: null, include: [], sentAt: '' } },
+      'ai-answer-scope',
+    )
     expect(await loadOptIns()).toEqual(set('cycle'))
+  })
+
+  // The two-key shape an earlier build of this branch wrote. Its opt-ins are
+  // honoured (the owner chose them), but it carries no trustworthy tracking, so
+  // it reads as never-told rather than as a confirmation nobody can back up.
+  it('migrates the legacy two-key shape, and reads it as untracked', async () => {
+    const { put } = await import('../db')
+    await put('prefs', ['cycle'], 'ai-answer-opt-ins')
+    expect(await loadOptIns()).toEqual(set('cycle'))
+    expect(await loadAnswerScope()).toMatchObject({
+      include: ['cycle'],
+      pending: { id: null, include: ['cycle'] },
+    })
   })
 })
 

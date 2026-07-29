@@ -48,11 +48,11 @@ import {
   type AdminCommand,
 } from './nodeadmin'
 import {
-  saveOptIns,
-  loadOptIns,
-  includeList,
-  savePendingScopeCommand,
-  loadPendingScopeCommand,
+  commitScopeLocally,
+  loadAnswerScope,
+  saveAnswerScope,
+  trackScopeDelivery,
+  type AnswerScopeRecord,
 } from './answerScope'
 import type { Category } from './category'
 
@@ -630,50 +630,66 @@ export interface AnswerScopeCommit {
 export async function commitAnswerScope(
   optIns: ReadonlySet<Category>,
 ): Promise<AnswerScopeCommit> {
-  // Not wrapped: a failure here must reach the caller (see above).
-  const include = await saveOptIns(optIns)
+  // THE commit point, and one write: the new desired scope and the invalidation
+  // of any previous command's confirmation land together or not at all. Not
+  // wrapped — a failure here must reach the caller, and means nothing changed.
+  const record = await commitScopeLocally(optIns)
+  const { include } = record
 
   const node = await enrolledNode().catch(() => null)
-  if (!node) {
-    await savePendingScopeCommand({ id: null, include, sentAt: new Date().toISOString() }).catch(
-      () => {},
-    )
-    return { include, node: 'no-node' }
-  }
+  if (!node) return { include, node: 'no-node' }
 
   const id = await sendAdminCommand(
     { ed: node.ed, x25519: node.x25519 },
     { cmd: 'set_answer_scope', include },
   ).catch(() => null)
-  // Recorded either way, so a reload can still tell the owner the node was
-  // never told — an unsent command that vanishes on refresh reads as success.
-  await savePendingScopeCommand({ id, include, sentAt: new Date().toISOString() }).catch(() => {})
-  return { include, node: id ? 'pending' : 'unsent' }
+  // Nothing further to write when it never left: `unsent` is already what is on
+  // disk, which is the point of writing it before trying.
+  if (!id) return { include, node: 'unsent' }
+
+  // Best-effort, and reported by what actually persisted rather than by what we
+  // just did: if this write is lost, the durable state stays `unsent`, and the
+  // owner is asked to send again for a command the node may in fact have. That
+  // costs a redundant retry, which is the right way round — the command is
+  // idempotent, and the alternative is claiming a confirmation the record cannot
+  // back up after a reload.
+  return { include, node: (await trackScopeDelivery(record, id)) ? 'pending' : 'unsent' }
 }
 
 /**
  * Re-send the owner's current desired set — a real retry, not a new choice.
  *
- * The set comes from the **persisted opt-ins**, not from the pending record:
- * those are the same in the ordinary case, and where they differ the persisted
- * value is the one this device is already answering by, so it is the one the
- * node should be brought to. (The pending record is only consulted to know
- * there is something outstanding to retry.)
+ * The set comes from the record's `include`, which is what this device is
+ * already answering by, so a retry brings the node to the owner's actual
+ * position rather than to whatever a previous attempt happened to carry.
+ *
+ * The old tracking is cleared first, in the same single write that re-states the
+ * desired scope, for the same reason the commit path does it: a retry that fails
+ * mid-way must not leave the *previous* attempt's id eligible to be confirmed.
  *
  * Returns the fresh node status; a no-op `unsent` when nothing is outstanding.
  */
 export async function retryAnswerScope(): Promise<AnswerScopeCommit['node']> {
-  const pending = await loadPendingScopeCommand()
-  if (!pending) return 'unsent'
+  const existing = await loadAnswerScope()
+  if (!existing) return 'unsent'
   const node = await enrolledNode().catch(() => null)
   if (!node) return 'no-node'
-  const include = includeList(await loadOptIns())
+
+  const include = existing.include
+  const record: AnswerScopeRecord = {
+    include,
+    pending: { id: null, include, sentAt: new Date().toISOString() },
+  }
+  // Unwrapped, like the commit path: if the invalidation cannot be written, do
+  // not send, because a delivery we cannot track is one we cannot report on.
+  await saveAnswerScope(record)
+
   const id = await sendAdminCommand(
     { ed: node.ed, x25519: node.x25519 },
     { cmd: 'set_answer_scope', include },
   ).catch(() => null)
-  await savePendingScopeCommand({ id, include, sentAt: new Date().toISOString() }).catch(() => {})
-  return id ? 'pending' : 'unsent'
+  if (!id) return 'unsent'
+  return (await trackScopeDelivery(record, id)) ? 'pending' : 'unsent'
 }
 
 // --- resolution: echo the decision back to the proposer ---

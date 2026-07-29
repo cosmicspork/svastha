@@ -22,10 +22,10 @@
   import {
     OPT_IN_CATEGORIES,
     loadOptIns,
-    loadPendingScopeCommand,
+    loadAnswerScope,
     resolveNodeScopeState,
     type NodeScopeState,
-    type PendingScopeCommand,
+    type AnswerScopeRecord,
   } from '../../lib/answerScope'
   import { CATEGORY_META, type Category } from '../../lib/category'
   import { commitAnswerScope, retryAnswerScope } from '../../lib/mailbox'
@@ -72,17 +72,17 @@
   // here and still disclosed there. Only its `admin_reply` promotes this to
   // `confirmed`; there is deliberately no "assume it worked" path.
   let hasNode = $state(false)
-  let pendingScope = $state<PendingScopeCommand | undefined>(undefined)
+  let scopeRecord = $state<AnswerScopeRecord | undefined>(undefined)
   // Ticked so an outstanding command ages into `unconfirmed` without a reload.
   let nowMs = $state(Date.now())
   let nodeScope = $derived<NodeScopeState>(
-    resolveNodeScopeState(pendingScope, $adminLog, hasNode, nowMs),
+    resolveNodeScopeState(scopeRecord, $adminLog, hasNode, nowMs),
   )
 
   // A command that was sent and has no reply yet. Deliberately independent of
   // `nowMs`, so the clock below does not retrigger its own effect.
   let awaitingReply = $derived(
-    !!pendingScope?.id && !$adminLog.find((e) => e.id === pendingScope?.id)?.reply,
+    !!scopeRecord?.pending.id && !$adminLog.find((e) => e.id === scopeRecord?.pending.id)?.reply,
   )
   $effect(() => {
     if (!awaitingReply) return
@@ -93,7 +93,7 @@
   onMount(async () => {
     consented = await hasConsented()
     optIns = await loadOptIns()
-    pendingScope = await loadPendingScopeCommand()
+    scopeRecord = await loadAnswerScope()
     hasNode = !!(await enrolledNode())
     await refreshAdminLog()
     ocrOn = await assetsEnabled()
@@ -209,7 +209,7 @@
       const commit = await commitAnswerScope(next)
       // Only now do the persisted value and the switch agree.
       optIns = next
-      pendingScope = await loadPendingScopeCommand()
+      scopeRecord = await loadAnswerScope()
       nowMs = Date.now()
       if (commit.node !== 'no-node') await refreshAdminLog()
     } catch {
@@ -228,9 +228,11 @@
     optInBusy = true
     try {
       await retryAnswerScope()
-      pendingScope = await loadPendingScopeCommand()
+      scopeRecord = await loadAnswerScope()
       nowMs = Date.now()
       await refreshAdminLog()
+    } catch {
+      optInError = "That couldn't be saved on this device, so nothing was sent. Try again."
     } finally {
       optInBusy = false
     }

@@ -9,11 +9,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const store = vi.hoisted(() => ({
   values: new Map<string, unknown>(),
   putFails: false,
+  /** Allow this many puts, then fail every one after — each `put` is its own
+   * IndexedDB transaction, so "the first write landed and a later one did not"
+   * is a real state the store can be left in, not a contrived one. */
+  allowPuts: Infinity,
+  puts: 0,
 }))
 vi.mock('../db', () => ({
   get: vi.fn(async (_s: string, key: string) => store.values.get(key)),
   put: vi.fn(async (_s: string, value: unknown, key: string) => {
-    if (store.putFails) throw new Error('QuotaExceededError')
+    if (store.putFails || store.puts++ >= store.allowPuts) throw new Error('QuotaExceededError')
     store.values.set(key, value)
   }),
   del: vi.fn(async () => {}),
@@ -42,10 +47,10 @@ import {
 } from '../mailbox'
 import {
   loadOptIns,
-  loadPendingScopeCommand,
+  loadAnswerScope,
   resolveNodeScopeState,
   CONFIRM_WINDOW_MS,
-  type PendingScopeCommand,
+  type AnswerScopeRecord,
 } from '../answerScope'
 import type { Category } from '../category'
 
@@ -100,6 +105,8 @@ function client(): MailboxClient {
 beforeEach(() => {
   store.values.clear()
   store.putFails = false
+  store.allowPuts = Infinity
+  store.puts = 0
   relayFails = false
   sealCounter = 0
   sent.length = 0
@@ -158,16 +165,80 @@ describe('what this device may claim about the node', () => {
     node.value = NODE
     relayFails = true
     await commitAnswerScope(set('cycle'))
-    expect(await loadPendingScopeCommand()).toMatchObject({ id: null, include: ['cycle'] })
+    expect(await loadAnswerScope()).toMatchObject({
+      include: ['cycle'],
+      pending: { id: null, include: ['cycle'] },
+    })
+  })
+
+  // The half-written opt-out.
+  //
+  // Cycle is on and the node has confirmed it. The owner turns Cycle off; the
+  // desired-scope write lands, the relay is down, and the write that was meant
+  // to invalidate the old tracked command does not land either — a separate
+  // IndexedDB transaction, so this is an ordinary partial failure, not a
+  // contrived one.
+  //
+  // If the previous command's id survives that, its old `ok` reply is still
+  // matchable, and the app tells the owner "Your node has applied this" about a
+  // node that is still reading Cycle. That is the worst sentence this screen can
+  // produce: it is not a missing reassurance, it is a false one, about exactly
+  // the disclosure the owner just tried to stop.
+  it('never leaves a stale confirmation eligible when an opt-out is only half-written', async () => {
+    node.value = NODE
+    await commitAnswerScope(set('cycle'))
+    const confirmedLog = [{ id: 'cmd-1', reply: { ok: true } }]
+    expect(
+      resolveNodeScopeState(await loadAnswerScope(), confirmedLog, true, Date.now()),
+    ).toEqual({ state: 'confirmed' })
+
+    // Opt out: the scope write succeeds, the relay is down, and the very next
+    // write fails.
+    relayFails = true
+    store.allowPuts = store.puts + 1
+    await commitAnswerScope(set())
+
+    store.allowPuts = Infinity
+    // The desired scope did land — this is the half that worked.
+    expect(await loadOptIns()).toEqual(set())
+    const state = resolveNodeScopeState(
+      await loadAnswerScope(),
+      confirmedLog,
+      true,
+      Date.now(),
+    )
+    expect(state).not.toEqual({ state: 'confirmed' })
+    // And not `idle` either — that renders as "nothing to say", which is just as
+    // silent. The durable answer has to be that the node was not told.
+    expect(state).toEqual({ state: 'unsent' })
+  })
+
+  // Same swallowed write, but with no earlier command to go stale. The old
+  // shape degraded to `idle` here, which shows the owner nothing at all.
+  it('is durably unsent — never idle — when a first opt-out is only half-written', async () => {
+    node.value = NODE
+    relayFails = true
+    store.allowPuts = store.puts + 1
+    await commitAnswerScope(set())
+
+    store.allowPuts = Infinity
+    expect(
+      resolveNodeScopeState(await loadAnswerScope(), [], true, Date.now()),
+    ).toEqual({ state: 'unsent' })
   })
 })
 
 describe('resolveNodeScopeState', () => {
-  const pending = (over: Partial<PendingScopeCommand> = {}): PendingScopeCommand => ({
-    id: 'cmd-1',
+  /** A record whose tracked command matches its desired set — the ordinary
+   * shape, since both are written together. */
+  const pending = (over: Partial<AnswerScopeRecord['pending']> = {}): AnswerScopeRecord => ({
     include: ['cycle'],
-    sentAt: new Date(1_000_000).toISOString(),
-    ...over,
+    pending: {
+      id: 'cmd-1',
+      include: ['cycle'],
+      sentAt: new Date(1_000_000).toISOString(),
+      ...over,
+    },
   })
   const now = 1_000_000
 
@@ -213,6 +284,23 @@ describe('resolveNodeScopeState', () => {
     ).toEqual({ state: 'unconfirmed' })
   })
 
+  // A reply is evidence about the command it answers, nothing more. If the
+  // tracked command asked for a different set than the owner now wants, its
+  // `ok` says the node applied *that* — which is not agreement with this.
+  it('will not confirm on a reply to a command carrying a different set', () => {
+    const superseded: AnswerScopeRecord = {
+      include: [],
+      pending: {
+        id: 'cmd-1',
+        include: ['cycle'],
+        sentAt: new Date(1_000_000).toISOString(),
+      },
+    }
+    expect(
+      resolveNodeScopeState(superseded, [{ id: 'cmd-1', reply: { ok: true } }], true, now),
+    ).toEqual({ state: 'unsent' })
+  })
+
   it('surfaces a refusal with the node’s reason', () => {
     expect(
       resolveNodeScopeState(
@@ -233,7 +321,7 @@ describe('retryAnswerScope', () => {
     relayFails = true
     await commitAnswerScope(set('mind'))
     expect(await loadOptIns()).toEqual(set('mind'))
-    expect(await loadPendingScopeCommand()).toMatchObject({ id: null })
+    expect(await loadAnswerScope()).toMatchObject({ pending: { id: null } })
 
     relayFails = false
     sent.length = 0
