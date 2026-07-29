@@ -16,56 +16,94 @@
 // it poorly, and it would put markup between the reader and the record.
 import type { OcrLine, OcrWord } from './ocr'
 
-/** Fraction of the shorter run's height that two runs must overlap vertically to
- * count as the same line. Half is forgiving enough for the baseline jitter in a
- * scan, tight enough that a table's rows stay separate. */
-const LINE_OVERLAP = 0.5
+/** How far a run's vertical center may sit from its row's, as a multiple of the
+ * shorter of the two glyph heights involved. Strictly under 1 on purpose: at a
+ * full height the two bands merely touch, so a table set solid — no leading at
+ * all — would merge, and a rule that merges at touching has no margin left for
+ * the rows that are merely close. Under it, and still loose enough for a scan's
+ * baseline wobble and the droop a fraction of a degree of skew accumulates
+ * across a wide panel. */
+const BAND_TOLERANCE = 0.9
 
 /** Character width of a rendered column block. Wide enough for a lab panel's
  * analyte/value/unit/range, narrow enough not to bloat the prompt. */
 export const COLUMN_WIDTH = 100
 
-/** How much two vertical spans overlap, as a fraction of the shorter one. */
-function overlapRatio(a: OcrWord, b: OcrWord): number {
-  const top = Math.max(a.y0, b.y0)
-  const bottom = Math.min(a.y1, b.y1)
-  const shorter = Math.min(a.y1 - a.y0, b.y1 - b.y0)
-  if (shorter <= 0) return 0
-  return Math.max(0, bottom - top) / shorter
+/** Middle of a run's vertical span. Large and small faces on one printed row
+ * share a center far more closely than they share an edge. */
+function center(word: OcrWord): number {
+  return (word.y0 + word.y1) / 2
+}
+
+function height(word: OcrWord): number {
+  return word.y1 - word.y0
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = sorted.length >> 1
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
+}
+
+/** A row under construction: its runs, and the centers and heights the band is
+ * re-derived from as it grows. */
+interface Row {
+  words: OcrWord[]
+  centers: number[]
+  heights: number[]
+}
+
+/** Whether `word` sits on `row`'s band — see {@link groupLines} for why the
+ * distance is scaled by the shorter of the two heights and nothing wider. */
+function joinsRow(word: OcrWord, row: Row): boolean {
+  const local = Math.min(height(word), median(row.heights))
+  return Math.abs(center(word) - median(row.centers)) <= local * BAND_TOLERANCE
 }
 
 /**
- * Group positioned runs into lines by vertical overlap, top to bottom, each
- * line's runs ordered left to right.
+ * Group positioned runs into lines, top to bottom, each line's runs ordered left
+ * to right.
  *
- * Overlap rather than equal baselines: a scan's baselines wobble, and a run set
- * in a larger face sits on the same visual row without sharing a y. Each run is
- * compared against the line it would join rather than against a running average,
- * so one tall run cannot drag a line's band across its neighbours.
+ * A run joins the open row when its vertical center sits within
+ * {@link BAND_TOLERANCE} of the row's, where the row's center is the median of
+ * its members' and the distance is measured in the shorter of the two glyph
+ * heights — the run's own, or the row's typical one. Every part of that is
+ * load-bearing:
+ *
+ *   - Medians, not extremes: a section label in a large face, a scanned table
+ *     rule or a logo is several rows tall. Anchoring a row to its tallest member
+ *     let such a run stretch the band over every row it crossed and merge them
+ *     into one line, which is the cross-row mis-association this module exists to
+ *     prevent. A tall run contributes one center and one height among many, so it
+ *     can join a row without becoming that row's extent.
+ *   - Local heights, never a page statistic: a banner or letterhead says nothing
+ *     about how tightly a table further down is set, and scaling the tolerance by
+ *     the page's typical glyph height lets big text elsewhere merge that table's
+ *     rows. Only the candidate and the row it would join get a say.
+ *   - A running median rather than the row's first member: it drifts along with a
+ *     skewed row as its cells droop, which is what holds a crooked scan's row
+ *     together instead of shredding it into one line per cell.
  */
 export function groupLines(words: OcrWord[]): OcrLine[] {
   const usable = words.filter((w) => w.text.trim() !== '')
   if (usable.length === 0) return []
 
-  const sorted = [...usable].sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0)
-  const rows: OcrWord[][] = []
+  const sorted = [...usable].sort((a, b) => center(a) - center(b) || a.x0 - b.x0)
+  const rows: Row[] = []
 
   for (const word of sorted) {
     const row = rows.at(-1)
-    // Compare against the row's tallest member: the run most likely to define
-    // the visual band, so a short subscript joins rather than starting a row.
-    const anchor = row?.reduce((tallest, w) =>
-      w.y1 - w.y0 > tallest.y1 - tallest.y0 ? w : tallest,
-    )
-    if (anchor && overlapRatio(anchor, word) >= LINE_OVERLAP) {
-      row!.push(word)
+    if (row && joinsRow(word, row)) {
+      row.words.push(word)
+      row.centers.push(center(word))
+      row.heights.push(height(word))
     } else {
-      rows.push([word])
+      rows.push({ words: [word], centers: [center(word)], heights: [height(word)] })
     }
   }
 
   return rows.map((row, i) => {
-    const ordered = [...row].sort((a, b) => a.x0 - b.x0)
+    const ordered = [...row.words].sort((a, b) => a.x0 - b.x0)
     return {
       index: i + 1,
       words: ordered,
