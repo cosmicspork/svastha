@@ -35,22 +35,60 @@ pub const DEFAULT_MODELS_DIR: &str = "/models";
 const DETECTION_MODEL: &str = "text-detection.rten";
 const RECOGNITION_MODEL: &str = "text-recognition.rten";
 
-/// Decode bounds for one page.
+/// Decode bounds for one page. Three of them, and each catches something the
+/// others do not.
 ///
-/// `image` already defaults to a 512 MiB allocation ceiling, but that one is
-/// best-effort and a decoder may ignore it; the *dimension* limits are the ones
-/// the crate treats as strict, and there were none — so a page header declaring
-/// 60000 × 60000 was believed all the way to `into_rgb8`, which then asked for
-/// ten gigabytes on a node several households may share.
+/// The per-edge limit is the *strict* one — the crate enforces it inside the
+/// decoder, from the header, before anything is allocated. There were none, so
+/// a page declaring 60000 × 60000 was believed all the way to `into_rgb8` asking
+/// for ten gigabytes on a node several households may share. 12000 px an edge is
+/// past any real page: 600 dpi of a twenty-inch scan.
 ///
-/// 12000 px an edge is past any real page — 600 dpi of a twenty-inch scan, and
-/// a 108-megapixel phone photo is 12000 × 9000 — and 12000 × 12000 × 3 ≈ 412 MiB
-/// of output sits under the allocation ceiling, so the two bounds agree instead
-/// of one quietly making the other unreachable. Reading is serial (one page at a
-/// time, per owner), so this is the node's peak rather than a per-page tax that
-/// multiplies.
+/// The allocation ceiling is what the decoder is allowed to reserve. It is
+/// best-effort — some decoders ignore it — and it stops accounting the moment
+/// the decoder is done, which is the hole [`PEAK_BYTES_PER_PIXEL`] and
+/// [`MAX_PAGE_PIXELS`] exist to close. It is stated here rather than left to the
+/// crate default so it cannot drift under us.
+///
+/// Reading is serial (one page at a time, per owner), so these bound the node's
+/// peak rather than being a per-page tax that multiplies.
 const MAX_PAGE_DIMENSION: u32 = 12_000;
 const MAX_PAGE_ALLOC: u64 = 512 * 1024 * 1024;
+
+/// The most bytes one pixel can occupy at the peak of a read, which is *not*
+/// what [`MAX_PAGE_ALLOC`] bounds.
+///
+/// `image::Limits` accounts for what the decoder allocates. `decode()` hands
+/// back a `DynamicImage` in the file's own colour type, and `into_rgb8()` then
+/// allocates the RGB buffer while that first one is still alive — after the
+/// decoder is finished, so outside its accounting entirely. A compressed
+/// 12000 × 12000 *grayscale* page is only 144 MiB of decoded data and passes
+/// the allocation limit comfortably, then asks for another 412 MiB to convert:
+/// 556 MiB at the peak, past the ceiling this claims to hold.
+///
+/// So the peak is both buffers at once. The widest `DynamicImage` variant is
+/// `Rgba32F` at 16 bytes a pixel (reachable: the `exr` and `hdr` decoders are
+/// on by default), plus 3 for the RGB conversion held alongside it.
+const PEAK_BYTES_PER_PIXEL: u64 = 16 + 3;
+
+/// Total pixels one page may have — *derived* from the ceiling rather than
+/// picked, so the two cannot drift apart (`the_pixel_budget_honours_the_ceiling`
+/// pins that). Roughly 28 megapixels.
+///
+/// This is the bound that actually bites; [`MAX_PAGE_DIMENSION`] stays as the
+/// strict per-edge check the decoder itself enforces, which is what stops an
+/// absurd single dimension cheaply, from the header. 28 MP is a 400 dpi
+/// letter-page scan with room to spare and every phone capture short of the
+/// 48-megapixel sensors; a page over it fails onto the unreadable path, which
+/// the OCR pass backs off from — a visible, recoverable outcome, rather than
+/// taking a node several households share down with it.
+const MAX_PAGE_PIXELS: u64 = MAX_PAGE_ALLOC / PEAK_BYTES_PER_PIXEL;
+
+/// The ceiling is a claim about peak memory, so it has to hold arithmetically:
+/// the decoded buffer and the RGB one held at once, at the largest page the
+/// budget admits, still fit under it. Asserted at compile time rather than in a
+/// test — a change to any of the three that breaks the claim should not build.
+const _: () = assert!(MAX_PAGE_PIXELS * PEAK_BYTES_PER_PIXEL <= MAX_PAGE_ALLOC);
 
 /// Stage A as the OCR pass sees it.
 ///
@@ -99,7 +137,7 @@ impl Transcriber {
     }
 
     fn read(&self, bytes: &[u8]) -> Result<Vec<String>> {
-        let image = decode_page(bytes, page_limits())?;
+        let image = decode_page(bytes, page_limits(), MAX_PAGE_PIXELS)?;
         let source = ImageSource::from_bytes(image.as_raw(), image.dimensions())
             .map_err(|e| anyhow!("could not prepare this page for reading: {e}"))?;
         let input = self
@@ -141,15 +179,33 @@ fn page_limits() -> image::Limits {
     limits
 }
 
-/// Decode one page's bytes under `limits`. A page that exceeds them fails on the
-/// same path as a corrupt one: from the caller's side it is a page that could
-/// not be read, which the OCR pass already knows how to back off from.
-fn decode_page(bytes: &[u8], limits: image::Limits) -> Result<image::RgbImage> {
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
-        .with_guessed_format()
+/// Decode one page's bytes to RGB under `limits` and a `max_pixels` budget. A
+/// page that exceeds either fails on the same path as a corrupt one: from the
+/// caller's side it is a page that could not be read, which the OCR pass already
+/// knows how to back off from.
+fn decode_page(bytes: &[u8], limits: image::Limits, max_pixels: u64) -> Result<image::RgbImage> {
+    let reader = |limits: image::Limits| -> Result<_> {
+        let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+            .with_guessed_format()
+            .context("could not decode this page as an image")?;
+        reader.limits(limits);
+        Ok(reader)
+    };
+
+    // Read the declared size from the header and budget against it *before*
+    // decoding, because the conversion below allocates outside anything
+    // `Limits` accounts for — see PEAK_BYTES_PER_PIXEL.
+    let (width, height) = reader(limits.clone())?
+        .into_dimensions()
         .context("could not decode this page as an image")?;
-    reader.limits(limits);
-    Ok(reader
+    if u64::from(width) * u64::from(height) > max_pixels {
+        return Err(image::ImageError::Limits(
+            image::error::LimitError::from_kind(image::error::LimitErrorKind::DimensionError),
+        ))
+        .context("could not decode this page as an image");
+    }
+
+    Ok(reader(limits)?
         .decode()
         .context("could not decode this page as an image")?
         .into_rgb8())
@@ -194,26 +250,44 @@ mod tests {
         assert_eq!(numbered(&[]), "");
     }
 
-    /// A real PNG of the given size. One pixel tall keeps it cheap: the point is
-    /// the size the *header* declares, which is what the limits check.
+    /// A real RGB PNG of the given size. One pixel tall keeps it cheap: the
+    /// point is the size the *header* declares, which is what the bounds check.
     fn png(width: u32, height: u32) -> Vec<u8> {
+        encode(image::RgbImage::new(width, height).into())
+    }
+
+    /// A real grayscale PNG — one byte a pixel decoded, three after the RGB
+    /// conversion the reader needs. The colour type is the whole point: it is
+    /// the cheap-to-decode, expensive-to-convert case the budget is sized for.
+    fn gray_png(width: u32, height: u32) -> Vec<u8> {
+        encode(image::GrayImage::new(width, height).into())
+    }
+
+    fn encode(image: image::DynamicImage) -> Vec<u8> {
         let mut out = std::io::Cursor::new(Vec::new());
-        image::RgbImage::new(width, height)
+        image
             .write_to(&mut out, image::ImageFormat::Png)
             .expect("encode png");
         out.into_inner()
     }
 
+    fn is_limit_error(err: &anyhow::Error) -> bool {
+        matches!(
+            err.downcast_ref::<image::ImageError>(),
+            Some(image::ImageError::Limits(_))
+        )
+    }
+
     #[test]
     fn a_page_past_the_dimension_limit_is_refused_rather_than_allocated() {
         let oversized = png(MAX_PAGE_DIMENSION + 1, 1);
-        let err = decode_page(&oversized, page_limits())
-            .expect_err("an oversized page must be refused, not decoded");
+        // Matched rather than `expect_err`: the Ok side is a whole decoded
+        // page, and panicking on it would dump the pixels into the output.
+        let Err(err) = decode_page(&oversized, page_limits(), MAX_PAGE_PIXELS) else {
+            panic!("an oversized page must be refused, not decoded");
+        };
         assert!(
-            matches!(
-                err.downcast_ref::<image::ImageError>(),
-                Some(image::ImageError::Limits(_))
-            ),
+            is_limit_error(&err),
             "must fail on the declared size before anything is allocated: {err:#}"
         );
         // ...and it reaches the caller as an unreadable page, which the OCR pass
@@ -224,18 +298,55 @@ mod tests {
         );
         // The same bytes decode without the bounds, so it is the limits doing
         // the refusing and not something else wrong with the fixture.
-        assert!(decode_page(&oversized, image::Limits::no_limits()).is_ok());
+        assert!(decode_page(&oversized, image::Limits::no_limits(), u64::MAX).is_ok());
+    }
+
+    /// The case the per-edge limit alone lets through. This page is inside every
+    /// dimension bound and only 1 byte a pixel to decode, so the allocation
+    /// limit sees nothing wrong with it — and then the RGB conversion asks for
+    /// three times as much again, on top of a buffer still held.
+    #[test]
+    fn a_grayscale_page_within_the_dimension_limits_is_refused_on_total_pixels() {
+        let height = (MAX_PAGE_PIXELS / u64::from(MAX_PAGE_DIMENSION)) as u32 + 1;
+        assert!(
+            height < MAX_PAGE_DIMENSION,
+            "must be inside the per-edge bound"
+        );
+
+        let page = gray_png(MAX_PAGE_DIMENSION, height);
+        let Err(err) = decode_page(&page, page_limits(), MAX_PAGE_PIXELS) else {
+            panic!("a page over the pixel budget must be refused");
+        };
+        assert!(is_limit_error(&err), "got: {err:#}");
+        assert!(
+            format!("{err:#}").contains("could not decode this page"),
+            "got: {err:#}"
+        );
+
+        // Nothing but the budget rejects it: the allocation limit alone lets it
+        // straight through, which is the hole this closes.
+        let mut alloc_only = image::Limits::no_limits();
+        alloc_only.max_alloc = Some(MAX_PAGE_ALLOC);
+        assert!(
+            decode_page(&page, alloc_only, u64::MAX).is_ok(),
+            "the allocation ceiling does not see the conversion coming"
+        );
     }
 
     #[test]
     fn a_page_the_size_of_a_real_scan_still_reads() {
-        assert!(decode_page(&png(1200, 1600), page_limits()).is_ok());
+        assert!(decode_page(&png(1200, 1600), page_limits(), MAX_PAGE_PIXELS).is_ok());
+        // Grayscale reaches the reader as RGB, converted.
+        let read = decode_page(&gray_png(1200, 1600), page_limits(), MAX_PAGE_PIXELS)
+            .expect("a grayscale scan is a page like any other");
+        assert_eq!(read.dimensions(), (1200, 1600));
     }
 
     #[test]
     fn a_corrupt_page_is_an_error_not_a_panic() {
-        let err = decode_page(b"not an image at all", page_limits())
-            .expect_err("garbage bytes are not a page");
+        let Err(err) = decode_page(b"not an image at all", page_limits(), MAX_PAGE_PIXELS) else {
+            panic!("garbage bytes are not a page");
+        };
         assert!(
             format!("{err:#}").contains("could not decode this page"),
             "got: {err:#}"

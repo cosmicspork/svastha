@@ -102,10 +102,18 @@ struct Finding {
 /// dropped: a page's worth of readings gone, and indistinguishable from a page
 /// with nothing on it. Holding the elements as `Value` lets each one be shaped
 /// on its own, so a malformation costs its own finding and no more.
+///
+/// The `Option` is load-bearing for the same reason. A plain `#[serde(default)]
+/// Vec` cannot tell a *missing* `findings` key from an explicit empty one, so
+/// `{}` — or any well-formed object of the wrong shape — deserializes to an
+/// empty list and reads as "the model looked and found nothing", which the node
+/// records terminally. Absence has to survive the parse. An explicit
+/// `"findings": null` lands here as absence too: it is not the empty list the
+/// schema asks for, and the safe reading of an ambiguity is the retryable one.
 #[derive(Debug, Default, Deserialize)]
 struct RawFindings {
     #[serde(default)]
-    findings: Vec<serde_json::Value>,
+    findings: Option<Vec<serde_json::Value>>,
 }
 
 /// The result of parsing one model answer: the valid drafts, and how many
@@ -147,14 +155,15 @@ pub fn parse_lines(answer: &str, lines: &[String]) -> Extraction {
 /// finding is dropped and counted, so the worst case is "nothing proposed",
 /// never a bad proposal.
 fn parse_inner(answer: &str, lines: Option<&[String]>) -> Extraction {
-    let Some(parsed) = parse_json_object::<RawFindings>(answer) else {
+    let findings = parse_json_object::<RawFindings>(answer).and_then(|p| p.findings);
+    let Some(findings) = findings else {
         return Extraction {
             unparseable: true,
             ..Default::default()
         };
     };
     let mut out = Extraction::default();
-    for raw in &parsed.findings {
+    for raw in &findings {
         let Some(finding) = finding_from_json(raw) else {
             out.dropped += 1;
             continue;
@@ -898,6 +907,30 @@ mod tests {
         assert_eq!(said_nothing.dropped, 0);
     }
 
+    /// Only a literal `"findings": []` is the model reporting a blank page.
+    /// A `#[serde(default)]` on the list made a *missing* key produce the same
+    /// empty list as an explicit one, so an object shaped nothing like an answer
+    /// read as "this page has nothing on it" — which the node records
+    /// terminally. Absence has to survive the parse to be distinguishable.
+    #[test]
+    fn an_answer_with_no_findings_key_is_unparseable_not_empty() {
+        for answer in [
+            "{}",
+            r#"{"result":[]}"#,
+            r#"{"findings":null}"#,
+            r#"{"observations":[{"kind":"observation","value_text":"note"}]}"#,
+            r#"{"error":"the transcript was empty"}"#,
+        ] {
+            let ex = parse(answer);
+            assert!(
+                ex.unparseable,
+                "no findings key, but read as an answer: {answer}"
+            );
+            assert_eq!(ex.drafts.len(), 0, "{answer}");
+            assert_eq!(ex.dropped, 0, "{answer}");
+        }
+    }
+
     #[test]
     fn tolerates_prose_and_fences_around_json() {
         let answer = "Here is what I found:\n```json\n{\"findings\":[{\"kind\":\"observation\",\"value_text\":\"note\"}]}\n```\nHope that helps!";
@@ -952,6 +985,7 @@ mod tests {
         assert!(
             parsed
                 .findings
+                .expect("fixture has a findings list")
                 .iter()
                 .map(|v| finding_from_json(v).expect("fixture finding is well-formed"))
                 .all(|f| f

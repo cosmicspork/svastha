@@ -401,6 +401,46 @@ fn an_unparseable_reply_backs_off_rather_than_burying_the_page() {
     );
 }
 
+/// The same failure wearing valid JSON: an object with no `findings` key at
+/// all, or with the findings under some other name. That is the coding model
+/// failing to answer in the schema, not a verdict that the page is blank, and
+/// `mark_empty` would be terminal.
+#[test]
+fn a_reply_with_no_findings_key_backs_off_rather_than_burying_the_page() {
+    for (seed, answer) in [
+        (b"ocr owner no findings key".as_slice(), "{}"),
+        (
+            b"ocr owner wrong findings key".as_slice(),
+            r#"{"result":[]}"#,
+        ),
+    ] {
+        let (base, _calls) = spawn_inference(Mode::Ok(answer.to_string()));
+        let inf = inference_client(&base);
+        let fx = setup(seed, &[b"page bytes"]);
+        let mut journal = Journal::load(fx.journal_dir.path());
+
+        let report = svastha_node::ocr::run(
+            &fx.node_client,
+            &fx.cache,
+            &fx.state,
+            &inf,
+            &StubReader::page(),
+            &resumed(&fx.journal_dir),
+            &mut journal,
+        )
+        .unwrap();
+        assert_eq!(report.failed, 1, "reply was {answer}");
+        assert_eq!(
+            report.empties, 0,
+            "an answer in the wrong shape says nothing about the page: {answer}"
+        );
+        assert!(
+            journal.eligible(&hex_ed(&fx.owner), &fx.sources[0], now_secs() + 3600),
+            "the page must still be readable next pass: {answer}"
+        );
+    }
+}
+
 /// The other half of the same branch: a model that *did* read the page and
 /// found nothing on it is a conclusion about the page, and stays terminal.
 #[test]
