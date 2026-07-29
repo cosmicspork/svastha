@@ -212,6 +212,16 @@ fn execute(
             Ok(detail) => (true, detail),
             Err(msg) => (false, msg),
         },
+        // A command from a newer app than this node. Answered, not ignored: the
+        // owner needs to be able to tell "this node will not do that" from "this
+        // node never heard me", and only a reply can do that. Nothing is guessed
+        // at and nothing is changed.
+        AdminCommand::Unknown => (
+            false,
+            "this node does not know that command, so nothing was done. It is probably older \
+             than the app that sent it — update the node"
+                .to_string(),
+        ),
         AdminCommand::SetInferenceEndpoint { endpoint } => match inference.set_endpoint(endpoint) {
             // Still subject to the boot-time config validation (synchronous,
             // non-batch); a rejected value answers ok:false with the message.

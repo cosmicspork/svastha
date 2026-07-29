@@ -153,11 +153,26 @@ async function gatherCandidates(): Promise<Candidate[]> {
   // means codes fall through to the layers above it.
   const dictionary = await loadDictionaryIndex().catch(() => new Map<string, string>())
   // Scope before ranking, never after: an entry the owner has not opted in must
-  // not be scored, rendered, or sent. The name index still reads the whole vault
-  // — it maps code to display and is only consulted for codes a candidate
-  // already carries, so it cannot carry an excluded entry into the prompt.
+  // not be scored, rendered, or sent.
+  //
+  // And every index built alongside the candidates is derived from `inScope`
+  // too, not from `events` — filtering only the candidate list is not enough.
+  // `buildCodeNameIndex` keys on `system|code` *without* the kind, so a vault-
+  // wide index will lend an excluded mind entry's `display` to an in-scope
+  // event carrying the same code: the excluded entry never appears as a
+  // candidate, and its label narrates the answer regardless. An excluded entry
+  // has to be absent from everything the prompt is built from, not merely from
+  // the list of things that can be cited.
+  //
+  // `statuses` and `names` need no such filtering, and the reason is worth
+  // stating: both are keyed by `conceptKey`, which includes the event *kind*
+  // alongside the coding, and two events sharing a concept key therefore share
+  // the kind and coding that decide their category. Same key implies same
+  // sensitivity, so a lookup by an in-scope candidate's key can never return a
+  // record belonging to an excluded one. `buildCodeNameIndex` is the odd one
+  // out precisely because it drops the kind from its key.
   const inScope = filterSensitive(events, await loadOptIns())
-  return buildCandidates(inScope, statuses, names, buildCodeNameIndex(events), dictionary)
+  return buildCandidates(inScope, statuses, names, buildCodeNameIndex(inScope), dictionary)
 }
 
 /** Whether this device can answer without a node. */

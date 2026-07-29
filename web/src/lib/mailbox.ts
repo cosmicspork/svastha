@@ -47,7 +47,13 @@ import {
   enrolledNode,
   type AdminCommand,
 } from './nodeadmin'
-import { saveOptIns } from './answerScope'
+import {
+  saveOptIns,
+  loadOptIns,
+  includeList,
+  savePendingScopeCommand,
+  loadPendingScopeCommand,
+} from './answerScope'
 import type { Category } from './category'
 
 /** The mailbox surface this layer needs. `RelayClient` satisfies it
@@ -571,50 +577,103 @@ export async function sendChatMessage(node: NodeTarget, text: string): Promise<C
 /**
  * Seal an `admin_cmd` to the node and deposit it, then record the local command
  * keyed by the envelope message id (so the node's `admin_reply`, which carries
- * that id as `in_reply_to`, folds back onto it). Returns whether it was sent.
+ * that id as `in_reply_to`, folds back onto it).
+ *
+ * Returns that message id, or null when nothing could be sent. The id is the
+ * only handle a caller has on whether the node ever answered, so it is returned
+ * rather than a bare boolean — depositing a command and the node applying it are
+ * different events, and a caller that needs the second one needs this.
  */
-export async function sendAdminCommand(node: NodeTarget, command: AdminCommand): Promise<boolean> {
-  if (!client || !identity) return false
+export async function sendAdminCommand(
+  node: NodeTarget,
+  command: AdminCommand,
+): Promise<string | null> {
+  if (!client || !identity) return null
   const body = new TextEncoder().encode(JSON.stringify({ command }))
   const envelope = identity.seal_message(fromHex(node.x25519), 'admin_cmd', Date.now(), body)
   const id = messageIdOf(envelope)
   await client.putMailbox(node.ed, `admin-${id}`, new TextEncoder().encode(envelope))
   await recordCommand({ id, command, sentAt: new Date().toISOString() })
-  return true
+  return id
 }
 
-/** What {@link commitAnswerScope} managed to do. */
-export type AnswerScopeOutcome =
-  /** Saved here; no node is enrolled, so there is nothing else to tell. */
-  | 'local-only'
-  /** Saved here and the node was told. */
-  | 'sent'
-  /** Saved here, but the command could not be deposited (locked vault, no relay).
-   * The node keeps its previous instruction until one gets through. */
-  | 'unsent'
+/** The result of {@link commitAnswerScope}: what is now persisted here, and how
+ * far the node half got. `node` is never `confirmed` — a deposit is not an
+ * application, and only an `admin_reply` can promote it (see
+ * `answerScope.ts`'s `resolveNodeScopeState`). */
+export interface AnswerScopeCommit {
+  /** The set now persisted on this device — exactly what `ask.ts` will read. */
+  include: Category[]
+  node: 'no-node' | 'pending' | 'unsent'
+}
 
 /**
- * Record the owner's opt-in categories and, when a node is enrolled, tell it —
- * in that order, because the local choice governs this device's own answers and
- * must not depend on reaching anything.
+ * Record the owner's opt-in categories and, when a node is enrolled, tell it.
  *
- * The node is sent the whole set rather than the one that changed, so a command
- * that never lands is corrected by the next one instead of leaving the node a
- * flip behind for good. Lives here rather than in `answerScope.ts` so that module
- * stays free of the relay and wasm, and `ask.ts` can import it on the answering
- * path without dragging the mailbox in.
+ * **The local write is the commit point.** It happens first and it is the only
+ * step allowed to fail loudly: this device's own answers read the persisted
+ * value on the next question, so a caller that rendered a switch before this
+ * resolved would show a choice `ask.ts` does not honour. A rejected write
+ * therefore throws, with nothing sent and nothing changed, and the caller leaves
+ * the switch where it was.
+ *
+ * **The node half never throws.** It is remote and best-effort, so it is
+ * reported (`pending`/`unsent`), not raised — a failure there does not undo a
+ * local choice that is already in force here.
+ *
+ * The node is sent the whole set rather than the one that changed, so a retry is
+ * an idempotent re-send of the desired state rather than a replayed delta.
+ * Lives here rather than in `answerScope.ts` so that module stays free of the
+ * relay and wasm, and `ask.ts` can import it on the answering path without
+ * dragging the mailbox in.
  */
 export async function commitAnswerScope(
   optIns: ReadonlySet<Category>,
-): Promise<AnswerScopeOutcome> {
+): Promise<AnswerScopeCommit> {
+  // Not wrapped: a failure here must reach the caller (see above).
   const include = await saveOptIns(optIns)
-  const node = await enrolledNode()
-  if (!node) return 'local-only'
-  const sent = await sendAdminCommand(
+
+  const node = await enrolledNode().catch(() => null)
+  if (!node) {
+    await savePendingScopeCommand({ id: null, include, sentAt: new Date().toISOString() }).catch(
+      () => {},
+    )
+    return { include, node: 'no-node' }
+  }
+
+  const id = await sendAdminCommand(
     { ed: node.ed, x25519: node.x25519 },
     { cmd: 'set_answer_scope', include },
-  )
-  return sent ? 'sent' : 'unsent'
+  ).catch(() => null)
+  // Recorded either way, so a reload can still tell the owner the node was
+  // never told — an unsent command that vanishes on refresh reads as success.
+  await savePendingScopeCommand({ id, include, sentAt: new Date().toISOString() }).catch(() => {})
+  return { include, node: id ? 'pending' : 'unsent' }
+}
+
+/**
+ * Re-send the owner's current desired set — a real retry, not a new choice.
+ *
+ * The set comes from the **persisted opt-ins**, not from the pending record:
+ * those are the same in the ordinary case, and where they differ the persisted
+ * value is the one this device is already answering by, so it is the one the
+ * node should be brought to. (The pending record is only consulted to know
+ * there is something outstanding to retry.)
+ *
+ * Returns the fresh node status; a no-op `unsent` when nothing is outstanding.
+ */
+export async function retryAnswerScope(): Promise<AnswerScopeCommit['node']> {
+  const pending = await loadPendingScopeCommand()
+  if (!pending) return 'unsent'
+  const node = await enrolledNode().catch(() => null)
+  if (!node) return 'no-node'
+  const include = includeList(await loadOptIns())
+  const id = await sendAdminCommand(
+    { ed: node.ed, x25519: node.x25519 },
+    { cmd: 'set_answer_scope', include },
+  ).catch(() => null)
+  await savePendingScopeCommand({ id, include, sentAt: new Date().toISOString() }).catch(() => {})
+  return id ? 'pending' : 'unsent'
 }
 
 // --- resolution: echo the decision back to the proposer ---

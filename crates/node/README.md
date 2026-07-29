@@ -174,7 +174,11 @@ mirroring the web's posture.
   set of opt-in categories that owner's answers may read; a category name this
   build does not know is answered `ok: false` with nothing changed, rather than
   silently dropped). Node-global operations (restart, upgrade) are the host
-  operator's, never commands. Each command gets a sealed `admin_reply`.
+  operator's, never commands. Each command gets a sealed `admin_reply` — including
+  a command whose `cmd` tag this build does not know at all, which parses into a
+  catch-all and answers `ok: false`. That reply is what lets an app distinguish a
+  node that refuses from a node that never heard it, which for the disclosure
+  switches is the difference between an honest state and a false one.
 - **Idempotence.** Handled question/command message ids are recorded in the same
   content-free journal, so a restart never re-answers a question or re-runs a
   command, and the handled item is deleted from the node's mailbox.

@@ -352,6 +352,18 @@ pub enum AdminCommand {
         #[serde(default)]
         include: Vec<String>,
     },
+    /// A command whose `cmd` tag this build does not know.
+    ///
+    /// This is what makes the additive-set rule (`spec/README.md`) true rather
+    /// than aspirational: without it, an unrecognized tag fails to deserialize,
+    /// the node drops the envelope, and the sender gets **no reply at all** —
+    /// indistinguishable from an offline node. Parsing it into a catch-all lets
+    /// the node answer `ok: false` and say so, which is the difference between
+    /// "I won't" and silence.
+    ///
+    /// Deserialization only; nothing constructs or sends this.
+    #[serde(other)]
+    Unknown,
 }
 
 /// [`MessageKind::AdminCmd`] body.
@@ -656,7 +668,7 @@ mod tests {
     }
 
     #[test]
-    fn admin_commands_round_trip_and_unknown_ones_still_do_not_parse() {
+    fn an_unknown_command_parses_into_the_catch_all_so_it_can_be_answered() {
         // `set_answer_scope` carries category names as strings so an unknown one
         // reaches the node and is answered `ok: false` (see the node's
         // `answer_scope`), rather than failing here and leaving no reply.
@@ -678,10 +690,24 @@ mod tests {
             bare.command,
             AdminCommand::SetAnswerScope { include: vec![] }
         );
-        // Unchanged posture: a *command* this build does not know does not parse,
-        // so the reader never acts on a guess.
+        // A *command* this build does not know parses into the catch-all, so the
+        // node can answer `ok: false` — it never acts on a guess, and never
+        // leaves the sender with no reply at all (which is what a parse failure
+        // would do: the envelope would be dropped silently).
+        let unknown: AdminCmdBody =
+            serde_json::from_value(json!({ "command": { "cmd": "restart_the_node" } })).unwrap();
+        assert_eq!(unknown.command, AdminCommand::Unknown);
+        // Including one carrying arguments this build has never seen.
+        let unknown_with_args: AdminCmdBody = serde_json::from_value(
+            json!({ "command": { "cmd": "set_dream_scope", "include": ["dreams"] } }),
+        )
+        .unwrap();
+        assert_eq!(unknown_with_args.command, AdminCommand::Unknown);
+        // A *known* command with a malformed payload still fails to parse: the
+        // catch-all is for commands this build does not know, not a way to
+        // swallow a corrupt one.
         assert!(serde_json::from_value::<AdminCmdBody>(
-            json!({ "command": { "cmd": "restart_the_node" } })
+            json!({ "command": { "cmd": "set_inference_endpoint" } })
         )
         .is_err());
     }

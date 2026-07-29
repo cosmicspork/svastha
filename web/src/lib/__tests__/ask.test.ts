@@ -41,10 +41,10 @@ vi.mock('../curation', () => ({
   allStatuses: vi.fn(async () => new Map()),
   allNames: vi.fn(async () => new Map()),
 }))
-vi.mock('../code-names', () => ({
-  buildCodeNameIndex: vi.fn(() => new Map()),
-  resolveDisplay: vi.fn(() => null),
-}))
+// Real, not stubbed: the vault-wide name index is prompt-shaping input, so a
+// stub could not show a display crossing from an excluded event into an
+// in-scope one (see the leak regression below). It is pure over `StoredEvent[]`
+// and needs no browser.
 vi.mock('../dictionary', () => ({ loadDictionaryIndex: vi.fn(async () => new Map()) }))
 vi.mock('../summary', () => ({ conceptKey: vi.fn(() => 'k') }))
 
@@ -323,5 +323,62 @@ describe('opt-in entries', () => {
     expect(answer.citations).toEqual([])
     expect(answer.text).toMatch(/couldn't find/i)
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+// --- the second way an excluded entry can reach the prompt ---------------
+//
+// Filtering the candidate list is not enough on its own. Every index built
+// alongside it is prompt-shaping input too, and `buildCodeNameIndex` keys on
+// `system|code` WITHOUT the kind — so it happily lends a display from an event
+// the owner excluded to an in-scope event carrying the same code. The excluded
+// entry never appears as a candidate, and its label narrates the answer anyway.
+
+describe('indexes built alongside the candidates', () => {
+  const MOOD_CODE = { system: 'urn:svastha:codes', code: 'mood' }
+
+  /** The excluded mind observation, carrying a display the owner wrote. */
+  const privateMood: StoredEvent = {
+    event: {
+      id: 'mood',
+      kind: 'observation',
+      code: { ...MOOD_CODE, display: 'Private mood label' },
+      effective_at: '2026-03-15T09:00:00Z',
+      value: null,
+      provenance: { source: 'self', source_doc: null },
+    },
+    author: 'a'.repeat(64),
+    signature: 'b'.repeat(128),
+  } as StoredEvent
+
+  /** In scope, same code, no display of its own — so it looks for a borrowed one. */
+  const medication: StoredEvent = {
+    event: {
+      id: 'med',
+      kind: 'medication_statement',
+      code: { ...MOOD_CODE },
+      effective_at: '2026-03-16T09:00:00Z',
+      value: null,
+      provenance: { source: 'self', source_doc: null },
+    },
+    author: 'a'.repeat(64),
+    signature: 'b'.repeat(128),
+  } as StoredEvent
+
+  it('never lends an excluded entry’s display to an in-scope one', async () => {
+    vi.mocked(allEvents).mockResolvedValue([privateMood, medication])
+    wasm.rank_context.mockReturnValue('[]')
+
+    await askLocally('what am I taking?')
+
+    const candidates = JSON.parse(wasm.rank_context.mock.calls[0][0]) as {
+      event: { id: string }
+      name: string
+    }[]
+    expect(candidates.map((c) => c.event.id)).toEqual(['med'])
+    expect(candidates[0].name).not.toBe('Private mood label')
+    // Nothing named this code in scope, so it renders as the bare coding —
+    // less pretty, and the only honest option.
+    expect(candidates[0].name).toBe('urn:svastha:codes mood')
   })
 })

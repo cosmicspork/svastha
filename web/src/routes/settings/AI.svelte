@@ -19,9 +19,17 @@
     loadManifest,
     downloadBytes,
   } from '../../lib/ocr-assets'
-  import { OPT_IN_CATEGORIES, loadOptIns } from '../../lib/answerScope'
+  import {
+    OPT_IN_CATEGORIES,
+    loadOptIns,
+    loadPendingScopeCommand,
+    resolveNodeScopeState,
+    type NodeScopeState,
+    type PendingScopeCommand,
+  } from '../../lib/answerScope'
   import { CATEGORY_META, type Category } from '../../lib/category'
-  import { commitAnswerScope } from '../../lib/mailbox'
+  import { commitAnswerScope, retryAnswerScope } from '../../lib/mailbox'
+  import { adminLog, refreshAdminLog, enrolledNode } from '../../lib/nodeadmin'
 
   let endpoint = $state('')
   let model = $state('')
@@ -57,9 +65,37 @@
   let optInBusy = $state(false)
   let optInError = $state('')
 
+  // Whether the NODE has agreed with the local choice — tracked separately
+  // because it is a separate fact. A deposited command is not an applied one:
+  // an offline node, a node too old to parse the command, and a node whose
+  // state file will not write (`ok: false`) all leave the owner switched off
+  // here and still disclosed there. Only its `admin_reply` promotes this to
+  // `confirmed`; there is deliberately no "assume it worked" path.
+  let hasNode = $state(false)
+  let pendingScope = $state<PendingScopeCommand | undefined>(undefined)
+  // Ticked so an outstanding command ages into `unconfirmed` without a reload.
+  let nowMs = $state(Date.now())
+  let nodeScope = $derived<NodeScopeState>(
+    resolveNodeScopeState(pendingScope, $adminLog, hasNode, nowMs),
+  )
+
+  // A command that was sent and has no reply yet. Deliberately independent of
+  // `nowMs`, so the clock below does not retrigger its own effect.
+  let awaitingReply = $derived(
+    !!pendingScope?.id && !$adminLog.find((e) => e.id === pendingScope?.id)?.reply,
+  )
+  $effect(() => {
+    if (!awaitingReply) return
+    const tick = setInterval(() => (nowMs = Date.now()), 5000)
+    return () => clearInterval(tick)
+  })
+
   onMount(async () => {
     consented = await hasConsented()
     optIns = await loadOptIns()
+    pendingScope = await loadPendingScopeCommand()
+    hasNode = !!(await enrolledNode())
+    await refreshAdminLog()
     ocrOn = await assetsEnabled()
     void loadManifest()
       .then((m) => (ocrSizeMb = downloadBytes(m) / 1024 / 1024))
@@ -153,25 +189,48 @@
     }
   }
 
-  /** Flip one category and commit it. The switch reflects the local choice
-   * immediately because that is what this device's own answers obey; only the
-   * node half can fail, and it says so rather than silently disagreeing with the
-   * switch. */
+  /**
+   * Flip one category and commit it.
+   *
+   * The switch is **not** moved until the local write has landed. This device's
+   * own answers read the persisted value on the next question, so rendering the
+   * new position first would show a choice `ask.ts` does not honour — worst
+   * while turning a category *off*, where the switch would read "excluded" and
+   * the entries would keep going out. On a failed write the switch stays where
+   * it was, which is the truth.
+   */
   async function toggleOptIn(category: Category) {
     optInError = ''
     optInBusy = true
     const next = new Set(optIns)
     if (next.has(category)) next.delete(category)
     else next.add(category)
-    optIns = next
     try {
-      if ((await commitAnswerScope(next)) === 'unsent') {
-        optInError =
-          "Saved here, but your node couldn't be reached. It keeps its last instruction until this one gets through — toggle again when you're back online."
-      }
+      const commit = await commitAnswerScope(next)
+      // Only now do the persisted value and the switch agree.
+      optIns = next
+      pendingScope = await loadPendingScopeCommand()
+      nowMs = Date.now()
+      if (commit.node !== 'no-node') await refreshAdminLog()
     } catch {
-      optInError =
-        "Saved here, but your node couldn't be told. It keeps its last instruction until this one gets through."
+      // Nothing written, nothing sent — leave the switch where it was.
+      optInError = "That couldn't be saved on this device, so nothing changed. Try again."
+    } finally {
+      optInBusy = false
+    }
+  }
+
+  /** Re-send the same desired set. A retry, not a reversal — the copy this
+   * replaced told the owner to "toggle again", which would have sent the
+   * opposite set and left the node further from what they wanted. */
+  async function retryScope() {
+    optInError = ''
+    optInBusy = true
+    try {
+      await retryAnswerScope()
+      pendingScope = await loadPendingScopeCommand()
+      nowMs = Date.now()
+      await refreshAdminLog()
     } finally {
       optInBusy = false
     }
@@ -291,6 +350,37 @@
 
   {#if optInError}
     <p class="error" data-testid="answer-optin-error">{optInError}</p>
+  {/if}
+
+  <!-- What the NODE is doing with this choice. Its own line, because a switch
+       that governs two machines cannot report on one of them and imply the
+       other. Only `confirmed` claims the node agrees. -->
+  {#if nodeScope.state === 'pending'}
+    <p class="muted" data-testid="answer-optin-node-pending">Telling your node…</p>
+  {:else if nodeScope.state === 'confirmed'}
+    <p class="ok" data-testid="answer-optin-node-confirmed">Your node has applied this.</p>
+  {:else if nodeScope.state === 'refused'}
+    <p class="error" data-testid="answer-optin-node-refused">
+      Your node refused this and kept its previous setting{nodeScope.detail
+        ? `: ${nodeScope.detail}`
+        : '.'}
+    </p>
+    <button type="button" onclick={retryScope} disabled={optInBusy} data-testid="answer-optin-retry">
+      Send again
+    </button>
+  {:else if nodeScope.state === 'unconfirmed' || nodeScope.state === 'unsent'}
+    <p class="error" data-testid="answer-optin-node-unconfirmed">
+      {#if nodeScope.state === 'unsent'}
+        This is saved on this device, but your node hasn't been told yet.
+      {:else}
+        This is saved on this device, but your node hasn't confirmed it — it may be offline, or
+        running a version that doesn't know about opt-in entries.
+      {/if}
+      Until it confirms, assume it is still using your previous setting.
+    </p>
+    <button type="button" onclick={retryScope} disabled={optInBusy} data-testid="answer-optin-retry">
+      Send again
+    </button>
   {/if}
 
   <p class="muted note">

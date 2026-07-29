@@ -1139,3 +1139,64 @@ fn an_unknown_category_is_refused_and_leaves_the_scope_alone() {
         "job_status reports the scope the owner actually has, got: {status}"
     );
 }
+
+/// A command from a newer app is **answered**, not dropped. This is what makes
+/// the spec's additive-set sentence true: before the catch-all variant, an
+/// unrecognized `cmd` tag failed to deserialize and the envelope was dropped
+/// with no reply, which an owner cannot tell apart from an offline node — and
+/// which, for a privacy switch, means believing a setting applied when it never
+/// arrived.
+#[test]
+fn a_command_this_node_does_not_know_is_answered_rather_than_dropped() {
+    let h = Harness::new(b"admin node unknown");
+    let owner = h.add_owner(b"admin owner unknown");
+    h.enroll_and_sync();
+
+    // Deposited as raw JSON: this build has no variant for it, which is exactly
+    // the version-skew case being reproduced.
+    let body =
+        serde_json::json!({ "command": { "cmd": "set_dream_scope", "include": ["dreams"] } });
+    let envelope = MailboxMessage::seal(
+        &owner.id,
+        &h.node.x25519_public(),
+        MessageKind::AdminCmd,
+        1_753_000_300_000,
+        &serde_json::to_vec(&body).unwrap(),
+    );
+    let cmd_id = envelope.id_hex();
+    owner
+        .client
+        .put_mailbox(
+            &hex_ed(&h.node),
+            &format!("admin-{cmd_id}"),
+            &serde_json::to_vec(&envelope).unwrap(),
+        )
+        .unwrap();
+
+    let logs = LogBuffer::new();
+    let mut rt = runtime(h.dir.path(), "https://inference.internal/v1");
+    let mut journal = h.journal();
+    let report = admin::run(
+        &h.node_client,
+        &h.state,
+        &mut rt,
+        &mut control(&h),
+        &mut scopes(&h),
+        &logs,
+        &mut journal,
+    )
+    .unwrap();
+    assert_eq!(report.replied, 1, "answered");
+    assert_eq!(report.dropped, 0, "not silently dropped");
+
+    let reply = read_admin_replies(&owner.client, &owner.id)
+        .into_iter()
+        .find(|r| r.in_reply_to == cmd_id)
+        .expect("the sender gets a reply it can match to its command");
+    assert!(!reply.ok);
+    assert!(
+        reply.detail.as_deref().unwrap().contains("does not know"),
+        "and the reason says the node is the old half, got: {:?}",
+        reply.detail
+    );
+}

@@ -526,7 +526,9 @@ describe('outbound send', () => {
 
     const sent = await sendAdminCommand({ ed: NODE, x25519: NODE_X }, { cmd: 'job_status' })
 
-    expect(sent).toBe(true)
+    // The envelope message id, not a bare boolean: it is the only handle a
+    // caller has on whether the node ever answered this command.
+    expect(sent).toBe('sent-admin_cmd')
     expect(client.put[0].recipient).toBe(NODE)
     expect(client.put[0].id).toBe('admin-sent-admin_cmd')
     const log = await listAdminLog()
@@ -544,7 +546,12 @@ describe('commitAnswerScope', () => {
     configureMailbox(client, sealingIdentity(), verifyOk)
     await putProposer({ ed: NODE, x25519: NODE_X, label: 'Home node', kind: 'node' })
 
-    expect(await commitAnswerScope(new Set(['cycle']))).toBe('sent')
+    // `pending`, never `sent`: the relay accepted a deposit, which is not the
+    // node applying it (see answerScope.ts's resolveNodeScopeState).
+    expect(await commitAnswerScope(new Set(['cycle']))).toEqual({
+      include: ['cycle'],
+      node: 'pending',
+    })
 
     expect(await loadOptIns()).toEqual(new Set(['cycle']))
     expect(client.put[0].recipient).toBe(NODE)
@@ -572,7 +579,10 @@ describe('commitAnswerScope', () => {
     const client = fakeClient([])
     configureMailbox(client, sealingIdentity(), verifyOk)
 
-    expect(await commitAnswerScope(new Set(['mind']))).toBe('local-only')
+    expect(await commitAnswerScope(new Set(['mind']))).toEqual({
+      include: ['mind'],
+      node: 'no-node',
+    })
     expect(await loadOptIns()).toEqual(new Set(['mind']))
     expect(client.put).toHaveLength(0)
   })
@@ -583,7 +593,10 @@ describe('commitAnswerScope', () => {
     teardownMailbox()
     await putProposer({ ed: NODE, x25519: NODE_X, label: 'Home node', kind: 'node' })
 
-    expect(await commitAnswerScope(new Set(['cycle']))).toBe('unsent')
+    expect(await commitAnswerScope(new Set(['cycle']))).toEqual({
+      include: ['cycle'],
+      node: 'unsent',
+    })
     expect(await loadOptIns()).toEqual(new Set(['cycle']))
   })
 })

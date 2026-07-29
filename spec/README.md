@@ -533,7 +533,13 @@ envelope — it is opaque sealed bytes to the crypto above.
   should enrol one owner per node. Node-*process* administration — restart,
   upgrade, whether the node runs at all — is the host operator's and has
   deliberately no command here. The set is additive: a reader that does not know
-  a command answers `ok: false` rather than acting on a guess.
+  a command parses it into a catch-all and answers `ok: false` rather than
+  acting on a guess. It **answers** rather than dropping the envelope
+  deliberately — a sender cannot otherwise tell a node that refuses from a node
+  that never received anything, and for a command that governs disclosure that
+  difference is the whole point. (A *known* command with a malformed payload is
+  still a parse failure, and is dropped: the catch-all is for commands a build
+  does not know, not a way to swallow a corrupt one.)
   `set_answer_scope { include: [category…] }` carries the **whole** set of opt-in
   categories the owner wants (switch positions, not a delta), so `[]` is the
   meaningful "none" — and it is where a node starts, for every owner, until one
@@ -543,6 +549,10 @@ envelope — it is opaque sealed bytes to the crypto above.
   inference endpoint. Names ride as strings, not a closed enum, so a category a
   node's build does not know reaches it and is answered `ok: false` with nothing
   changed, rather than failing to parse and leaving the owner with no reply.
+  A client must treat the command as applied **only** on a matching `admin_reply`
+  with `ok: true`: a deposit is not an application, and an older node, an offline
+  node, and a node that could not persist the change are all cases where the
+  owner's switch and the node's behaviour disagree until a reply says otherwise.
 - `admin_reply` — `{ in_reply_to, ok, detail? }`.
 - `chat_msg` — `{ role, text, citations: [event_id…] }`: a retrieval-augmented Q&A
   turn; an answer carries the event ids it cited.
