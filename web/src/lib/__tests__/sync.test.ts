@@ -853,6 +853,50 @@ describe('batched pull', () => {
     expect(record).toMatchObject({ state: 'done' })
     expect(record?.etag).toBeUndefined()
   })
+
+  it('clears a cached etag when a batch body arrives without one', async () => {
+    // An etag validates ONE representation. A batch frame carries no validator,
+    // so a cached one must not survive the body it was issued for: that would
+    // bind new content to the old etag, and a relay that rolls back to the old
+    // body then answers the next `If-None-Match` with 304. The device would
+    // never open the rollback, never see its own value win the merge, and never
+    // re-push it — divergence that no error surfaces.
+    mutStore.set('batmut-a', 'body-A')
+    await put('sync', {
+      id: 'batmut-a',
+      state: 'done',
+      updated_at: new Date().toISOString(),
+      etag: 'etag-A',
+    })
+    const ids = [...batchIds, 'batmut-a']
+    const batched = batchRelay(ids, async () => pageOf(ids))
+    configure(batched, passthroughSealKey())
+
+    await pullAll() // applies body B, which came with no etag of its own
+
+    expect(mutStore.get('batmut-a')).toBe('remote-batmut-a')
+    const record = await dbGet<{ etag?: string }>('sync', 'batmut-a')
+    expect(record?.etag).toBeUndefined()
+
+    // So the relay's rollback to body A cannot hide behind a 304: the next pull
+    // asks unconditionally, and sees A.
+    const ifNoneMatchSeen: (string | null)[] = []
+    const conditional = {
+      ...batchRelay(['batmut-a'], async () => {
+        throw new Error('one id is far below the batch threshold')
+      }),
+      async getBlobConditional(_id: string, ifNoneMatch: string | null): Promise<ConditionalBlob> {
+        ifNoneMatchSeen.push(ifNoneMatch)
+        return { status: 'ok', blob: utf8('body-A'), etag: 'etag-A' }
+      },
+    }
+    configure(conditional, passthroughSealKey())
+
+    await pullAll()
+
+    expect(ifNoneMatchSeen).toEqual([null])
+    expect(mutStore.get('batmut-a')).toBe('body-A')
+  })
 })
 
 describe('listLocalBlobIds', () => {
@@ -1048,7 +1092,7 @@ describe('a poke that arrives mid-pull', () => {
           // exactly what an SSE poke announces, and exactly what that pull can
           // never see.
           blobs.set('poke-b', utf8('remote-poke-b'))
-          void pullAll()
+          void pullAll('poke')
         }
         return blobs.get(id) ?? null
       },
@@ -1063,6 +1107,37 @@ describe('a poke that arrives mid-pull', () => {
 
     expect(store.get('poke-b')).toBe('remote-poke-b')
     expect(listCalls).toBe(2) // one re-run, not a queue of them
+  })
+
+  it('books its follow-up even when it lands before the listing resolves', async () => {
+    // The listing snapshot is the RELAY's, and it is fixed the moment the relay
+    // answers — while the response is still in transit, another device can write
+    // a blob and its poke can overtake that response. So no local clock can tell
+    // whether the in-flight pull covers a poke; only the trigger's source can.
+    const blobs = new Map<string, Uint8Array>([['poke-a', utf8('remote-poke-a')]])
+    let listCalls = 0
+    const relay: BlobClient = {
+      async putBlob() {},
+      async getBlob(id) {
+        return blobs.get(id) ?? null
+      },
+      async listBlobs() {
+        const snapshot = [...blobs.keys()] // L0, fixed relay-side…
+        if (++listCalls === 1) {
+          await Promise.resolve() // …and still in transit when
+          blobs.set('poke-x', utf8('remote-poke-x')) // device A writes X
+          void pullAll('poke') // and A's poke overtakes it.
+          await Promise.resolve()
+        }
+        return snapshot // L0 resolves, and cannot contain X.
+      },
+    }
+    configure(relay, passthroughSealKey())
+
+    await pullAll()
+
+    expect(store.get('poke-x')).toBe('remote-poke-x')
+    expect(listCalls).toBe(2)
   })
 })
 

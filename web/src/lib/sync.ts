@@ -488,11 +488,14 @@ function markPulled(id: string, etag?: string): Promise<void> {
       id,
       state: 'done',
       updated_at: new Date().toISOString(),
-      // Carry a cached validator forward when this path has none of its own (the
-      // batch walk sees no per-id etags): if it still matches, the next
-      // conditional GET is a 304; if it doesn't, it's the full body that
-      // dropping it would have cost unconditionally.
-      etag: etag ?? existing?.etag,
+      // Only ever the validator handed back with *this exact* representation —
+      // a batch frame carries none, so any cached one is dropped here. Carrying
+      // it forward would bind the body just applied to the etag of the body
+      // before it, and a relay that rolled back to that older body could then
+      // answer the next `If-None-Match` with a 304 this device believes: it
+      // would never open the rollback, never see its own value win the merge,
+      // and never re-push it.
+      etag,
     })
   })
 }
@@ -597,19 +600,22 @@ async function pushOne(blobId: string): Promise<void> {
  * List the relay, pull anything new, and enqueue any local event missing
  * remotely (the reconcile step that makes two devices converge).
  *
- * Single-flight: every trigger funnels here (the SSE poke, `visibilitychange`,
- * the 5-minute timer, Onboard's restore, "Sync now"), and concurrent pulls would
- * just re-fetch each other's ids while `pulledCount` flaps between them.
+ * Single-flight: every trigger funnels here, and concurrent pulls would just
+ * re-fetch each other's ids while `pulledCount` flaps between them.
  *
- * But joining is only honest while the in-flight pull can still *serve* the new
- * trigger. Once it has taken its listing snapshot, a poke naming a blob written
- * since is invisible to it, and a silent join would leave this device stale
- * until the 5-minute timer. Such a trigger books a single re-run instead — one,
- * never a queue, however many pokes arrive.
+ * What a joining caller may assume depends on why it fired, which is what
+ * `trigger` carries. A `'refresh'` (`visibilitychange`, the 5-minute timer,
+ * Onboard's restore, "Sync now") asks for "whatever is there now" and names no
+ * particular blob, so joining an in-flight pull answers it. A `'poke'` names one:
+ * some other device wrote a blob and said so. The in-flight pull cannot be
+ * assumed to cover it at any point in its life — the listing snapshot is the
+ * relay's, fixed when the relay answers, and a write plus its poke can overtake
+ * that response in transit — so a poke always books a follow-up run. One,
+ * never a queue: any number of pokes collapse into a single re-run.
  */
-export function pullAll(): Promise<void> {
+export function pullAll(trigger: PullTrigger = 'refresh'): Promise<void> {
   if (pulling) {
-    if (!absorbing) rerunRequested = true
+    if (trigger === 'poke') rerunRequested = true
     return pulling
   }
   pulling = pullUntilQuiet().finally(() => {
@@ -619,11 +625,12 @@ export function pullAll(): Promise<void> {
   return pulling
 }
 
+/** Why a pull was asked for. See {@link pullAll} — it decides whether joining
+ * the in-flight pull is an honest answer. */
+export type PullTrigger = 'refresh' | 'poke'
+
 let pulling: Promise<void> | null = null
 let rerunRequested = false
-/** Whether the in-flight pull's listing is still ahead of it, so a trigger
- * arriving now is already covered by it. */
-let absorbing = false
 
 async function pullUntilQuiet(): Promise<void> {
   for (;;) {
@@ -745,7 +752,6 @@ function shouldBatchPull(missing: number, total: number): boolean {
 async function pullOnce(): Promise<void> {
   if (!relayClient || !vaultKey) return
 
-  absorbing = true
   let remoteIds: string[]
   try {
     remoteIds = await relayClient.listBlobs()
@@ -753,10 +759,6 @@ async function pullOnce(): Promise<void> {
   } catch (err) {
     noteFailure(err)
     return
-  } finally {
-    // Past this point the pull is working from a fixed list, so a trigger that
-    // arrives now needs a run of its own (see `pullAll`).
-    absorbing = false
   }
 
   // Everything past the relay listing is guarded as one region, and the pull is
@@ -870,7 +872,7 @@ function startEventStream(relay: BlobClient): void {
     openStream,
     onPoke: (poke) => {
       if (poke === 'mailbox') void pullMailbox()
-      else void pullAll()
+      else void pullAll('poke')
     },
     signal: streamAbort.signal,
   })
