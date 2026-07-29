@@ -57,6 +57,52 @@ openssl ec -in vapid.pem -pubout -outform DER 2>/dev/null | tail -c 65 \
 Then set `SVASTHA_RELAY_VAPID_SUBJECT` to your contact (e.g. `mailto:you@example.com`).
 Keep `vapid.pem` and the private key secret; the public key is not sensitive.
 
+## Upgrading past 0.13.0
+
+Before the mailbox-store namespacing fix that landed after the `v0.13.0` tag,
+the mailbox store and the blob store shared the same on-disk root, both keyed
+by `{hex(identity)}/`, so a mailbox item and a blob for the same identity
+could land in the very same directory. Because `PUT /v0/mailbox/{recipient}/{id}`
+lets any authenticated caller choose both `recipient` and `id`, this also meant
+any authed identity could overwrite *another* identity's real blob — under any
+id, including `vault.key` or one already carrying an `ev-`/`doc-`/`att-`/`cur-`
+prefix — by depositing a mailbox item there instead.
+
+If your data directory predates this fix, an identity directory under
+`SVASTHA_RELAY_DATA_DIR` may still hold residue from either of those: an old
+mailbox item that was never namespaced away, or a blob an attacker
+overwrote. **There is no reliable way to tell these apart from the filename,
+or even from a blob you wrote yourself.** A blob id is entirely client-chosen
+(the relay only checks it's a short, filesystem-safe token — see `valid_id` in
+`src/routes.rs`); the `ev-`/`doc-`/`att-`/`cur-` convention is something the
+web client happens to follow, not something the relay enforces or ever did.
+So a file that doesn't match one of those prefixes is just as likely to be a
+legitimate custom id you're using as it is to be leftover mailbox residue —
+and a file that *does* match one is exactly what the overwrite bug could have
+produced. A prefix check can tell you neither "this is safe" nor "this is
+residue"; distinguishing the two requires the owning client to reconcile the
+file list against the ids and mailbox items it actually wrote, which the relay
+has no visibility into.
+
+If you're operating a relay whose data directory predates this fix:
+
+1. **Back up `SVASTHA_RELAY_DATA_DIR` before doing anything else.** Whatever
+   you find, you want the ability to undo it.
+2. List what's sitting in each identity directory, for manual review — this
+   only scopes the search to directories named by a 64-char hex identity (so
+   it skips the relay's own `mailbox/` and `.tmp/` housekeeping directories,
+   which aren't part of anyone's vault); it does not classify anything inside
+   as safe or unsafe:
+   ```sh
+   find "$SVASTHA_RELAY_DATA_DIR" -mindepth 2 -maxdepth 2 -type f \
+     -regextype posix-extended -regex '.*/[0-9a-f]{64}/.*'
+   ```
+3. Treat every entry as needing the owning client's confirmation before you
+   touch it. There's no automated or filename-based way to safely prune this;
+   removing anything should wait until you (or the vault's owner) can confirm,
+   from the client side, that a given id is neither one it wrote nor one it's
+   still expecting to find.
+
 > Pre-1.0 and unstable.
 
 Licensed under AGPL-3.0-only.

@@ -7,10 +7,10 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use svastha_core::keys::Identity;
 use svastha_relay::app;
-use svastha_relay::grants::FsGrantStore;
+use svastha_relay::grants::{FsGrantStore, MemoryGrantStore};
 use svastha_relay::mailbox::MemoryMailboxStore;
 use svastha_relay::share::MemoryShareStore;
-use svastha_relay::store::MemoryStore;
+use svastha_relay::store::{FsStore, MemoryStore};
 use tower::ServiceExt;
 
 mod common;
@@ -926,4 +926,93 @@ async fn fs_grant_store_persists_across_router_rebuild() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body_bytes(check).await).unwrap();
     assert_eq!(json["grantees"], serde_json::json!([hex_pk(&bob)]));
+}
+
+#[tokio::test]
+async fn a_bad_on_disk_entry_never_stalls_an_unscoped_grantees_shared_walk() {
+    // Same hazard as `blobs.rs`'s `a_bad_on_disk_entry_never_stalls_the_framed_walk`,
+    // but through `/v0/shared/{owner}/blobs`: the id filter has to run in
+    // `list_shared_blobs` too, not just the owner's own `list_blobs`, or a
+    // grantee's walk over a pre-namespacing data directory truncates at
+    // whatever legacy entry sorts first — before the grant's own prefix scope
+    // even gets a say.
+    let dir = tempfile::tempdir().unwrap();
+    let alice = Identity::from_seed(b"alice");
+    let bob = Identity::from_seed(b"bob");
+    let owner_hex = hex_pk(&alice);
+    let owner_dir = dir.path().join(&owner_hex);
+    std::fs::create_dir_all(&owner_dir).unwrap();
+    std::fs::write(owner_dir.join("\u{1}bad"), b"junk").unwrap();
+
+    let app = app(
+        Arc::new(FsStore::new(dir.path()).unwrap()),
+        Arc::new(MemoryGrantStore::new()),
+        Arc::new(MemoryMailboxStore::new()),
+        Arc::new(MemoryShareStore::new()),
+        SKEW,
+        None,
+        None,
+    );
+
+    for id in ["ev-1", "ev-2"] {
+        let put = app
+            .clone()
+            .oneshot(signed(
+                &alice,
+                "PUT",
+                &format!("/v0/blobs/{id}"),
+                b"x",
+                now(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(put.status(), StatusCode::NO_CONTENT);
+    }
+    let grant = app
+        .clone()
+        .oneshot(signed(
+            &alice,
+            "PUT",
+            &format!("/v0/grants/{}", hex_pk(&bob)),
+            b"",
+            now(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(grant.status(), StatusCode::NO_CONTENT);
+
+    let mut walked: Vec<String> = Vec::new();
+    let mut cursor: Option<String> = None;
+    let mut pages: u64 = 0;
+    loop {
+        let query = match &cursor {
+            Some(c) => format!("/v0/shared/{owner_hex}/blobs?include=body&limit=1&cursor={c}"),
+            None => format!("/v0/shared/{owner_hex}/blobs?include=body&limit=1"),
+        };
+        let resp = app
+            .clone()
+            .oneshot(signed(&bob, "GET", &query, b"", now() + 10 + pages))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let next = resp
+            .headers()
+            .get("svastha-next")
+            .map(|v| v.to_str().unwrap().to_string());
+        let frames = common::parse_frames(&body_bytes(resp).await);
+        walked.extend(frames.into_iter().map(|(id, _)| id));
+        pages += 1;
+        assert!(pages <= 5, "walk did not terminate");
+        cursor = next;
+        if cursor.is_none() {
+            break;
+        }
+    }
+
+    assert_eq!(
+        walked,
+        vec!["ev-1", "ev-2"],
+        "the grantee's walk reaches both admitted ids despite the bad entry \
+         sorting before them"
+    );
 }
