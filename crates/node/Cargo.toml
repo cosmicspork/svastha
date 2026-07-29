@@ -46,6 +46,11 @@ rten = "0.24.0"
 image = "0.25.10"
 
 [dev-dependencies]
+# The browser's entry point into the shared ranker, so the context-line parity
+# test can drive the *actual* web path rather than a hand-copy of it. Native
+# only: `wasm-pack build crates/wasm` never resolves dev-dependencies, so this
+# edge exists for `cargo test` alone and cannot reach the browser bundle.
+svastha-wasm = { path = "../wasm" }
 # Stand the real relay up in-process (its own tokio runtime on an ephemeral
 # port) so the node's client logic is exercised against the actual wire API —
 # the same pattern the devtool's integration test uses.

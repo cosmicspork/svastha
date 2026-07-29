@@ -52,14 +52,21 @@ pub fn retrieve(index: &VaultIndex, question: &str, max_items: usize) -> Vec<Con
 }
 
 /// The name a concept renders under: the owner's `name:` override first, then the
-/// event's own `code.display`, then `system code`, then — for an uncoded event —
+/// concept's coding — `display`, else `system code` — then, for an uncoded event,
 /// its text value or bare kind. Mirrors the render-time name chain the web uses,
 /// minus the offline dictionary (not present on the node).
+///
+/// The coding is [`VaultIndex::coding_for`], not `event.code`, and it has to be:
+/// an allergy imports with `code: null` and its substance in `value.coded`, so
+/// branching on `event.code` alone put the bare kind in the name slot and fed the
+/// node's model a worse line than the browser's for the same event. Reusing the
+/// index's resolution is also what keeps this in step with `concept_key` and the
+/// web's `codingFor`, which both already fall back this way.
 fn render_name(index: &VaultIndex, event: &Event, concept: &str) -> String {
     if let Some(display) = index.concept_display(concept) {
         return display;
     }
-    if let Some(code) = &event.code {
+    if let Some(code) = VaultIndex::coding_for(event) {
         if let Some(display) = &code.display {
             if !display.trim().is_empty() {
                 return display.clone();
@@ -229,6 +236,64 @@ mod tests {
         let hits = retrieve(&idx, "headache", 10);
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].event_id, new.event.id.to_hex(), "newer first");
+    }
+
+    /// The two clients share the ranker but resolve names themselves, so the one
+    /// place they can still diverge is the name — and an allergy is where they
+    /// did: it imports with `code: null` and its substance in `value.coded`, a
+    /// fallback the web's `resolveName` had and the node's `render_name` did not.
+    /// The node put the bare kind in the name slot ("allergy_intolerance
+    /// 2024-01-01 allergy_intolerance Peanut") and the model on the node read a
+    /// worse line than the model in the browser for the same event.
+    ///
+    /// This drives the real browser entry point — `svastha_wasm::rank_context`,
+    /// with the candidate JSON shape `ask.ts` sends — and requires the rendered
+    /// lines to be byte-identical.
+    ///
+    /// The `name` here is a fixture, not a claim: what proves the *browser*
+    /// resolves this event to "Peanut" is `rank-boundary.test.ts`'s
+    /// "renders an allergy exactly as the node renders it", which builds the
+    /// candidate through the real `buildCandidates`/`resolveName` and asserts the
+    /// same line literal. The two tests are pinned to each other by that string.
+    #[test]
+    fn an_allergy_renders_identically_on_the_node_and_in_the_browser() {
+        let o = owner();
+        let peanut = Code {
+            system: "http://snomed.info/sct".into(),
+            code: "256349002".into(),
+            display: Some("Peanut".into()),
+        };
+        let e = o.sign_event(Event::new(
+            EventKind::AllergyIntolerance,
+            None,
+            Some("2024-01-01".into()),
+            Some(EventValue::Coded(peanut)),
+            Provenance {
+                source: "import".into(),
+                source_doc: None,
+            },
+        ));
+        let idx = idx(&o, std::slice::from_ref(&e));
+
+        let node = retrieve(&idx, "peanut allergy", 10);
+        assert_eq!(node.len(), 1);
+
+        let browser_input = serde_json::to_string(&json!([{
+            "event": e.event,
+            "name": "Peanut",
+            "status": "active",
+        }]))
+        .unwrap();
+        let ranked: serde_json::Value = serde_json::from_str(
+            &svastha_wasm::rank_context(&browser_input, "peanut allergy", 10).unwrap(),
+        )
+        .unwrap();
+        let browser: Vec<ContextItem> = serde_json::from_value(ranked["items"].clone()).unwrap();
+        assert_eq!(browser.len(), 1);
+        assert_eq!(ranked["unreadable"], 0);
+
+        assert_eq!(node[0].text, browser[0].text, "one line for both clients");
+        assert_eq!(node[0].text, "allergy_intolerance 2024-01-01 Peanut");
     }
 
     #[test]

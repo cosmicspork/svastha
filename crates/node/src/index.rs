@@ -242,7 +242,7 @@ impl VaultIndex {
     /// or — for allergies, which import with `code: null` — the substance
     /// carried in `value.coded`. The same convention `crates/import` and the
     /// OCR extractor both write.
-    fn coding_for(event: &Event) -> Option<&Code> {
+    pub(crate) fn coding_for(event: &Event) -> Option<&Code> {
         if let Some(code) = &event.code {
             return Some(code);
         }

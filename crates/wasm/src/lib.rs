@@ -512,18 +512,42 @@ struct CandidateInput {
     status: svastha_retrieval::ConceptStatus,
 }
 
+/// What one ranking pass produced: the context items to send, and how many
+/// candidates this build could not decode at all.
+///
+/// `unreadable` is not diagnostics. A dropped event is a *medical record missing
+/// from the answer* — the newer allergy that would have contradicted the older
+/// one — so the caller must surface it rather than present a partial answer, or a
+/// flat "nothing found", as though the record were whole.
+#[derive(serde::Serialize)]
+struct RankResult {
+    items: Vec<svastha_retrieval::ContextItem>,
+    unreadable: usize,
+}
+
 /// Rank `candidates_json` (a JSON array of `{event, name, status}`) against
-/// `question`, returning up to `max_items` `ContextItem`s as JSON, highest score
-/// first. An item with no keyword overlap is not returned at all, so an
-/// unanswerable question yields `[]` — which the caller must turn into an honest
-/// "couldn't answer" rather than an uncited summary.
+/// `question`, returning `{items, unreadable}` as JSON: up to `max_items`
+/// `ContextItem`s, highest score first, plus the count of candidates that failed
+/// to decode. An item with no keyword overlap is not returned at all, so an
+/// unanswerable question yields no items — which the caller must turn into an
+/// honest "couldn't answer" rather than an uncited summary.
 #[wasm_bindgen]
 pub fn rank_context(
     candidates_json: &str,
     question: &str,
     max_items: usize,
 ) -> Result<String, JsError> {
-    let inputs: Vec<CandidateInput> = serde_json::from_str(candidates_json).map_err(to_js)?;
+    // Per item, not all-or-nothing: a PWA left running on an older bundle can
+    // meet an event this build's contract cannot decode, and one such event must
+    // not turn every question into a raw serde error. Drop what will not decode
+    // and rank the rest — the same tolerance the node's ingest already applies.
+    let raw: Vec<serde_json::Value> = serde_json::from_str(candidates_json).map_err(to_js)?;
+    let offered = raw.len();
+    let inputs: Vec<CandidateInput> = raw
+        .into_iter()
+        .filter_map(|item| serde_json::from_value(item).ok())
+        .collect();
+    let unreadable = offered - inputs.len();
     let candidates: Vec<svastha_retrieval::Candidate<'_>> = inputs
         .iter()
         .map(|c| svastha_retrieval::Candidate {
@@ -533,7 +557,7 @@ pub fn rank_context(
         })
         .collect();
     let items = svastha_retrieval::rank(&candidates, question, max_items);
-    serde_json::to_string(&items).map_err(to_js)
+    serde_json::to_string(&RankResult { items, unreadable }).map_err(to_js)
 }
 
 /// The user prompt for `question` over `context_json` (the `rank_context`
@@ -611,4 +635,87 @@ pub fn code_from_lines(answer: &str, lines_json: &str) -> Result<String, JsError
     let lines: Vec<String> = serde_json::from_str(lines_json).map_err(to_js)?;
     let extraction = svastha_import::extract::parse_lines(answer, &lines);
     serde_json::to_string(&extraction).map_err(to_js)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One candidate exactly as `web/src/lib/ask.ts`'s `buildCandidates` emits
+    /// it. Kept as a literal rather than built from the Rust types on purpose:
+    /// this is the shape the TS side actually sends, so a field rename or a
+    /// casing change on either side of the boundary fails here instead of
+    /// quietly retrieving nothing in a deployed PWA.
+    const METFORMIN: &str = r#"{
+      "event": {
+        "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kind": "medication_statement",
+        "code": {
+          "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+          "code": "860975",
+          "display": "Metformin 500 MG"
+        },
+        "effective_at": "2024-03-02",
+        "value": null,
+        "provenance": { "source": "import", "source_doc": null }
+      },
+      "name": "Metformin 500 MG",
+      "status": "active"
+    }"#;
+
+    /// A candidate whose event this build cannot decode — the shape of contract
+    /// skew, where a PWA left running on an old bundle meets an event kind added
+    /// after it was deployed.
+    const UNDECODABLE: &str = r#"{
+      "event": {
+        "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "kind": "kind_from_a_newer_contract",
+        "code": null,
+        "effective_at": "2024-03-02",
+        "value": null,
+        "provenance": { "source": "import", "source_doc": null }
+      },
+      "name": "Metformin 500 MG",
+      "status": "active"
+    }"#;
+
+    #[test]
+    fn rank_context_pins_the_field_names_the_browser_sends_and_reads() {
+        let out = rank_context(&format!("[{METFORMIN}]"), "am i on metformin", 5).unwrap();
+        let ranked: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let items = ranked["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["event_id"], "a".repeat(64));
+        assert!(items[0]["text"].as_str().unwrap().contains("Metformin"));
+        assert!(items[0]["score"].as_f64().unwrap() > 0.0);
+        assert_eq!(ranked["unreadable"], 0);
+    }
+
+    /// One undecodable event must cost the question that event, not the answer —
+    /// but the caller has to be *told*, or it presents an answer drawn from an
+    /// incomplete record as though the record were whole.
+    #[test]
+    fn rank_context_ranks_what_it_can_decode_and_counts_what_it_cannot() {
+        let out = rank_context(
+            &format!("[{UNDECODABLE},{METFORMIN}]"),
+            "am i on metformin",
+            5,
+        )
+        .unwrap();
+        let ranked: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let items = ranked["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1, "the decodable one ranks");
+        assert_eq!(items[0]["event_id"], "a".repeat(64));
+        assert_eq!(ranked["unreadable"], 1, "and the dropped one is reported");
+    }
+
+    /// The dangerous shape: everything relevant was unreadable, so an unreported
+    /// drop reads as a plain, confident "nothing in your record says that".
+    #[test]
+    fn rank_context_reports_unreadable_candidates_even_when_nothing_ranks() {
+        let out = rank_context(&format!("[{UNDECODABLE}]"), "am i on metformin", 5).unwrap();
+        let ranked: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert!(ranked["items"].as_array().unwrap().is_empty());
+        assert_eq!(ranked["unreadable"], 1);
+    }
 }

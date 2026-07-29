@@ -109,7 +109,11 @@
         await appendLocalTurn('user', text)
         query = ''
         const answer = await askLocally(text)
-        await appendLocalTurn('node', answer.text, answer.citations)
+        // The caveat goes into the turn itself, not a transient banner: the
+        // transcript is what gets re-read later, and an answer recorded without
+        // the note that records were missing from it reads as complete forever.
+        const body = answer.caveat ? `${answer.text}\n\n${answer.caveat}` : answer.text
+        await appendLocalTurn('node', body, answer.citations)
       } else if (node) {
         await sendChatMessage({ ed: node.ed, x25519: node.x25519 }, text)
         query = ''

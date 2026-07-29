@@ -3267,6 +3267,7 @@ dependencies = [
  "svastha-import",
  "svastha-relay",
  "svastha-retrieval",
+ "svastha-wasm",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
