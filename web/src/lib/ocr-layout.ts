@@ -17,11 +17,13 @@
 import type { OcrLine, OcrWord } from './ocr'
 
 /** How far a run's vertical center may sit from its row's, as a multiple of the
- * page's typical glyph height. A full height means the two bands merely touch:
- * forgiving enough for the baseline wobble in a scan and the droop a fraction of
- * a degree of skew accumulates across a wide panel, short of the leading that
- * separates two printed rows. */
-const BAND_TOLERANCE = 1
+ * shorter of the two glyph heights involved. Strictly under 1 on purpose: at a
+ * full height the two bands merely touch, so a table set solid — no leading at
+ * all — would merge, and a rule that merges at touching has no margin left for
+ * the rows that are merely close. Under it, and still loose enough for a scan's
+ * baseline wobble and the droop a fraction of a degree of skew accumulates
+ * across a wide panel. */
+const BAND_TOLERANCE = 0.9
 
 /** Character width of a rendered column block. Wide enough for a lab panel's
  * analyte/value/unit/range, narrow enough not to bloat the prompt. */
@@ -33,49 +35,70 @@ function center(word: OcrWord): number {
   return (word.y0 + word.y1) / 2
 }
 
+function height(word: OcrWord): number {
+  return word.y1 - word.y0
+}
+
 function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b)
   const mid = sorted.length >> 1
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
 }
 
+/** A row under construction: its runs, and the centers and heights the band is
+ * re-derived from as it grows. */
+interface Row {
+  words: OcrWord[]
+  centers: number[]
+  heights: number[]
+}
+
+/** Whether `word` sits on `row`'s band — see {@link groupLines} for why the
+ * distance is scaled by the shorter of the two heights and nothing wider. */
+function joinsRow(word: OcrWord, row: Row): boolean {
+  const local = Math.min(height(word), median(row.heights))
+  return Math.abs(center(word) - median(row.centers)) <= local * BAND_TOLERANCE
+}
+
 /**
  * Group positioned runs into lines, top to bottom, each line's runs ordered left
  * to right.
  *
- * A row's band is the median of its members' vertical centers, and the tolerance
- * around it comes from the median glyph height of the whole page. Both medians
- * are load-bearing:
+ * A run joins the open row when its vertical center sits within
+ * {@link BAND_TOLERANCE} of the row's, where the row's center is the median of
+ * its members' and the distance is measured in the shorter of the two glyph
+ * heights — the run's own, or the row's typical one. Every part of that is
+ * load-bearing:
  *
- *   - Against the row: a section label in a large face, a scanned table rule or a
- *     logo is several rows tall. Anchoring a row to its tallest member let such a
- *     run stretch the band over every row it crossed and merge them into one
- *     line, which is the cross-row mis-association this module exists to prevent.
- *     A tall run contributes one center like any other, so it can join a row but
- *     cannot become that row's extent.
- *   - Against the page: a row's own heights say nothing about how far apart the
- *     page's rows are, so the tolerance is a page statistic, immune to whatever
- *     outsized runs happen to land in one row.
- *
- * The median also drifts along with a skewed row as its cells droop, which is
- * what keeps a crooked scan's row together rather than shredding it into one
- * line per cell.
+ *   - Medians, not extremes: a section label in a large face, a scanned table
+ *     rule or a logo is several rows tall. Anchoring a row to its tallest member
+ *     let such a run stretch the band over every row it crossed and merge them
+ *     into one line, which is the cross-row mis-association this module exists to
+ *     prevent. A tall run contributes one center and one height among many, so it
+ *     can join a row without becoming that row's extent.
+ *   - Local heights, never a page statistic: a banner or letterhead says nothing
+ *     about how tightly a table further down is set, and scaling the tolerance by
+ *     the page's typical glyph height lets big text elsewhere merge that table's
+ *     rows. Only the candidate and the row it would join get a say.
+ *   - A running median rather than the row's first member: it drifts along with a
+ *     skewed row as its cells droop, which is what holds a crooked scan's row
+ *     together instead of shredding it into one line per cell.
  */
 export function groupLines(words: OcrWord[]): OcrLine[] {
   const usable = words.filter((w) => w.text.trim() !== '')
   if (usable.length === 0) return []
 
-  const tolerance = median(usable.map((w) => w.y1 - w.y0)) * BAND_TOLERANCE
   const sorted = [...usable].sort((a, b) => center(a) - center(b) || a.x0 - b.x0)
-  const rows: { words: OcrWord[]; centers: number[] }[] = []
+  const rows: Row[] = []
 
   for (const word of sorted) {
     const row = rows.at(-1)
-    if (row && Math.abs(center(word) - median(row.centers)) <= tolerance) {
+    if (row && joinsRow(word, row)) {
       row.words.push(word)
       row.centers.push(center(word))
+      row.heights.push(height(word))
     } else {
-      rows.push({ words: [word], centers: [center(word)] })
+      rows.push({ words: [word], centers: [center(word)], heights: [height(word)] })
     }
   }
 

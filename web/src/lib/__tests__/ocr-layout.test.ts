@@ -53,6 +53,27 @@ function labelledPanel(): OcrWord[] {
   ]
 }
 
+/** A banner set at twice the body size above a tight two-row table. The banner
+ * is nowhere near the table, so nothing about it should say how far apart the
+ * table's rows are. */
+function bannerAndTable(): OcrWord[] {
+  return [
+    ...['LABORATORY', 'RESULTS', 'FINAL', 'REPORT', 'PAGE'].map((text, i) =>
+      w(text, i * 120, 0, 100, 20),
+    ),
+    w('Potassium', 0, 50),
+    w('4.1', 200, 50),
+    w('Sodium', 0, 65),
+    w('139', 200, 65),
+  ]
+}
+
+/** Two rows set solid: the boxes touch at y=110 and share no vertical extent.
+ * Tight, but a reader has no trouble, and neither should the grouping. */
+function touchingRows(): OcrWord[] {
+  return [w('Potassium', 0, 100), w('4.1', 200, 100), w('Sodium', 0, 110), w('139', 200, 110)]
+}
+
 /** The line holding a given run, or undefined. */
 function lineWith(lines: ReturnType<typeof groupLines>, text: string) {
   return lines.find((l) => l.words.some((word) => word.text === text))
@@ -115,6 +136,31 @@ describe('groupLines', () => {
       'Potassium 4.1 mmol/L 3.5-5.1',
       'Sodium 139 mmol/L 135-145',
     ])
+  })
+
+  it('does not let larger text elsewhere on the page merge a tight table', () => {
+    // A banner, a heading or a letterhead is bigger than the body, and a page
+    // statistic carries its size down to a table it has nothing to do with. What
+    // decides whether two runs share a row is their own size and their row's.
+    const lines = groupLines(bannerAndTable())
+    expect(lines.map((l) => l.text)).toEqual([
+      'LABORATORY RESULTS FINAL REPORT PAGE',
+      'Potassium 4.1',
+      'Sodium 139',
+    ])
+    expect(numberedLines(lines)).toContain('[2] Potassium 4.1\n[3] Sodium 139')
+  })
+
+  it('keeps two rows apart when their bands only touch', () => {
+    // Set solid, with no leading: the bands share an edge and nothing else. Two
+    // printed rows, so two lines — a rule that merges at touching has no margin
+    // left for the rows that are merely close.
+    const lines = groupLines(touchingRows())
+    expect(lines.map((l) => l.text)).toEqual(['Potassium 4.1', 'Sodium 139'])
+    const rendered = renderColumns(lines, 60).split('\n')
+    expect(rendered).toHaveLength(2)
+    expect(rendered[0].indexOf('4.1')).toBe(rendered[1].indexOf('139'))
+    expect(rendered[0]).not.toContain('139')
   })
 
   it('drops whitespace-only runs and returns nothing for an empty page', () => {
