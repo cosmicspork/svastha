@@ -13,6 +13,7 @@ import {
   enableAssets,
   disableAssets,
   assetsEnabled,
+  verifiedRevision,
   downloadBytes,
   OcrVerificationError,
   OcrFetchError,
@@ -38,6 +39,7 @@ const SHA = {
 
 const manifest: OcrManifest = {
   version: '7.0.0',
+  revision: 'rev-1',
   generated_at: '2026-07-28T00:00:00.000Z',
   traineddata_source: 'https://example/eng.traineddata',
   files: [
@@ -135,6 +137,57 @@ describe('enableAssets', () => {
     await enableAssets()
     await disableAssets()
     expect(await assetsEnabled()).toBe(false)
+  })
+})
+
+describe('assetsEnabled revision enforcement', () => {
+  // A device that verified an older asset set (e.g. before this PR shipped a
+  // different core file layout under the same tesseract.js version) must not
+  // read as ready — it would execute whatever's now served at those same
+  // URLs without ever checking it against the new manifest's hashes.
+  it('goes stale — and reports not-enabled — once the shipped revision differs from what this device verified', async () => {
+    await enableAssets()
+    expect(await assetsEnabled()).toBe(true)
+
+    const bumped = { ...manifest, revision: 'rev-2' }
+    fetchMock.mockImplementation(async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => bumped,
+      arrayBuffer: async () => enc.encode(bodyFor(url)),
+    }))
+
+    expect(await assetsEnabled()).toBe(false)
+  })
+
+  it('re-enables once the device re-verifies against the new revision', async () => {
+    await enableAssets()
+    const bumped = { ...manifest, revision: 'rev-2' }
+    fetchMock.mockImplementation(async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => bumped,
+      arrayBuffer: async () => enc.encode(bodyFor(url)),
+    }))
+    expect(await assetsEnabled()).toBe(false)
+
+    await enableAssets()
+    expect(await assetsEnabled()).toBe(true)
+    expect(await verifiedRevision()).toBe('rev-2')
+  })
+
+  // A device that cannot confirm what's currently shipped has nothing to
+  // trust — fail closed rather than running on the last-verified assets.
+  it('reports not-enabled, rather than throwing, when the current manifest cannot be reached', async () => {
+    await enableAssets()
+    fetchMock.mockImplementation(async () => ({ ok: false, status: 503 }))
+    await expect(assetsEnabled()).resolves.toBe(false)
+  })
+
+  it('records a revision distinct from the tesseract.js package version', async () => {
+    await enableAssets()
+    expect(await verifiedRevision()).toBe(manifest.revision)
+    expect(await verifiedRevision()).not.toBe(manifest.version)
   })
 })
 

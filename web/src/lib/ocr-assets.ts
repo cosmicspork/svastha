@@ -33,6 +33,11 @@ export interface OcrManifestFile {
 
 export interface OcrManifest {
   version: string
+  /** SHA-256 over the vendored file set (path + hash of each), distinct from
+   * `version` — the tesseract.js package version doesn't change just because
+   * the file *set* under it does. This is what a device's verified state is
+   * checked against. */
+  revision: string
   generated_at: string
   traineddata_source: string
   files: OcrManifestFile[]
@@ -106,14 +111,32 @@ export async function verifyAssets(
   }
 }
 
-/** Whether on-device reading is switched on **and** verified on this device. */
+/**
+ * Whether on-device reading is switched on **and** the currently-shipped
+ * assets are the ones this device verified.
+ *
+ * A device that enabled this before a deploy swapped the underlying files —
+ * same manifest `version`, different `revision`, as happened once already —
+ * must not read as ready: `recognizeImage` would fetch and execute whatever's
+ * now served at those URLs without ever checking it against the new
+ * manifest's hashes. Reports not-enabled rather than throwing if the current
+ * manifest can't even be reached — a device that cannot confirm what's
+ * shipped has nothing to trust either way. Re-enabling (Settings) is what
+ * runs `verifyAssets` again against the new revision.
+ */
 export async function assetsEnabled(): Promise<boolean> {
-  return (await get<boolean>('prefs', ENABLED_PREF)) === true
+  if ((await get<boolean>('prefs', ENABLED_PREF)) !== true) return false
+  try {
+    const manifest = await loadManifest()
+    return (await verifiedRevision()) === manifest.revision
+  } catch {
+    return false
+  }
 }
 
-/** The manifest version this device verified, if any — so a shipped asset bump
- * can prompt a re-verify rather than silently running against new bytes. */
-export async function verifiedVersion(): Promise<string | null> {
+/** The manifest revision this device verified, if any — compared against the
+ * currently-shipped manifest's `revision` by {@link assetsEnabled}. */
+export async function verifiedRevision(): Promise<string | null> {
   return (await get<string>('prefs', MANIFEST_PREF)) ?? null
 }
 
@@ -124,7 +147,7 @@ export async function verifiedVersion(): Promise<string | null> {
 export async function enableAssets(onProgress?: (done: number, total: number) => void): Promise<void> {
   const manifest = await loadManifest()
   await verifyAssets(manifest, onProgress)
-  await put('prefs', manifest.version, MANIFEST_PREF)
+  await put('prefs', manifest.revision, MANIFEST_PREF)
   await put('prefs', true, ENABLED_PREF)
 }
 

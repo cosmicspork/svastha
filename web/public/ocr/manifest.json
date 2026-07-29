@@ -1,6 +1,7 @@
 {
   "version": "7.0.0",
-  "generated_at": "2026-07-28T21:50:21.704Z",
+  "revision": "acb029c0767eae605e9f891c6b71808e14beb87ac49890adb01a9a018eee3beb",
+  "generated_at": "2026-07-29T11:59:39.391Z",
   "traineddata_source": "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/87416418657359cb625c412a48b6e1d6d41c29bd/eng.traineddata",
   "traineddata_commit": "87416418657359cb625c412a48b6e1d6d41c29bd",
   "files": [

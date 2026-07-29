@@ -25,6 +25,7 @@ interface ManifestFile {
 
 interface Manifest {
   version: string
+  revision: string
   traineddata_source: string
   traineddata_commit: string
   files: ManifestFile[]
@@ -90,5 +91,27 @@ describe('the committed OCR assets', () => {
     expect(manifest.traineddata_source).toMatch(/tessdata_fast/)
     expect(manifest.traineddata_source).toContain(manifest.traineddata_commit)
     expect(manifest.traineddata_commit).toMatch(/^[0-9a-f]{40}$/)
+  })
+
+  // `version` is the tesseract.js package version, which does not change just
+  // because the vendored file *set* does — see this PR's own history: the
+  // core files changed under the same "7.0.0". A device compares this digest,
+  // not `version`, before trusting already-verified assets (see
+  // `ocr-assets.ts`'s `assetsEnabled`), so it has to move whenever any
+  // vendored file does.
+  it('has a revision digest over the file set, independent of the tesseract.js package version', () => {
+    expect(manifest.revision).toMatch(/^[0-9a-f]{64}$/)
+    expect(manifest.revision).not.toBe(manifest.version)
+
+    const recomputed = createHash('sha256')
+      .update(
+        JSON.stringify(
+          manifest.files
+            .map((f) => ({ path: f.path, sha256: f.sha256 }))
+            .sort((a, b) => a.path.localeCompare(b.path)),
+        ),
+      )
+      .digest('hex')
+    expect(manifest.revision).toBe(recomputed)
   })
 })

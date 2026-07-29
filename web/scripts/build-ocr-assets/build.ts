@@ -150,8 +150,25 @@ async function main(): Promise<void> {
     await readFile(join(NODE_MODULES, 'tesseract.js/package.json'), 'utf8'),
   ).version
 
+  // `version` is the tesseract.js package version, not a fingerprint of what's
+  // actually vendored — this repo shipped a wrong core-file *set* under the
+  // same "7.0.0" once already (see this script's history). A device compares
+  // this digest, not `version`, before trusting assets it already verified
+  // (`ocr-assets.ts`'s `assetsEnabled`), so it has to move whenever any
+  // vendored file does, independent of any upstream version bump.
+  const revision = createHash('sha256')
+    .update(
+      JSON.stringify(
+        files
+          .map((f) => ({ path: f.path, sha256: f.sha256 }))
+          .sort((a, b) => a.path.localeCompare(b.path)),
+      ),
+    )
+    .digest('hex')
+
   const manifest = {
     version: tesseractVersion,
+    revision,
     generated_at: new Date().toISOString(),
     /** What the language data was built from, so a bump is traceable. */
     traineddata_source: TRAINEDDATA_URL,
