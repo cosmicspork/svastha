@@ -95,12 +95,18 @@ struct OwnerJob {
 /// per-source failures never propagate — they back off in the journal so one bad
 /// page cannot wedge the rest.
 ///
-/// The per-pass cap is spent in owner-hex order, so one owner's large backlog can
-/// consume a whole pass before the next owner's pages are reached. Each pass
-/// resumes where the last stopped and terminal pages never come back, so no
-/// vault starves indefinitely; a fair share per owner is deliberately not
-/// modelled — the cap exists to keep an approval queue reviewable, not to
-/// schedule.
+/// **Not a scheduler, and it can starve.** Every pass starts from the same
+/// snapshot of enrolled owners, in owner-hex order, and breaks the outer loop
+/// when the per-pass cap is spent; no cursor or rotation persists between passes. An owner
+/// early in that order with at least [`OcrControl::max_pages_per_pass`] newly
+/// eligible pages per reconcile therefore consumes every pass, and the owners
+/// after them never run — indefinitely, under sustained capture, not merely
+/// late. A finite backlog drains and the next owner then runs, which is why this
+/// has not bitten yet; it is a real hazard on a shared node, not a theoretical
+/// one. Fixing it means round-robin continuation or a per-owner cap, which is a
+/// deliberate follow-up: the cap exists to keep an approval queue reviewable,
+/// and scheduling deserves its own change rather than being smuggled into a
+/// trust fix.
 pub fn run(
     client: &RelayClient,
     cache: &Cache,
