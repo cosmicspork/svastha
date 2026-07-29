@@ -60,10 +60,27 @@ standing down until the next reconcile, so a backlog arrives in batches you can
 actually review — and you can pause again after the first one if the results are
 not what you expected.
 
-`job_status` reports which state the node is in and the current cap.
+**The choice is yours alone.** Pausing stops the node reading *your* pages;
+anyone else it serves is unaffected, and nobody else can pause or resume yours.
+A node serving several households therefore reads for each independently, which
+is what makes the admin trust rule (you administer the node's work on *your*
+vault, never the node itself) true in effect and not merely in authorization.
+An owner who has never chosen takes the boot default, which is where
+`SVASTHA_NODE_OCR_PAUSED` applies: **an owner's own persisted choice wins, else
+that env default, else paused.** So an existing deployment upgrading into
+pause-by-default keeps reading by setting `SVASTHA_NODE_OCR_PAUSED=false` — no
+owner has a persisted choice yet, and it applies to all of them.
 
+`job_status` reports whether reading is on **for you** (`paused by you` /
+`reading`) and the current cap.
 
-Enabled when an inference endpoint is configured (see the config table). On each
+A pass spends its page cap in owner order, so one household's large backlog can
+use a whole pass before another's pages are reached. Each pass resumes where the
+last stopped, so nothing starves; the cap keeps an approval queue reviewable and
+is deliberately not a scheduler.
+
+Enabled when an inference endpoint is configured (see the config table) and the
+owner in question has reading resumed (above). On each
 reconcile the node OCRs newly-synced captured pages and deposits the results as
 `proposal` envelopes into the owner's mailbox, for review in the PWA's proposal
 inbox. It never signs anything as the owner — it proposes; the owner signs.
@@ -180,7 +197,7 @@ image tags.
 | `SVASTHA_NODE_INFERENCE_MODEL` | when an endpoint resolves | Shared model id sent in every request, unless a role overrides it below. |
 | `SVASTHA_NODE_INFERENCE_API_KEY` | no | Shared inference API key; sent as a bearer token, never logged. |
 | `SVASTHA_NODE_OCR_INFERENCE_ENDPOINT` / `_MODEL` / `_API_KEY` | no | Per-role override for **OCR** (coding a page the node transcribed — a **text** model; no vision model is needed or used). Each falls back to the shared `SVASTHA_NODE_INFERENCE_*` value, so overriding just `_MODEL` is the common case. A role runs only when an endpoint resolves for it (its own or the shared base). |
-| `SVASTHA_NODE_OCR_PAUSED` | no | Whether page reading starts paused (default **`true`**). A node reads nothing until an owner sends `resume_ocr`; set `false` to opt a deployment in from boot. A persisted `pause_ocr`/`resume_ocr` wins over this — the env only decides where a *fresh* node starts. |
+| `SVASTHA_NODE_OCR_PAUSED` | no | The boot default for page reading, applied **per owner** (default **`true`**, paused). Precedence: an owner's own persisted `pause_ocr`/`resume_ocr` wins, else this default, else paused. Set `false` to opt a deployment in — including one upgrading into pause-by-default, where no owner has a persisted choice yet and no UI sends `resume_ocr`. |
 | `SVASTHA_NODE_OCR_MAX_PAGES_PER_PASS` | no | Pages read per reconcile before standing down until the next one (default `20`). A backlog arrives as reviewable batches rather than a flood. |
 | `SVASTHA_NODE_OCR_MODELS_DIR` | no | Where the page-reading models live (default `/models`, baked into the image). Absent models are not fatal — the node still syncs, answers questions, and serves its household; it just cannot read pages, and says so at boot. |
 | `SVASTHA_NODE_CHAT_INFERENCE_ENDPOINT` / `_MODEL` / `_API_KEY` | no | Per-role override for **chat** (cited Q&A — an instruction model). Same shared fallback. Splitting the models lets one endpoint serve an extraction-tuned model for OCR and an instruction model for answers; the endpoint/API key can split across providers too. |

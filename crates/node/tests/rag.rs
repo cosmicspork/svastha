@@ -30,6 +30,7 @@ use svastha_node::config::InferenceConfig;
 use svastha_node::inference::{InferenceClient, InferenceRuntime};
 use svastha_node::journal::Journal;
 use svastha_node::logtail::LogBuffer;
+use svastha_node::ocr_control::{OcrControl, OcrSettings};
 use svastha_node::state::NodeState;
 use svastha_node::sync::{consume_mailbox, sync_all};
 
@@ -793,7 +794,92 @@ fn admin_command_from_a_non_enrolled_identity_is_dropped() {
 }
 
 /// The admin tests drive commands, not the reading gate; each gets a control
-/// rooted in the harness's own data dir.
-fn control(h: &Harness) -> svastha_node::ocr_control::OcrControl {
-    svastha_node::ocr_control::OcrControl::load(h.dir.path())
+/// rooted in the harness's own data dir, with the shipped defaults.
+fn control(h: &Harness) -> OcrControl {
+    OcrControl::load(h.dir.path(), OcrSettings::default())
+}
+
+/// The trust rule made true in effect, not just in authorization: an owner's
+/// `pause_ocr` stops the node reading *their* pages. Anyone else it serves keeps
+/// reading, is told so by `job_status`, and could never have been paused by
+/// someone else's command in the first place.
+#[test]
+fn pausing_is_scoped_to_the_owner_who_sent_the_command() {
+    let h = Harness::new(b"admin node pause");
+    let a = h.add_owner(b"admin owner pause a");
+    let b = h.add_owner(b"admin owner pause b");
+    h.enroll_and_sync();
+
+    let logs = LogBuffer::new();
+    let mut journal = h.journal();
+    // An operator who opted this deployment in: both owners read until one of
+    // them says otherwise.
+    let mut control = OcrControl::load(
+        h.dir.path(),
+        OcrSettings {
+            default_paused: false,
+            ..Default::default()
+        },
+    );
+
+    // Pass one: A pauses. (Two passes, so the pause is certainly applied before
+    // the status commands below are answered — the mailbox drain order is the
+    // relay's business, not this test's.)
+    command(&a.id, &a.client, &h.node, AdminCommand::PauseOcr);
+    let mut rt = runtime(h.dir.path(), "https://inference.internal/v1");
+    admin::run(
+        &h.node_client,
+        &h.state,
+        &mut rt,
+        &mut control,
+        &logs,
+        &mut journal,
+    )
+    .unwrap();
+
+    let pause_reply = read_admin_replies(&a.client, &a.id);
+    assert_eq!(pause_reply.len(), 1);
+    assert!(pause_reply[0].ok);
+    let detail = pause_reply[0].detail.as_deref().unwrap();
+    assert!(
+        detail.contains("your vault") && detail.contains("unaffected"),
+        "the reply has to make the scope plain, got: {detail}"
+    );
+    assert!(
+        read_admin_replies(&b.client, &b.id).is_empty(),
+        "B was not part of this exchange at all"
+    );
+
+    // Pass two: both ask for status.
+    command(&a.id, &a.client, &h.node, AdminCommand::JobStatus);
+    command(&b.id, &b.client, &h.node, AdminCommand::JobStatus);
+    admin::run(
+        &h.node_client,
+        &h.state,
+        &mut rt,
+        &mut control,
+        &logs,
+        &mut journal,
+    )
+    .unwrap();
+
+    let a_status = status_detail(&a.client, &a.id);
+    assert!(
+        a_status.contains("ocr: paused by you"),
+        "A is told whose pause it is, so it knows it can undo it, got: {a_status}"
+    );
+    let b_status = status_detail(&b.client, &b.id);
+    assert!(
+        b_status.contains("ocr: reading"),
+        "B's reading is untouched by A's pause, got: {b_status}"
+    );
+}
+
+/// The `job_status` reply's detail (the one reply carrying vault counts).
+fn status_detail(owner_client: &RelayClient, owner: &Identity) -> String {
+    read_admin_replies(owner_client, owner)
+        .into_iter()
+        .filter_map(|r| r.detail)
+        .find(|d| d.contains("vault: events="))
+        .expect("a job_status reply")
 }

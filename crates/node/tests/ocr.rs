@@ -26,6 +26,7 @@ use svastha_node::client::RelayClient;
 use svastha_node::config::InferenceConfig;
 use svastha_node::inference::InferenceClient;
 use svastha_node::journal::Journal;
+use svastha_node::ocr_control::{OcrControl, OcrSettings, DEFAULT_MAX_PAGES_PER_PASS};
 use svastha_node::state::NodeState;
 use svastha_node::sync::{consume_mailbox, sync_all};
 
@@ -221,7 +222,9 @@ fn deposit_handoff(owner_client: &RelayClient, owner: &Identity, node: &Identity
     owner_client
         .put_mailbox(
             &hex_ed(node),
-            "kh-1",
+            // Keyed by owner: two owners enrolling with one node must not
+            // overwrite each other's handoff.
+            &format!("kh-{}", hex_ed(owner)),
             &serde_json::to_vec(&envelope).unwrap(),
         )
         .unwrap();
@@ -272,22 +275,12 @@ struct Fixture {
 
 fn setup(seed: &[u8], images: &[&[u8]]) -> Fixture {
     let base = spawn_relay();
-    let owner = Identity::from_seed(seed);
     let mut node_seed = seed.to_vec();
     node_seed.extend_from_slice(b"-node");
     let node = Identity::from_seed(&node_seed);
-    let owner_client = RelayClient::new(base.clone(), Arc::new(Identity::from_seed(seed)));
     let node_client = RelayClient::new(base.clone(), Arc::new(Identity::from_seed(&node_seed)));
 
-    let data_key = DataKey::generate();
-    let ring = Keyring::genesis(&owner.x25519_public(), &data_key);
-    let mut sources = Vec::new();
-    for img in images {
-        let sha = put_attachment(&owner_client, &ring, &owner, img);
-        sources.push(format!("att-{sha}"));
-    }
-    grant_node(&owner_client, &node);
-    deposit_handoff(&owner_client, &owner, &node, &ring);
+    let side = seed_owner(&base, &node, seed, images);
 
     let state = Mutex::new(NodeState::new());
     let cache = Cache::new(tempfile::tempdir().unwrap().path().to_path_buf());
@@ -297,13 +290,82 @@ fn setup(seed: &[u8], images: &[&[u8]]) -> Fixture {
 
     Fixture {
         node_client,
-        owner_client,
-        owner,
+        owner_client: side.client,
+        owner: side.id,
         node,
         state,
         cache,
         journal_dir: tempfile::tempdir().unwrap(),
+        sources: side.sources,
+    }
+}
+
+/// One enrolled owner: identity, relay client, and the `att-` ids of the pages
+/// seeded into their vault.
+struct OwnerSide {
+    id: Identity,
+    client: RelayClient,
+    sources: Vec<String>,
+}
+
+/// Two owners enrolled with **one** node — the multi-tenant shape the node has
+/// been built for since day one, and the only shape in which a per-owner gate
+/// differs from a node-wide one.
+struct PairFixture {
+    node_client: RelayClient,
+    state: Mutex<NodeState>,
+    cache: Cache,
+    journal_dir: tempfile::TempDir,
+    a: OwnerSide,
+    b: OwnerSide,
+}
+
+/// Seed one owner's vault with `images`, grant the node, and hand off the
+/// keyring. The caller enrols and syncs afterwards.
+fn seed_owner(base: &str, node: &Identity, seed: &[u8], images: &[&[u8]]) -> OwnerSide {
+    let id = Identity::from_seed(seed);
+    let client = RelayClient::new(base.to_string(), Arc::new(Identity::from_seed(seed)));
+    let ring = Keyring::genesis(&id.x25519_public(), &DataKey::generate());
+    let sources = images
+        .iter()
+        .map(|img| format!("att-{}", put_attachment(&client, &ring, &id, img)))
+        .collect();
+    grant_node(&client, node);
+    deposit_handoff(&client, &id, node, &ring);
+    OwnerSide {
+        id,
+        client,
         sources,
+    }
+}
+
+fn setup_pair(seed_a: &[u8], images_a: &[&[u8]], seed_b: &[u8], images_b: &[&[u8]]) -> PairFixture {
+    let base = spawn_relay();
+    let mut node_seed = seed_a.to_vec();
+    node_seed.extend_from_slice(b"-node");
+    let node = Identity::from_seed(&node_seed);
+    let node_client = RelayClient::new(base.clone(), Arc::new(Identity::from_seed(&node_seed)));
+
+    let a = seed_owner(&base, &node, seed_a, images_a);
+    let b = seed_owner(&base, &node, seed_b, images_b);
+
+    let state = Mutex::new(NodeState::new());
+    let cache = Cache::new(tempfile::tempdir().unwrap().path().to_path_buf());
+    consume_mailbox(&node_client, &state).unwrap();
+    sync_all(&node_client, &cache, &state).unwrap();
+    assert_eq!(
+        state.lock().unwrap().enrolled_count(),
+        2,
+        "both vaults enrolled"
+    );
+
+    PairFixture {
+        node_client,
+        state,
+        cache,
+        journal_dir: tempfile::tempdir().unwrap(),
+        a,
+        b,
     }
 }
 
@@ -727,6 +789,9 @@ struct StubReader {
     /// Pages this reader was asked to read — the in-process OCR pass is the
     /// expensive half, so a test about the per-pass cap has to count it.
     reads: Arc<AtomicUsize>,
+    /// The bytes of each page handed over, so a multi-owner test can tell
+    /// *whose* pages were read (each owner's fixture pages are prefixed).
+    seen: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 
 impl StubReader {
@@ -741,6 +806,7 @@ impl StubReader {
             ],
             unreadable: false,
             reads: Arc::new(AtomicUsize::new(0)),
+            seen: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -772,11 +838,23 @@ impl StubReader {
     fn reads(&self) -> usize {
         self.reads.load(Ordering::SeqCst)
     }
+
+    /// How many pages whose bytes start with `prefix` this reader was handed —
+    /// the per-owner read count the pause tests assert on.
+    fn pages_starting_with(&self, prefix: &str) -> usize {
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|page| page.starts_with(prefix.as_bytes()))
+            .count()
+    }
 }
 
 impl svastha_node::transcribe::PageReader for StubReader {
-    fn transcribe(&self, _bytes: &[u8]) -> anyhow::Result<Vec<String>> {
+    fn transcribe(&self, bytes: &[u8]) -> anyhow::Result<Vec<String>> {
         self.reads.fetch_add(1, Ordering::SeqCst);
+        self.seen.lock().unwrap().push(bytes.to_vec());
         if self.unreadable {
             anyhow::bail!("this page could not be read");
         }
@@ -784,20 +862,29 @@ impl svastha_node::transcribe::PageReader for StubReader {
     }
 }
 
-/// A resumed control for the tests that are about the pass itself. The gate's
-/// own behaviour — paused by default, and the per-pass cap — is covered
-/// separately in `ocr_control`'s unit tests and `reads_at_most_the_cap_per_pass`.
-fn resumed(dir: &tempfile::TempDir) -> svastha_node::ocr_control::OcrControl {
-    let mut control = svastha_node::ocr_control::OcrControl::load(dir.path());
-    control.set_paused(false).unwrap();
-    control
+/// A control with reading on for every owner, for the tests that are about the
+/// pass itself. The gate's own behaviour — paused by default, per-owner scoping,
+/// and the per-pass cap — is covered by `ocr_control`'s unit tests and the
+/// pause tests below.
+fn resumed(dir: &tempfile::TempDir) -> OcrControl {
+    OcrControl::load(dir.path(), opted_in(DEFAULT_MAX_PAGES_PER_PASS))
+}
+
+/// Boot settings for a node an operator has opted in (`SVASTHA_NODE_OCR_PAUSED=false`),
+/// with the given per-pass cap. Passed as a parameter, never through the process
+/// env: cargo runs tests in parallel threads, and a shared env var is a race.
+fn opted_in(max_pages_per_pass: usize) -> OcrSettings {
+    OcrSettings {
+        default_paused: false,
+        max_pages_per_pass,
+    }
 }
 
 /// The whole point of the gate: enrolling a node against a vault that already
 /// holds pages must not start reading them. A thousand-entry approval queue is
 /// not a queue anyone reviews, and the design rests on the owner reviewing.
 #[test]
-fn a_fresh_node_reads_nothing_until_it_is_resumed() {
+fn a_fresh_node_reads_nothing_until_the_owner_resumes() {
     let (base, calls) = spawn_inference(Mode::Ok(one_bp_finding()));
     let inf = inference_client(&base);
     let fx = setup(
@@ -805,9 +892,10 @@ fn a_fresh_node_reads_nothing_until_it_is_resumed() {
         &[b"page one", b"page two", b"page three"],
     );
     let mut journal = Journal::load(fx.journal_dir.path());
+    let owner_hex = hex_ed(&fx.owner);
 
-    // Loaded, not resumed — the default.
-    let control = svastha_node::ocr_control::OcrControl::load(fx.journal_dir.path());
+    // Loaded with the shipped defaults — nobody has chosen, so nobody is read.
+    let mut control = OcrControl::load(fx.journal_dir.path(), OcrSettings::default());
     let report = svastha_node::ocr::run(
         &fx.node_client,
         &fx.cache,
@@ -819,7 +907,7 @@ fn a_fresh_node_reads_nothing_until_it_is_resumed() {
     )
     .unwrap();
 
-    assert!(report.paused);
+    assert_eq!(report.paused_owners, 1);
     assert_eq!(report.proposals, 0);
     assert_eq!(calls.load(Ordering::SeqCst), 0, "no inference call at all");
     assert!(
@@ -829,40 +917,136 @@ fn a_fresh_node_reads_nothing_until_it_is_resumed() {
 
     // Resuming reads them, and the pages are still eligible — pausing defers
     // work rather than discarding it.
-    let mut resumed = svastha_node::ocr_control::OcrControl::load(fx.journal_dir.path());
-    resumed.set_paused(false).unwrap();
+    control.set_paused(&owner_hex, false).unwrap();
     let report = svastha_node::ocr::run(
         &fx.node_client,
         &fx.cache,
         &fx.state,
         &inf,
         &StubReader::page(),
-        &resumed,
+        &control,
         &mut journal,
     )
     .unwrap();
-    assert!(!report.paused);
+    assert_eq!(report.paused_owners, 0);
     assert_eq!(report.proposals, 3);
 }
 
-/// The cap is read from a process-wide env var at load time, so the tests that
-/// set it serialize through this — otherwise one test's `remove_var` can land
-/// between another's `set_var` and its `load`.
-static CAP_ENV: Mutex<()> = Mutex::new(());
+/// The defect this pins: a node serving two households had **one** paused flag,
+/// so either owner could stop the other's reading — and the other's status said
+/// "paused" with no way to undo it. The gate is the owner's own.
+#[test]
+fn one_owners_pause_leaves_the_other_reading() {
+    let (base, _calls) = spawn_inference(Mode::Ok(one_bp_finding()));
+    let inf = inference_client(&base);
+    // Both owners start reading (the operator opted this deployment in), so the
+    // only thing that stops A below is A's own pause.
+    let fx = setup_pair(
+        b"ocr owner pause a",
+        &[b"a page one", b"a page two"],
+        b"ocr owner pause b",
+        &[b"b page one", b"b page two"],
+    );
+    let mut journal = Journal::load(fx.journal_dir.path());
+    let mut control = OcrControl::load(fx.journal_dir.path(), opted_in(DEFAULT_MAX_PAGES_PER_PASS));
+    control.set_paused(&hex_ed(&fx.a.id), true).unwrap();
 
-/// A resumed control with the per-pass cap forced to `pages`.
-fn capped(dir: &tempfile::TempDir, pages: usize) -> svastha_node::ocr_control::OcrControl {
-    let mut control = {
-        let _guard = CAP_ENV.lock().unwrap_or_else(|e| e.into_inner());
-        // SAFETY: the lock above makes this the only thread touching the var.
-        unsafe { std::env::set_var("SVASTHA_NODE_OCR_MAX_PAGES_PER_PASS", pages.to_string()) };
-        let control = svastha_node::ocr_control::OcrControl::load(dir.path());
-        unsafe { std::env::remove_var("SVASTHA_NODE_OCR_MAX_PAGES_PER_PASS") };
-        control
-    };
-    control.set_paused(false).unwrap();
-    assert_eq!(control.max_pages_per_pass(), pages);
-    control
+    let reader = StubReader::page();
+    let report = svastha_node::ocr::run(
+        &fx.node_client,
+        &fx.cache,
+        &fx.state,
+        &inf,
+        &reader,
+        &control,
+        &mut journal,
+    )
+    .unwrap();
+
+    assert_eq!(report.paused_owners, 1, "exactly one household stood down");
+    assert_eq!(report.proposals, 2, "the other's two pages were read");
+    assert_eq!(
+        reader.pages_starting_with("a"),
+        0,
+        "the paused owner's pages were never even read"
+    );
+    assert_eq!(reader.pages_starting_with("b"), 2);
+    assert!(
+        read_proposals(&fx.a.client, &fx.a.id).is_empty(),
+        "nothing reaches the paused owner's mailbox"
+    );
+    assert_eq!(read_proposals(&fx.b.client, &fx.b.id).len(), 2);
+
+    // A's pages are deferred, not discarded: A resumes — across a reload of the
+    // control, as a restart would — and its backlog is read, B's already done.
+    let mut control = OcrControl::load(fx.journal_dir.path(), opted_in(DEFAULT_MAX_PAGES_PER_PASS));
+    assert!(
+        control.paused(&hex_ed(&fx.a.id)),
+        "the pause survived the reload"
+    );
+    control.set_paused(&hex_ed(&fx.a.id), false).unwrap();
+
+    let reader = StubReader::page();
+    let report = svastha_node::ocr::run(
+        &fx.node_client,
+        &fx.cache,
+        &fx.state,
+        &inf,
+        &reader,
+        &control,
+        &mut journal,
+    )
+    .unwrap();
+    assert_eq!(report.paused_owners, 0);
+    assert_eq!(report.proposals, 2);
+    assert_eq!(reader.pages_starting_with("a"), 2, "A's backlog, now read");
+    assert_eq!(reader.pages_starting_with("b"), 0, "B's pages are done");
+    assert_eq!(read_proposals(&fx.a.client, &fx.a.id).len(), 2);
+}
+
+/// The escape hatch for a deployment upgrading into pause-by-default: no owner
+/// has a persisted choice, no UI sends `resume_ocr` yet, and without this the
+/// node silently stops reading with no remedy short of wiping state. An owner
+/// who *has* chosen still wins over it.
+#[test]
+fn the_boot_default_opts_in_owners_who_have_not_chosen() {
+    let (base, _calls) = spawn_inference(Mode::Ok(one_bp_finding()));
+    let inf = inference_client(&base);
+    let fx = setup_pair(
+        b"ocr owner envdefault a",
+        &[b"a page one"],
+        b"ocr owner envdefault b",
+        &[b"b page one"],
+    );
+    let mut journal = Journal::load(fx.journal_dir.path());
+
+    // A chose to pause; B has never chosen anything.
+    {
+        let mut control =
+            OcrControl::load(fx.journal_dir.path(), opted_in(DEFAULT_MAX_PAGES_PER_PASS));
+        control.set_paused(&hex_ed(&fx.a.id), true).unwrap();
+    }
+    let control = OcrControl::load(fx.journal_dir.path(), opted_in(DEFAULT_MAX_PAGES_PER_PASS));
+
+    let report = svastha_node::ocr::run(
+        &fx.node_client,
+        &fx.cache,
+        &fx.state,
+        &inf,
+        &StubReader::page(),
+        &control,
+        &mut journal,
+    )
+    .unwrap();
+    assert_eq!(report.proposals, 1, "B reads on the boot default");
+    assert_eq!(report.paused_owners, 1, "A's persisted choice still wins");
+    assert!(read_proposals(&fx.a.client, &fx.a.id).is_empty());
+    assert_eq!(read_proposals(&fx.b.client, &fx.b.id).len(), 1);
+}
+
+/// A resumed control with the per-pass cap set to `pages`.
+fn capped(dir: &tempfile::TempDir, pages: usize) -> OcrControl {
+    OcrControl::load(dir.path(), opted_in(pages))
 }
 
 /// A backlog arrives as reviewable batches, not a flood — and the next pass
@@ -998,7 +1182,7 @@ fn a_paused_pass_still_refreshes_job_status() {
     // A stale gauge, as a run before the pause would have left it.
     fx.state.lock().unwrap().record_ocr_run(7, 3, 1);
 
-    let control = svastha_node::ocr_control::OcrControl::load(fx.journal_dir.path());
+    let control = OcrControl::load(fx.journal_dir.path(), OcrSettings::default());
     let report = svastha_node::ocr::run(
         &fx.node_client,
         &fx.cache,
@@ -1009,7 +1193,7 @@ fn a_paused_pass_still_refreshes_job_status() {
         &mut journal,
     )
     .unwrap();
-    assert!(report.paused);
+    assert_eq!(report.paused_owners, 1);
 
     let jobs = fx.state.lock().unwrap().job_status();
     assert_eq!(
