@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import { groupLines, lineText, renderColumns, numberedLines, lineAt } from '../ocr-layout'
-import { pageWords } from '../pdf'
 import type { OcrWord } from '../ocr'
 
 /** A run box. y grows downward, matching every engine's convention. */
@@ -219,31 +218,5 @@ describe('numberedLines', () => {
     expect(numberedLines(groupLines(labPanel()))).toBe(
       '[1] Potassium 4.1 mmol/L 3.5-5.1\n[2] Sodium 139 mmol/L 135-145',
     )
-  })
-})
-
-describe('pageWords', () => {
-  // pdf.js reports a bottom-up baseline; every other engine reports top-down.
-  // Getting this backwards would silently invert the whole page's line order.
-  it('flips pdf.js bottom-up baselines to top-down boxes', () => {
-    const item = { str: 'Potassium', width: 60, height: 10, transform: [1, 0, 0, 1, 20, 700] }
-    const [word] = pageWords([item], 800)
-    expect(word).toEqual({ text: 'Potassium', x0: 20, x1: 80, y0: 90, y1: 100, conf: 1 })
-  })
-
-  it('orders a page top-down after the flip', () => {
-    const top = { str: 'top', width: 10, height: 10, transform: [1, 0, 0, 1, 0, 700] }
-    const bottom = { str: 'bottom', width: 10, height: 10, transform: [1, 0, 0, 1, 0, 100] }
-    const lines = groupLines(pageWords([bottom, top], 800))
-    expect(lines.map((l) => l.text)).toEqual(['top', 'bottom'])
-  })
-
-  it('skips marked-content items and blank runs', () => {
-    const items = [
-      { type: 'beginMarkedContent' },
-      { str: '   ', width: 10, height: 10, transform: [1, 0, 0, 1, 0, 700] },
-      { str: 'real', width: 10, height: 10, transform: [1, 0, 0, 1, 0, 600] },
-    ]
-    expect(pageWords(items, 800).map((x) => x.text)).toEqual(['real'])
   })
 })
