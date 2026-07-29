@@ -519,9 +519,11 @@ envelope — it is opaque sealed bytes to the crypto above.
 - `admin_cmd` — `{ command }`, a tagged owner→node command
   (`set_inference_endpoint`, `job_status`, `log_tail`, `pause_ocr`, `resume_ocr`).
   The node accepts commands only from an identity holding a live grant *it itself*
-  issued; node-global administration stays with the host operator. The set is
-  additive: a reader that does not know a command answers `ok: false` rather than
-  acting on a guess.
+  issued, and each command acts on the **sender's own vault only** —
+  `pause_ocr`/`resume_ocr` stop and start the node's reading of that owner's
+  pages, never another owner's. Node-global administration stays with the host
+  operator. The set is additive: a reader that does not know a command answers
+  `ok: false` rather than acting on a guess.
 - `admin_reply` — `{ in_reply_to, ok, detail? }`.
 - `chat_msg` — `{ role, text, citations: [event_id…] }`: a retrieval-augmented Q&A
   turn; an answer carries the event ids it cited.

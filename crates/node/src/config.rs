@@ -24,6 +24,8 @@ use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::ocr_control::{OcrSettings, DEFAULT_MAX_PAGES_PER_PASS};
+
 /// Required. The relay base URL, e.g. `https://relay.example`. Never defaulted:
 /// the node reaches the relay outbound and must be told where it is.
 pub const ENV_RELAY_URL: &str = "SVASTHA_RELAY_URL";
@@ -62,6 +64,11 @@ pub const ENV_CHAT_ENDPOINT: &str = "SVASTHA_NODE_CHAT_INFERENCE_ENDPOINT";
 pub const ENV_CHAT_MODEL: &str = "SVASTHA_NODE_CHAT_INFERENCE_MODEL";
 /// Chat (RAG) API-key override; falls back to [`ENV_INFERENCE_API_KEY`].
 pub const ENV_CHAT_API_KEY: &str = "SVASTHA_NODE_CHAT_INFERENCE_API_KEY";
+/// Optional boot default for page reading, applied to **every owner who has not
+/// chosen for themselves** (see [`crate::ocr_control`]). Default: paused.
+pub const ENV_OCR_PAUSED: &str = "SVASTHA_NODE_OCR_PAUSED";
+/// Optional override for the per-pass page cap.
+pub const ENV_OCR_MAX_PAGES: &str = "SVASTHA_NODE_OCR_MAX_PAGES_PER_PASS";
 /// Optional bind address for the bootstrap page. **Loopback only** (validated).
 pub const ENV_BOOTSTRAP_ADDR: &str = "SVASTHA_NODE_BOOTSTRAP_ADDR";
 /// Optional fallback poll interval (seconds) for when the SSE stream is down.
@@ -128,6 +135,10 @@ pub struct Config {
     /// Text inference target for RAG chat (D3), validated if present. Resolves
     /// the chat-role env vars over the shared base.
     pub chat_inference: Option<InferenceConfig>,
+    /// The reading gate's boot settings (default paused state and per-pass cap).
+    /// Read here so [`crate::ocr_control`] takes them as parameters instead of
+    /// reaching into the process env.
+    pub ocr: OcrSettings,
     /// Loopback-only bootstrap-page bind address.
     pub bootstrap_addr: String,
     /// Fallback pull cadence when the SSE poke stream is unavailable.
@@ -166,6 +177,8 @@ impl Config {
             &env_nonempty,
         )?;
 
+        let ocr = resolve_ocr(&env_nonempty);
+
         let bootstrap_addr = std::env::var(ENV_BOOTSTRAP_ADDR)
             .ok()
             .filter(|s| !s.trim().is_empty())
@@ -200,6 +213,7 @@ impl Config {
             cache_dir,
             ocr_inference,
             chat_inference,
+            ocr,
             bootstrap_addr,
             poll_interval,
             label,
@@ -249,6 +263,39 @@ fn resolve_role(
         api_key,
         model,
     }))
+}
+
+/// Resolve the reading gate's boot settings. Takes a lookup fn for the same
+/// reason [`resolve_role`] does: the values are then testable without touching
+/// the process env, which cargo's parallel test threads share.
+fn resolve_ocr(lookup: &dyn Fn(&str) -> Option<String>) -> OcrSettings {
+    OcrSettings {
+        default_paused: lookup(ENV_OCR_PAUSED)
+            .as_deref()
+            .and_then(parse_flag)
+            .unwrap_or(true),
+        max_pages_per_pass: lookup(ENV_OCR_MAX_PAGES)
+            .as_deref()
+            .and_then(parse_positive)
+            .unwrap_or(DEFAULT_MAX_PAGES_PER_PASS),
+    }
+}
+
+/// `1`/`true`/`yes`/`on` (any case) is true; `0`/`false`/`no`/`off` is false;
+/// anything else is `None`, so a typo falls back to the safe default rather than
+/// being read as "off".
+fn parse_flag(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+/// A positive integer, or `None` — a zero or unparseable cap would mean "read
+/// nothing" or panic, both worse than ignoring it.
+fn parse_positive(value: &str) -> Option<usize> {
+    value.trim().parse().ok().filter(|n| *n > 0)
 }
 
 fn env_path(var: &str, default: &str) -> PathBuf {
@@ -436,6 +483,32 @@ mod tests {
             chat(&l),
             Err(ConfigError::MissingInferenceModel { role: "chat", .. })
         ));
+    }
+
+    // --- the reading gate's boot settings ---
+
+    #[test]
+    fn the_reading_gate_defaults_to_paused_with_the_standard_cap() {
+        let l = lookup_from(&[]);
+        let ocr = resolve_ocr(&l);
+        assert!(ocr.default_paused);
+        assert_eq!(ocr.max_pages_per_pass, DEFAULT_MAX_PAGES_PER_PASS);
+    }
+
+    #[test]
+    fn an_operator_can_opt_the_deployment_in() {
+        let l = lookup_from(&[(ENV_OCR_PAUSED, "false"), (ENV_OCR_MAX_PAGES, "5")]);
+        let ocr = resolve_ocr(&l);
+        assert!(!ocr.default_paused);
+        assert_eq!(ocr.max_pages_per_pass, 5);
+    }
+
+    #[test]
+    fn nonsense_values_fall_back_to_the_safe_defaults() {
+        let l = lookup_from(&[(ENV_OCR_PAUSED, "maybe"), (ENV_OCR_MAX_PAGES, "0")]);
+        let ocr = resolve_ocr(&l);
+        assert!(ocr.default_paused, "a typo must not be read as 'off'");
+        assert_eq!(ocr.max_pages_per_pass, DEFAULT_MAX_PAGES_PER_PASS);
     }
 
     #[test]

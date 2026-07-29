@@ -160,12 +160,14 @@ fn execute(
             (true, log_tail_detail(logs, want))
         }
         // Reading is the one node behaviour an owner can start and stop, because
-        // it is the one that writes into their approval queue.
-        AdminCommand::PauseOcr => match control.set_paused(true) {
+        // it is the one that writes into their approval queue — and it stops for
+        // the sender's vault alone, which is what keeps the rule above true in
+        // effect and not just in authorization.
+        AdminCommand::PauseOcr => match control.set_paused(owner_hex, true) {
             Ok(detail) => (true, detail),
             Err(msg) => (false, msg),
         },
-        AdminCommand::ResumeOcr => match control.set_paused(false) {
+        AdminCommand::ResumeOcr => match control.set_paused(owner_hex, false) {
             Ok(detail) => (true, detail),
             Err(msg) => (false, msg),
         },
@@ -178,9 +180,9 @@ fn execute(
     }
 }
 
-/// A content-free job-status line: this owner's index sizes (per-owner), the
-/// global OCR counters, whether inference is configured, and the last reconcile
-/// time (Unix seconds). Counts and a timestamp only.
+/// A content-free job-status line: this owner's index sizes and *their own*
+/// reading state, the node's OCR counters, whether inference is configured, and
+/// the last reconcile time (Unix seconds). Counts and a timestamp only.
 fn job_status_detail(
     state: &Mutex<NodeState>,
     inference: &InferenceRuntime,
@@ -216,8 +218,10 @@ fn job_status_detail(
         jobs.processed,
         jobs.failed,
         control.max_pages_per_pass(),
-        reading = if control.paused() {
-            "paused"
+        // Whose pause this is, because the answer is only ever about the asker:
+        // a paused status the owner cannot account for reads like a node fault.
+        reading = if control.paused(owner_hex) {
+            "paused by you"
         } else {
             "reading"
         }
