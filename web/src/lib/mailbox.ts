@@ -44,8 +44,11 @@ import {
   recordCommand,
   noteNodeSeen,
   isEnrolledNode,
+  enrolledNode,
   type AdminCommand,
 } from './nodeadmin'
+import { saveOptIns } from './answerScope'
+import type { Category } from './category'
 
 /** The mailbox surface this layer needs. `RelayClient` satisfies it
  * structurally (mirrors shared.ts's `SharingClient`). */
@@ -578,6 +581,40 @@ export async function sendAdminCommand(node: NodeTarget, command: AdminCommand):
   await client.putMailbox(node.ed, `admin-${id}`, new TextEncoder().encode(envelope))
   await recordCommand({ id, command, sentAt: new Date().toISOString() })
   return true
+}
+
+/** What {@link commitAnswerScope} managed to do. */
+export type AnswerScopeOutcome =
+  /** Saved here; no node is enrolled, so there is nothing else to tell. */
+  | 'local-only'
+  /** Saved here and the node was told. */
+  | 'sent'
+  /** Saved here, but the command could not be deposited (locked vault, no relay).
+   * The node keeps its previous instruction until one gets through. */
+  | 'unsent'
+
+/**
+ * Record the owner's opt-in categories and, when a node is enrolled, tell it —
+ * in that order, because the local choice governs this device's own answers and
+ * must not depend on reaching anything.
+ *
+ * The node is sent the whole set rather than the one that changed, so a command
+ * that never lands is corrected by the next one instead of leaving the node a
+ * flip behind for good. Lives here rather than in `answerScope.ts` so that module
+ * stays free of the relay and wasm, and `ask.ts` can import it on the answering
+ * path without dragging the mailbox in.
+ */
+export async function commitAnswerScope(
+  optIns: ReadonlySet<Category>,
+): Promise<AnswerScopeOutcome> {
+  const include = await saveOptIns(optIns)
+  const node = await enrolledNode()
+  if (!node) return 'local-only'
+  const sent = await sendAdminCommand(
+    { ed: node.ed, x25519: node.x25519 },
+    { cmd: 'set_answer_scope', include },
+  )
+  return sent ? 'sent' : 'unsent'
 }
 
 // --- resolution: echo the decision back to the proposer ---

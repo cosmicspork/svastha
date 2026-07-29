@@ -23,6 +23,7 @@ use svastha_core::mailbox::{
 };
 
 use svastha_node::admin;
+use svastha_node::answer_scope::AnswerScopeControl;
 use svastha_node::cache::Cache;
 use svastha_node::chat;
 use svastha_node::client::RelayClient;
@@ -383,7 +384,7 @@ fn question_gets_a_cited_answer_the_web_schema_accepts() {
 
     ask(&owner.id, &owner.client, &h.node, "am I taking lisinopril?");
     let mut journal = h.journal();
-    let report = chat::run(&h.node_client, &h.state, &inf, &mut journal).unwrap();
+    let report = chat::run(&h.node_client, &h.state, &inf, &scopes(&h), &mut journal).unwrap();
     assert_eq!(report.answered, 1, "one grounded answer");
     assert_eq!(calls.load(Ordering::SeqCst), 1, "one inference call");
 
@@ -417,7 +418,7 @@ fn ungroundable_answer_replies_honestly_without_citations() {
 
     ask(&owner.id, &owner.client, &h.node, "am I taking lisinopril?");
     let mut journal = h.journal();
-    let report = chat::run(&h.node_client, &h.state, &inf, &mut journal).unwrap();
+    let report = chat::run(&h.node_client, &h.state, &inf, &scopes(&h), &mut journal).unwrap();
     assert_eq!(report.answered, 0);
     assert_eq!(
         report.cant_answer, 1,
@@ -462,7 +463,7 @@ fn a_question_from_a_non_enrolled_identity_is_dropped() {
     );
 
     let mut journal = h.journal();
-    let report = chat::run(&h.node_client, &h.state, &inf, &mut journal).unwrap();
+    let report = chat::run(&h.node_client, &h.state, &inf, &scopes(&h), &mut journal).unwrap();
     assert_eq!(report.dropped, 1, "sender gate drops the stranger");
     assert_eq!(report.answered, 0);
     assert_eq!(
@@ -494,7 +495,7 @@ fn cross_tenant_isolation_a_question_never_retrieves_bs_events() {
 
     ask(&a.id, &a.client, &h.node, "am I taking warfarin?");
     let mut journal = h.journal();
-    let report = chat::run(&h.node_client, &h.state, &inf, &mut journal).unwrap();
+    let report = chat::run(&h.node_client, &h.state, &inf, &scopes(&h), &mut journal).unwrap();
     assert_eq!(
         report.cant_answer, 1,
         "A's warfarin question finds nothing in A's vault"
@@ -509,7 +510,7 @@ fn cross_tenant_isolation_a_question_never_retrieves_bs_events() {
     );
 
     ask(&b.id, &b.client, &h.node, "am I taking warfarin?");
-    let report = chat::run(&h.node_client, &h.state, &inf, &mut journal).unwrap();
+    let report = chat::run(&h.node_client, &h.state, &inf, &scopes(&h), &mut journal).unwrap();
     assert_eq!(report.answered, 1);
     let b_answers = read_chat_answers(&b.client, &b.id);
     assert_eq!(b_answers[0].citations, vec![b_warfarin.event.id.to_hex()]);
@@ -549,7 +550,7 @@ fn resolved_vs_current_curation_shapes_the_cited_answer() {
         "what metformin am I currently taking?",
     );
     let mut journal = h.journal();
-    chat::run(&h.node_client, &h.state, &inf, &mut journal).unwrap();
+    chat::run(&h.node_client, &h.state, &inf, &scopes(&h), &mut journal).unwrap();
     let answers = read_chat_answers(&owner.client, &owner.id);
     assert_eq!(
         answers[0].citations,
@@ -576,7 +577,7 @@ fn a_handled_question_is_not_re_answered_after_a_restart() {
 
     {
         let mut journal = h.journal();
-        chat::run(&h.node_client, &h.state, &inf, &mut journal).unwrap();
+        chat::run(&h.node_client, &h.state, &inf, &scopes(&h), &mut journal).unwrap();
     }
     assert_eq!(read_chat_answers(&owner.client, &owner.id).len(), 1);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -584,7 +585,7 @@ fn a_handled_question_is_not_re_answered_after_a_restart() {
     // Simulated restart: fresh journal from the same durable dir. Even if the
     // question lingered in the node's mailbox, it must not be answered again.
     let mut journal = h.journal();
-    let report = chat::run(&h.node_client, &h.state, &inf, &mut journal).unwrap();
+    let report = chat::run(&h.node_client, &h.state, &inf, &scopes(&h), &mut journal).unwrap();
     assert_eq!(report.answered, 0, "restart does not re-answer");
     assert_eq!(
         calls.load(Ordering::SeqCst),
@@ -628,6 +629,7 @@ fn admin_job_status_round_trips() {
         &h.state,
         &mut rt,
         &mut control(&h),
+        &mut scopes(&h),
         &logs,
         &mut journal,
     )
@@ -672,6 +674,7 @@ fn admin_log_tail_round_trips_with_content_free_lines() {
         &h.state,
         &mut rt,
         &mut control(&h),
+        &mut scopes(&h),
         &logs,
         &mut journal,
     )
@@ -711,6 +714,7 @@ fn admin_set_inference_endpoint_accepts_valid_and_rejects_batch() {
         &h.state,
         &mut rt,
         &mut control(&h),
+        &mut scopes(&h),
         &logs,
         &mut journal,
     )
@@ -741,6 +745,7 @@ fn admin_set_inference_endpoint_accepts_valid_and_rejects_batch() {
         &h.state,
         &mut rt,
         &mut control(&h),
+        &mut scopes(&h),
         &logs,
         &mut journal,
     )
@@ -781,6 +786,7 @@ fn admin_command_from_a_non_enrolled_identity_is_dropped() {
         &h.state,
         &mut rt,
         &mut control(&h),
+        &mut scopes(&h),
         &logs,
         &mut journal,
     )
@@ -797,6 +803,12 @@ fn admin_command_from_a_non_enrolled_identity_is_dropped() {
 /// rooted in the harness's own data dir, with the shipped defaults.
 fn control(h: &Harness) -> OcrControl {
     OcrControl::load(h.dir.path(), OcrSettings::default())
+}
+
+/// Likewise for the answer scope: rooted in the harness's data dir, so a test
+/// that sets one reads the same state back on the next pass.
+fn scopes(h: &Harness) -> AnswerScopeControl {
+    AnswerScopeControl::load(h.dir.path())
 }
 
 /// The trust rule made true in effect, not just in authorization: an owner's
@@ -832,6 +844,7 @@ fn pausing_is_scoped_to_the_owner_who_sent_the_command() {
         &h.state,
         &mut rt,
         &mut control,
+        &mut scopes(&h),
         &logs,
         &mut journal,
     )
@@ -858,6 +871,7 @@ fn pausing_is_scoped_to_the_owner_who_sent_the_command() {
         &h.state,
         &mut rt,
         &mut control,
+        &mut scopes(&h),
         &logs,
         &mut journal,
     )
@@ -882,4 +896,246 @@ fn status_detail(owner_client: &RelayClient, owner: &Identity) -> String {
         .filter_map(|r| r.detail)
         .find(|d| d.contains("vault: events="))
         .expect("a job_status reply")
+}
+
+// ---- answer scope (opt-in entries) ----
+
+/// A cycle or mind entry: a coded observation in the app-local
+/// `urn:svastha:codes` system, which is what makes it sensitive on both the node
+/// and the device.
+fn app_local_entry(owner: &Identity, code: &str, display: &str, date: &str) -> SignedEvent {
+    owner.sign_event(Event::new(
+        EventKind::Observation,
+        Some(Code {
+            system: "urn:svastha:codes".into(),
+            code: code.into(),
+            display: Some(display.into()),
+        }),
+        Some(date.into()),
+        None,
+        Provenance {
+            source: "self".into(),
+            source_doc: None,
+        },
+    ))
+}
+
+/// The whole feature in one exchange: a question only a cycle entry could answer
+/// is refused — **without an inference call** — until the owner opts cycle in,
+/// and answered with a citation once they have. The opt-in persists across the
+/// pass that applies it, so "effective next pass" is what is actually asserted.
+#[test]
+fn set_answer_scope_gates_what_an_answer_can_draw_from() {
+    let (base, calls) = spawn_inference(Mode::Ok(
+        r#"{"answer":"Your last period started on the 5th.","used":[1]}"#.into(),
+    ));
+    let inf = inference_client(&base);
+
+    let h = Harness::new(b"scope node one");
+    let owner = h.add_owner(b"scope owner one");
+    let period = app_local_entry(&owner.id, "cycle-start", "Period start", "2026-01-05");
+    put_event(&owner.client, &owner.ring, &owner.id, &period);
+    h.enroll_and_sync();
+
+    // Default: excluded. The endpoint is never called at all.
+    ask(
+        &owner.id,
+        &owner.client,
+        &h.node,
+        "when did my period start?",
+    );
+    let mut journal = h.journal();
+    let report = chat::run(&h.node_client, &h.state, &inf, &scopes(&h), &mut journal).unwrap();
+    assert_eq!(report.cant_answer, 1, "honest refusal, not a guess");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "an excluded entry must not reach the endpoint — not even as context"
+    );
+    let answers = read_chat_answers(&owner.client, &owner.id);
+    assert_eq!(answers.len(), 1);
+    assert!(answers[0].citations.is_empty());
+
+    // The owner opts cycle in.
+    let cmd_id = command(
+        &owner.id,
+        &owner.client,
+        &h.node,
+        AdminCommand::SetAnswerScope {
+            include: vec!["cycle".into()],
+        },
+    );
+    let logs = LogBuffer::new();
+    let mut rt = runtime(h.dir.path(), "https://inference.internal/v1");
+    admin::run(
+        &h.node_client,
+        &h.state,
+        &mut rt,
+        &mut control(&h),
+        &mut scopes(&h),
+        &logs,
+        &mut journal,
+    )
+    .unwrap();
+
+    let reply = read_admin_replies(&owner.client, &owner.id)
+        .into_iter()
+        .find(|r| r.in_reply_to == cmd_id)
+        .expect("a reply to the scope command");
+    assert!(reply.ok);
+    let detail = reply.detail.as_deref().unwrap();
+    assert!(
+        detail.contains("Cycle") && detail.contains("your vault") && detail.contains("unaffected"),
+        "the reply states the resulting scope and its reach, got: {detail}"
+    );
+
+    // Next pass: the same question is answered, and cited.
+    ask(
+        &owner.id,
+        &owner.client,
+        &h.node,
+        "when did my period start?",
+    );
+    let report = chat::run(&h.node_client, &h.state, &inf, &scopes(&h), &mut journal).unwrap();
+    assert_eq!(report.answered, 1);
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "now the endpoint is asked");
+    let cited = read_chat_answers(&owner.client, &owner.id)
+        .into_iter()
+        .find(|a| !a.citations.is_empty())
+        .expect("a grounded answer");
+    assert_eq!(cited.citations, vec![period.event.id.to_hex()]);
+}
+
+/// Two owners, two choices. A's opt-in cannot open B's entries, which is the
+/// same rule pausing follows — and the reason the command is owner-scoped rather
+/// than a node setting.
+#[test]
+fn an_opt_in_is_scoped_to_the_owner_who_sent_it() {
+    let (base, calls) = spawn_inference(Mode::Ok(r#"{"answer":"steady","used":[1]}"#.into()));
+    let inf = inference_client(&base);
+
+    let h = Harness::new(b"scope node two");
+    let a = h.add_owner(b"scope owner two a");
+    let b = h.add_owner(b"scope owner two b");
+    let a_mood = app_local_entry(&a.id, "mood", "Mood", "2026-01-05");
+    let b_mood = app_local_entry(&b.id, "mood", "Mood", "2026-01-05");
+    put_event(&a.client, &a.ring, &a.id, &a_mood);
+    put_event(&b.client, &b.ring, &b.id, &b_mood);
+    h.enroll_and_sync();
+
+    command(
+        &a.id,
+        &a.client,
+        &h.node,
+        AdminCommand::SetAnswerScope {
+            include: vec!["mind".into()],
+        },
+    );
+    let logs = LogBuffer::new();
+    let mut rt = runtime(h.dir.path(), "https://inference.internal/v1");
+    let mut journal = h.journal();
+    admin::run(
+        &h.node_client,
+        &h.state,
+        &mut rt,
+        &mut control(&h),
+        &mut scopes(&h),
+        &logs,
+        &mut journal,
+    )
+    .unwrap();
+
+    ask(&a.id, &a.client, &h.node, "how has my mood been?");
+    ask(&b.id, &b.client, &h.node, "how has my mood been?");
+    let report = chat::run(&h.node_client, &h.state, &inf, &scopes(&h), &mut journal).unwrap();
+    assert_eq!(report.answered, 1, "only A's question retrieves anything");
+    assert_eq!(report.cant_answer, 1, "B's mood entries are still out");
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "one endpoint call, A's");
+
+    assert_eq!(
+        read_chat_answers(&a.client, &a.id)[0].citations,
+        vec![a_mood.event.id.to_hex()]
+    );
+    assert!(
+        read_chat_answers(&b.client, &b.id)[0].citations.is_empty(),
+        "one household's opt-in must not open another's entries"
+    );
+}
+
+/// An unrecognized category name is answered honestly and changes nothing — the
+/// additive-set rule applied one level down, to a command's *argument*. Silently
+/// dropping it would leave the app showing a switch the node ignores.
+#[test]
+fn an_unknown_category_is_refused_and_leaves_the_scope_alone() {
+    let h = Harness::new(b"scope node three");
+    let owner = h.add_owner(b"scope owner three");
+    h.enroll_and_sync();
+
+    let logs = LogBuffer::new();
+    let mut rt = runtime(h.dir.path(), "https://inference.internal/v1");
+    let mut journal = h.journal();
+
+    command(
+        &owner.id,
+        &owner.client,
+        &h.node,
+        AdminCommand::SetAnswerScope {
+            include: vec!["cycle".into()],
+        },
+    );
+    admin::run(
+        &h.node_client,
+        &h.state,
+        &mut rt,
+        &mut control(&h),
+        &mut scopes(&h),
+        &logs,
+        &mut journal,
+    )
+    .unwrap();
+
+    let bad = command(
+        &owner.id,
+        &owner.client,
+        &h.node,
+        AdminCommand::SetAnswerScope {
+            include: vec!["mind".into(), "dreams".into()],
+        },
+    );
+    let report = admin::run(
+        &h.node_client,
+        &h.state,
+        &mut rt,
+        &mut control(&h),
+        &mut scopes(&h),
+        &logs,
+        &mut journal,
+    )
+    .unwrap();
+    assert_eq!(report.replied, 1, "answered, not dropped");
+
+    let reply = read_admin_replies(&owner.client, &owner.id)
+        .into_iter()
+        .find(|r| r.in_reply_to == bad)
+        .expect("a reply to the bad command");
+    assert!(!reply.ok, "ok:false rather than acting on a guess");
+    assert!(reply.detail.as_deref().unwrap().contains("dreams"));
+
+    // And the previous choice stands: cycle in, mind still out.
+    command(&owner.id, &owner.client, &h.node, AdminCommand::JobStatus);
+    admin::run(
+        &h.node_client,
+        &h.state,
+        &mut rt,
+        &mut control(&h),
+        &mut scopes(&h),
+        &logs,
+        &mut journal,
+    )
+    .unwrap();
+    let status = status_detail(&owner.client, &owner.id);
+    assert!(
+        status.contains("Cycle") && !status.contains("Mind"),
+        "job_status reports the scope the owner actually has, got: {status}"
+    );
 }

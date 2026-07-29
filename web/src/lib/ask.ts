@@ -5,8 +5,13 @@
 // them in wasm, build the prompt, send only the retrieved lines to the endpoint,
 // then ground the reply back to real event ids.
 //
-// Two properties this module exists to preserve:
+// Three properties this module exists to preserve:
 //
+//   0. **Opt-in entries are not candidates at all.** Cycle and mind entries are
+//      filtered out before ranking (see `answerScope.ts`) unless the owner turned
+//      that category on in Settings → AI, so they cannot be scored, rendered, or
+//      sent. Scoping after ranking would be too late: an excluded entry would
+//      already have shaped the prompt.
 //   1. **Only the retrieved lines leave.** Not the vault, not the whole record —
 //      the top `MAX_CONTEXT` rendered lines for this one question. What the
 //      endpoint sees is bounded by what retrieval selected.
@@ -32,6 +37,7 @@ import { buildCodeNameIndex, resolveDisplay } from './code-names'
 import { loadDictionaryIndex } from './dictionary'
 import { conceptKey } from './summary'
 import { loadConfig, chatComplete, InferenceError } from './inference'
+import { filterSensitive, loadOptIns } from './answerScope'
 import type { Code } from './codes'
 
 /** How many ranked items reach the model. Matches the node's `MAX_CONTEXT` so
@@ -146,7 +152,12 @@ async function gatherCandidates(): Promise<Candidate[]> {
   // The dictionary is optional and may not be downloaded; an empty map just
   // means codes fall through to the layers above it.
   const dictionary = await loadDictionaryIndex().catch(() => new Map<string, string>())
-  return buildCandidates(events, statuses, names, buildCodeNameIndex(events), dictionary)
+  // Scope before ranking, never after: an entry the owner has not opted in must
+  // not be scored, rendered, or sent. The name index still reads the whole vault
+  // — it maps code to display and is only consulted for codes a candidate
+  // already carries, so it cannot carry an excluded entry into the prompt.
+  const inScope = filterSensitive(events, await loadOptIns())
+  return buildCandidates(inScope, statuses, names, buildCodeNameIndex(events), dictionary)
 }
 
 /** Whether this device can answer without a node. */

@@ -22,10 +22,13 @@
 //! - [`client`] — the blocking, signed relay client (shared vaults, mailbox, SSE).
 //! - [`sync`] / [`state`] — enrolment via `key_handoff` and the per-owner pull.
 //! - [`index`] — the verified, curation-aware plaintext index D2/D3 build on.
+//! - [`answer_scope`] — the per-owner opt-in that keeps cycle and mind entries
+//!   out of answers unless the owner said otherwise.
 //! - [`cache`] — ephemeral decrypted plaintext on disk.
 //! - [`bootstrap`] — the loopback-only bootstrap page.
 
 pub mod admin;
+pub mod answer_scope;
 pub mod bootstrap;
 pub mod cache;
 pub mod chat;
@@ -108,6 +111,10 @@ pub fn run(config: Config, logs: LogBuffer) -> Result<()> {
     // Reading is off until each owner asks for it (see ocr_control.rs): enrolling
     // a node against an existing vault must not silently work through a backlog.
     let mut ocr_control = ocr_control::OcrControl::load(&config.data_dir, config.ocr);
+    // Cycle and mind entries stay out of every answer until each owner opts that
+    // category in (see answer_scope.rs). No boot default and no operator
+    // override: this one is the owner's alone.
+    let mut answer_scopes = answer_scope::AnswerScopeControl::load(&config.data_dir);
     tracing::info!(
         default_paused = config.ocr.default_paused,
         max_pages_per_pass = ocr_control.max_pages_per_pass(),
@@ -152,6 +159,7 @@ pub fn run(config: Config, logs: LogBuffer) -> Result<()> {
             .as_ref()
             .map(|t| t as &dyn transcribe::PageReader),
         &mut ocr_control,
+        &mut answer_scopes,
         &logs,
         &mut journal,
         Poke::Sync,
@@ -176,6 +184,7 @@ pub fn run(config: Config, logs: LogBuffer) -> Result<()> {
                 .as_ref()
                 .map(|t| t as &dyn transcribe::PageReader),
             &mut ocr_control,
+            &mut answer_scopes,
             &logs,
             &mut journal,
             poke,
@@ -193,6 +202,7 @@ fn reconcile(
     inference: &mut InferenceRuntime,
     transcriber: Option<&dyn transcribe::PageReader>,
     control: &mut ocr_control::OcrControl,
+    scopes: &mut answer_scope::AnswerScopeControl,
     logs: &LogBuffer,
     journal: &mut Journal,
     poke: Poke,
@@ -241,7 +251,7 @@ fn reconcile(
     // inference on a node booted without it — hence it comes before chat/OCR, so a
     // just-set endpoint serves this same pass.
     if drain_mailbox {
-        match admin::run(client, state, inference, control, logs, journal) {
+        match admin::run(client, state, inference, control, scopes, logs, journal) {
             Ok(r) if r.replied + r.dropped + r.deferred > 0 => tracing::info!(
                 replied = r.replied,
                 dropped = r.dropped,
@@ -258,7 +268,7 @@ fn reconcile(
     // rather than getting a fake reply.
     if drain_mailbox {
         if let Some(client_inf) = inference.chat_client() {
-            match chat::run(client, state, client_inf, journal) {
+            match chat::run(client, state, client_inf, scopes, journal) {
                 Ok(r) if r.answered + r.cant_answer + r.dropped + r.deferred + r.ignored > 0 => {
                     tracing::info!(
                         answered = r.answered,

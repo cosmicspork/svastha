@@ -1,7 +1,8 @@
 //! Node administration over the mailbox (design §2, §9): an owner administers the
 //! node's work on **their own** vault with `admin_cmd` envelopes, and the node
-//! replies `admin_reply`. Three commands, matching the PWA's admin surface:
-//! `job_status`, `log_tail`, and `set_inference_endpoint`.
+//! replies `admin_reply`. The commands match the PWA's admin surface:
+//! `job_status`, `log_tail`, `set_inference_endpoint`, `pause_ocr`/`resume_ocr`,
+//! and `set_answer_scope`.
 //!
 //! ## The admin trust rule (design §2)
 //!
@@ -37,7 +38,8 @@
 //!
 //! `job_status` and `log_tail` return only counts, ids, timestamps, and the node's
 //! own already-content-free log lines (see [`crate::logtail`]). `set_inference_endpoint`
-//! carries a config URL, never record content. Nothing here logs or returns PHI.
+//! carries a config URL and `set_answer_scope` carries category *names*, never
+//! record content. Nothing here logs or returns PHI.
 
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -49,6 +51,7 @@ use svastha_core::mailbox::{
 };
 use x25519_dalek::PublicKey;
 
+use crate::answer_scope::AnswerScopeControl;
 use crate::client::RelayClient;
 use crate::inference::InferenceRuntime;
 use crate::journal::Journal;
@@ -85,6 +88,7 @@ pub fn run(
     state: &Mutex<NodeState>,
     inference: &mut InferenceRuntime,
     control: &mut OcrControl,
+    scopes: &mut AnswerScopeControl,
     logs: &LogBuffer,
     journal: &mut Journal,
 ) -> Result<AdminReport> {
@@ -135,7 +139,15 @@ pub fn run(
             continue;
         };
 
-        let (ok, detail) = execute(&body.command, state, inference, control, logs, &owner_hex);
+        let (ok, detail) = execute(
+            &body.command,
+            state,
+            inference,
+            control,
+            scopes,
+            logs,
+            &owner_hex,
+        );
         let reply = AdminReplyBody {
             in_reply_to: msg_id.clone(),
             ok,
@@ -159,18 +171,20 @@ pub fn run(
 
 /// Execute one command, returning `(ok, detail)`. Never fails the pass — a bad
 /// value answers `ok: false` with the reason, so the owner sees it in the app.
+#[allow(clippy::too_many_arguments)]
 fn execute(
     command: &AdminCommand,
     state: &Mutex<NodeState>,
     inference: &mut InferenceRuntime,
     control: &mut OcrControl,
+    scopes: &mut AnswerScopeControl,
     logs: &LogBuffer,
     owner_hex: &str,
 ) -> (bool, String) {
     match command {
         AdminCommand::JobStatus => (
             true,
-            job_status_detail(state, inference, control, owner_hex),
+            job_status_detail(state, inference, control, scopes, owner_hex),
         ),
         AdminCommand::LogTail { lines } => {
             let want = lines
@@ -191,6 +205,13 @@ fn execute(
             Ok(detail) => (true, detail),
             Err(msg) => (false, msg),
         },
+        // The one command that changes what leaves the node. It is owner-scoped
+        // for the same reason pausing is, and for one more: an opt-in to your own
+        // cycle or mind entries is not a choice anyone else can make for you.
+        AdminCommand::SetAnswerScope { include } => match scopes.set_scope(owner_hex, include) {
+            Ok(detail) => (true, detail),
+            Err(msg) => (false, msg),
+        },
         AdminCommand::SetInferenceEndpoint { endpoint } => match inference.set_endpoint(endpoint) {
             // Still subject to the boot-time config validation (synchronous,
             // non-batch); a rejected value answers ok:false with the message.
@@ -207,6 +228,7 @@ fn job_status_detail(
     state: &Mutex<NodeState>,
     inference: &InferenceRuntime,
     control: &OcrControl,
+    scopes: &AnswerScopeControl,
     owner_hex: &str,
 ) -> String {
     let guard = state.lock().expect("node state mutex");
@@ -233,11 +255,13 @@ fn job_status_detail(
     format!(
         "vault: events={events} attachments={attachments} docs={docs} curation={curation} | \
          ocr: {reading} queued={} processed={} failed={} max-per-pass={} | \
-         inference: ocr-model={ocr} chat-model={chat} | last_reconcile={last}",
+         inference: ocr-model={ocr} chat-model={chat} | answers: {scope} | \
+         last_reconcile={last}",
         jobs.queued,
         jobs.processed,
         jobs.failed,
         control.max_pages_per_pass(),
+        scope = scopes.scope(owner_hex).describe(),
         // Whose pause this is, because the answer is only ever about the asker:
         // a paused status the owner cannot account for reads like a node fault.
         reading = if control.paused(owner_hex) {

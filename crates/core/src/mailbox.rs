@@ -339,6 +339,19 @@ pub enum AdminCommand {
     /// Start reading pages. A node reads nothing until this is sent — see
     /// `crates/node/README.md`, "Paused until you say otherwise".
     ResumeOcr,
+    /// Which opt-in categories the node's answers may draw from, for the
+    /// sender's vault. `include` is the **whole** set the owner wants (the app
+    /// sends the switch positions, not a delta), so an empty list is the
+    /// meaningful "none of them" — which is also where a node starts.
+    ///
+    /// Category names are carried as strings rather than a typed enum on
+    /// purpose: a name a node's build does not know must reach the node and be
+    /// answered `ok: false`, not fail to deserialize and leave the owner with no
+    /// reply at all. See `crates/node/src/answer_scope.rs`.
+    SetAnswerScope {
+        #[serde(default)]
+        include: Vec<String>,
+    },
 }
 
 /// [`MessageKind::AdminCmd`] body.
@@ -640,6 +653,37 @@ mod tests {
         with_extra["future_field"] = json!(true);
         let parsed: ChatMsgBody = serde_json::from_value(with_extra).unwrap();
         assert_eq!(parsed, chat);
+    }
+
+    #[test]
+    fn admin_commands_round_trip_and_unknown_ones_still_do_not_parse() {
+        // `set_answer_scope` carries category names as strings so an unknown one
+        // reaches the node and is answered `ok: false` (see the node's
+        // `answer_scope`), rather than failing here and leaving no reply.
+        let scope = AdminCmdBody {
+            command: AdminCommand::SetAnswerScope {
+                include: vec!["cycle".into(), "mind".into()],
+            },
+        };
+        let value = serde_json::to_value(&scope).unwrap();
+        assert_eq!(value["command"]["cmd"], "set_answer_scope");
+        assert_eq!(
+            serde_json::from_value::<AdminCmdBody>(value).unwrap(),
+            scope
+        );
+        // Omitted `include` reads as "none", the same as an explicit empty list.
+        let bare: AdminCmdBody =
+            serde_json::from_value(json!({ "command": { "cmd": "set_answer_scope" } })).unwrap();
+        assert_eq!(
+            bare.command,
+            AdminCommand::SetAnswerScope { include: vec![] }
+        );
+        // Unchanged posture: a *command* this build does not know does not parse,
+        // so the reader never acts on a guess.
+        assert!(serde_json::from_value::<AdminCmdBody>(
+            json!({ "command": { "cmd": "restart_the_node" } })
+        )
+        .is_err());
     }
 
     #[test]

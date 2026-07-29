@@ -517,21 +517,32 @@ envelope — it is opaque sealed bytes to the crypto above.
 - `proposal_result` — `{ proposal_id, accepted: [id…], rejected: [id…] }`: the
   owner's decision echoed to the proposer (event content ids).
 - `admin_cmd` — `{ command }`, a tagged owner→node command
-  (`set_inference_endpoint`, `job_status`, `log_tail`, `pause_ocr`, `resume_ocr`).
+  (`set_inference_endpoint`, `job_status`, `log_tail`, `pause_ocr`, `resume_ocr`,
+  `set_answer_scope`).
   The node accepts commands only from an identity holding a live grant *it itself*
   issued. **Scope differs per command, and the difference is not cosmetic:**
   `pause_ocr`/`resume_ocr` act on the **sender's own vault only** — they stop and
   start the node's reading of that owner's pages, never another owner's, and the
-  choice is persisted per owner. `set_inference_endpoint` is **node-wide**: it
-  reconfigures the endpoint the node uses for *every* enrolled owner, so on a
-  node serving several owners any one of them can change it for all of them.
-  `log_tail` returns the node's own (content-free) log, and `job_status` mixes
-  the sender's own index sizes and reading state with node-wide OCR counters. A
-  deployment that cannot accept those shared surfaces should enrol one owner per
-  node. Node-*process* administration — restart, upgrade, whether the node runs
-  at all — is the host operator's and has deliberately no command here. The set
-  is additive: a reader that does not know a command answers `ok: false` rather
-  than acting on a guess.
+  choice is persisted per owner — and `set_answer_scope` narrows that owner's
+  answers alone, likewise persisted per owner. `set_inference_endpoint` is
+  **node-wide**: it reconfigures the endpoint the node uses for *every* enrolled
+  owner, so on a node serving several owners any one of them can change it for
+  all of them. `log_tail` returns the node's own (content-free) log, and
+  `job_status` mixes the sender's own index sizes and reading state with
+  node-wide OCR counters. A deployment that cannot accept those shared surfaces
+  should enrol one owner per node. Node-*process* administration — restart,
+  upgrade, whether the node runs at all — is the host operator's and has
+  deliberately no command here. The set is additive: a reader that does not know
+  a command answers `ok: false` rather than acting on a guess.
+  `set_answer_scope { include: [category…] }` carries the **whole** set of opt-in
+  categories the owner wants (switch positions, not a delta), so `[]` is the
+  meaningful "none" — and it is where a node starts, for every owner, until one
+  says otherwise. The categories are the ones a doctor share also treats as
+  opt-in (`cycle`, `mind`); entries in a category that is off are excluded from
+  the node's retrieval candidates **before ranking**, so they never reach an
+  inference endpoint. Names ride as strings, not a closed enum, so a category a
+  node's build does not know reaches it and is answered `ok: false` with nothing
+  changed, rather than failing to parse and leaving the owner with no reply.
 - `admin_reply` — `{ in_reply_to, ok, detail? }`.
 - `chat_msg` — `{ role, text, citations: [event_id…] }`: a retrieval-augmented Q&A
   turn; an answer carries the event ids it cited.

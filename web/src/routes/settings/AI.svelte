@@ -19,6 +19,9 @@
     loadManifest,
     downloadBytes,
   } from '../../lib/ocr-assets'
+  import { OPT_IN_CATEGORIES, loadOptIns } from '../../lib/answerScope'
+  import { CATEGORY_META, type Category } from '../../lib/category'
+  import { commitAnswerScope } from '../../lib/mailbox'
 
   let endpoint = $state('')
   let model = $state('')
@@ -42,8 +45,21 @@
   let ocrProgress = $state(0)
   let ocrSizeMb = $state(0)
 
+  // Opt-in entries. Off unless the owner turns them on — see answerScope.ts.
+  // What each category actually covers, said in the owner's words rather than
+  // the taxonomy's, because "Mind" alone does not tell anyone that a gratitude
+  // note is in scope.
+  const OPT_IN_SUBCOPY: Partial<Record<Category, string>> = {
+    cycle: 'Periods, flow, cycle symptoms',
+    mind: 'Mood, mindfulness, gratitude',
+  }
+  let optIns = $state<Set<Category>>(new Set())
+  let optInBusy = $state(false)
+  let optInError = $state('')
+
   onMount(async () => {
     consented = await hasConsented()
+    optIns = await loadOptIns()
     ocrOn = await assetsEnabled()
     void loadManifest()
       .then((m) => (ocrSizeMb = downloadBytes(m) / 1024 / 1024))
@@ -137,6 +153,30 @@
     }
   }
 
+  /** Flip one category and commit it. The switch reflects the local choice
+   * immediately because that is what this device's own answers obey; only the
+   * node half can fail, and it says so rather than silently disagreeing with the
+   * switch. */
+  async function toggleOptIn(category: Category) {
+    optInError = ''
+    optInBusy = true
+    const next = new Set(optIns)
+    if (next.has(category)) next.delete(category)
+    else next.add(category)
+    optIns = next
+    try {
+      if ((await commitAnswerScope(next)) === 'unsent') {
+        optInError =
+          "Saved here, but your node couldn't be reached. It keeps its last instruction until this one gets through — toggle again when you're back online."
+      }
+    } catch {
+      optInError =
+        "Saved here, but your node couldn't be told. It keeps its last instruction until this one gets through."
+    } finally {
+      optInBusy = false
+    }
+  }
+
   async function disconnect() {
     await forgetConfig()
     endpoint = ''
@@ -216,6 +256,46 @@
     model running on your own machine needs a certificate — a tunnel or reverse proxy in front of it
     is enough. The API key is stored sealed on this device, and it is unavailable while the vault is
     locked.
+  </p>
+</section>
+
+<section class="stack">
+  <h2>Opt-in entries</h2>
+  <p class="muted intro">
+    Cycle and Mind entries stay out of AI answers unless you turn them on here — the same rule
+    doctor shares follow. This choice covers answers from this device and from your node.
+  </p>
+
+  <div class="optin" role="group" aria-label="Opt-in entries">
+    {#each OPT_IN_CATEGORIES as cat (cat)}
+      <button
+        type="button"
+        role="switch"
+        class="optin-row {CATEGORY_META[cat].hueClass}"
+        aria-checked={optIns.has(cat)}
+        disabled={optInBusy}
+        onclick={() => toggleOptIn(cat)}
+        data-testid="answer-optin-{cat}"
+      >
+        <span class="optin-text">
+          <span class="optin-name">
+            <span class="glyph" aria-hidden="true">{CATEGORY_META[cat].glyph}</span>
+            {CATEGORY_META[cat].label}
+          </span>
+          <span class="optin-sub muted">{OPT_IN_SUBCOPY[cat] ?? ''}</span>
+        </span>
+        <span class="switch" aria-hidden="true"><span class="knob"></span></span>
+      </button>
+    {/each}
+  </div>
+
+  {#if optInError}
+    <p class="error" data-testid="answer-optin-error">{optInError}</p>
+  {/if}
+
+  <p class="muted note">
+    While off, a question that only these entries could answer gets an honest “your record doesn't
+    say” — not a quiet guess without them.
   </p>
 </section>
 
@@ -315,6 +395,87 @@
   .ok {
     color: var(--action);
     font-size: var(--text-sm);
+  }
+
+  /* The opt-in group, matching the doctor-share sheet's: a bordered surface box
+     that separates "off unless you say so" from the ordinary settings around it,
+     so the two places the owner meets this choice look like one rule. */
+  .optin {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .optin-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    padding: var(--space-2) 0;
+    background: none;
+    border: none;
+    text-align: left;
+    color: var(--text);
+  }
+
+  .optin-row + .optin-row {
+    border-top: 1px solid var(--border);
+  }
+
+  .optin-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .optin-name {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-size: var(--text-sm);
+  }
+
+  .optin-name .glyph {
+    /* The hue class colors just the glyph, as the category chips do. */
+    color: currentColor;
+  }
+
+  .optin-sub {
+    font-size: var(--text-xs);
+    color: var(--muted);
+  }
+
+  .switch {
+    flex: none;
+    position: relative;
+    width: 40px;
+    height: 24px;
+    border-radius: var(--radius-full);
+    background: var(--border);
+    transition: background 0.15s ease;
+  }
+
+  .knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--surface);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+    transition: transform 0.15s ease;
+  }
+
+  .optin-row[aria-checked='true'] .switch {
+    background: var(--action);
+  }
+
+  .optin-row[aria-checked='true'] .knob {
+    transform: translateX(16px);
   }
 
   .consent {
