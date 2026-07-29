@@ -618,11 +618,11 @@ export function pullAll(trigger: PullTrigger = 'refresh'): Promise<void> {
     if (trigger === 'poke') rerunRequested = true
     return pulling
   }
-  pulling = pullUntilQuiet().finally(() => {
-    pulling = null
-    rerunRequested = false
-  })
-  return pulling
+  // `pullUntilQuiet` clears `pulling` itself rather than a `.finally` here,
+  // which would run in a job of its own — see its own comment. Assigning after
+  // the call is still safe: its first `await` yields unconditionally, so the
+  // body cannot reach that cleanup before this assignment lands.
+  return (pulling = pullUntilQuiet())
 }
 
 /** Why a pull was asked for. See {@link pullAll} — it decides whether joining
@@ -633,10 +633,22 @@ let pulling: Promise<void> | null = null
 let rerunRequested = false
 
 async function pullUntilQuiet(): Promise<void> {
-  for (;;) {
+  try {
+    for (;;) {
+      rerunRequested = false
+      await pullOnce()
+      // Nothing may run between reading the flag and going idle below. A poke
+      // is one bit with no queue behind it, so one landing in such a gap would
+      // set a flag with no loop left to read it, and the cleanup would then
+      // clear it — the poke silently dropped, its blob unlisted until the
+      // 5-minute timer. `return` runs the `finally` synchronously in this same
+      // job, leaving no gap: a poke either arrives before this check (and the
+      // loop serves it) or after `pulling` is null (and starts its own run).
+      if (!rerunRequested) return
+    }
+  } finally {
+    pulling = null
     rerunRequested = false
-    await pullOnce()
-    if (!rerunRequested) return
   }
 }
 

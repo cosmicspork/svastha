@@ -1139,6 +1139,58 @@ describe('a poke that arrives mid-pull', () => {
     expect(store.get('poke-x')).toBe('remote-poke-x')
     expect(listCalls).toBe(2)
   })
+
+  it('does not lose a poke that lands at the very tail of a pull', async () => {
+    // The final rerun check and the transition back to idle have to be one
+    // indivisible step. If anything can run between them, a poke firing there
+    // (an SSE `reader.read()` continuation already sitting in the microtask
+    // queue) sets a flag no loop is left to read, and the cleanup right after
+    // discards it — the poke is gone, and the listing that missed X is already
+    // spent.
+    const blobs = new Map<string, Uint8Array>([['poke-a', utf8('remote-poke-a')]])
+    let listCalls = 0
+    const relay: BlobClient = {
+      async putBlob() {},
+      async getBlob(id) {
+        return blobs.get(id) ?? null
+      },
+      async listBlobs() {
+        listCalls++
+        return [...blobs.keys()]
+      },
+    }
+    configure(relay, passthroughSealKey())
+
+    let inFlight: Promise<void> | null = null
+    let pokePull: Promise<void> | null = null
+    let pokeJoined: boolean | null = null
+    // `pullShared` is the last thing a pull awaits, so scheduling from inside it
+    // walks the poke forward one microtask at a time into the pull's tail.
+    // Three hops is what puts it past the final rerun check; `pokeJoined` below
+    // is the canary that says so, and fails loudly if that ever drifts.
+    vi.mocked(pullShared).mockImplementationOnce(async () => {
+      void Promise.resolve()
+        .then(() => {})
+        .then(() => {})
+        .then(() => {
+          blobs.set('poke-x', utf8('remote-poke-x'))
+          pokePull = pullAll('poke')
+          pokeJoined = pokePull === inFlight
+        })
+    })
+
+    inFlight = pullAll()
+    await inFlight
+    await pokePull
+
+    expect(store.get('poke-x')).toBe('remote-poke-x')
+    expect(listCalls).toBe(2)
+    // And the canary: the poke landed after the pull had fully gone idle, which
+    // is the window this test exists for. If a refactor ever lets it arrive
+    // comfortably before the final check instead, this flips and says so rather
+    // than passing for the wrong reason.
+    expect(pokeJoined).toBe(false)
+  })
 })
 
 describe('the batch threshold is a ratio, not a raw count', () => {
