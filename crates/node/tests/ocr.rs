@@ -441,6 +441,49 @@ fn a_reply_with_no_findings_key_backs_off_rather_than_burying_the_page() {
     }
 }
 
+/// The last way a page could still be buried: an answer that *offered* findings
+/// and had none survive validation. No drafts, but the model did not report a
+/// blank page — it produced claims that could not be read or could not be
+/// verified, which says nothing about the page and everything about the answer.
+#[test]
+fn a_page_whose_findings_all_drop_backs_off_rather_than_burying_the_page() {
+    let answer = r#"{"findings":[{"kind":"observation","source_line":1,
+        "display":{"text":"Potassium"},"value_quantity":"4.1"}]}"#;
+    let (base, _calls) = spawn_inference(Mode::Ok(answer.to_string()));
+    let inf = inference_client(&base);
+    let fx = setup(b"ocr owner all dropped", &[b"page bytes"]);
+    let mut journal = Journal::load(fx.journal_dir.path());
+
+    let report = svastha_node::ocr::run(
+        &fx.node_client,
+        &fx.cache,
+        &fx.state,
+        &inf,
+        &StubReader::transcript(&["Potassium 4.1"]),
+        &resumed(&fx.journal_dir),
+        &mut journal,
+    )
+    .unwrap();
+    assert_eq!(
+        report.failed, 1,
+        "offered findings, none usable — retryable"
+    );
+    assert_eq!(
+        report.empties, 0,
+        "a page whose findings all dropped is not a page with nothing on it"
+    );
+    assert_eq!(report.proposals, 0);
+    assert_eq!(
+        report.dropped_findings, 1,
+        "the drop is still counted; the telemetry does not move"
+    );
+    assert!(read_proposals(&fx.owner_client, &fx.owner).is_empty());
+    assert!(
+        journal.eligible(&hex_ed(&fx.owner), &fx.sources[0], now_secs() + 3600),
+        "a readable page must come back once the back-off elapses"
+    );
+}
+
 /// The other half of the same branch: a model that *did* read the page and
 /// found nothing on it is a conclusion about the page, and stays terminal.
 #[test]
@@ -698,6 +741,14 @@ impl StubReader {
             ],
             unreadable: false,
             reads: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    /// A reader with a transcript of the caller's choosing.
+    fn transcript(lines: &[&str]) -> Self {
+        Self {
+            lines: lines.iter().map(|l| l.to_string()).collect(),
+            ..Self::page()
         }
     }
 

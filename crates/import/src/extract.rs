@@ -118,6 +118,10 @@ struct RawFindings {
 
 /// The result of parsing one model answer: the valid drafts, and how many
 /// findings were dropped as unmappable (a count for logging — never the content).
+///
+/// Ask [`Extraction::outcome`] what the answer amounted to. `drafts.is_empty()`
+/// is true of three different answers and only one of them says anything about
+/// the page.
 #[derive(Debug, Default, serde::Serialize)]
 pub struct Extraction {
     pub drafts: Vec<EventDraft>,
@@ -128,6 +132,45 @@ pub struct Extraction {
     /// worth retrying, while "this page has nothing on it" is a conclusion
     /// about the page that a caller may record terminally.
     pub unparseable: bool,
+}
+
+/// What one model answer amounted to.
+///
+/// Three of these four produce no drafts, and a caller that records a per-page
+/// outcome has to tell them apart: the node's journal marks *empty* terminally,
+/// so collapsing them buries a readable page whenever the coding model has a bad
+/// day. Only [`Outcome::NothingOnThePage`] is a statement about the page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Outcome {
+    /// At least one finding validated into a draft.
+    Proposed,
+    /// A literal `"findings": []` — the model read the transcript and reported
+    /// nothing on it.
+    NothingOnThePage,
+    /// Findings were offered and none survived: shapes that could not be read,
+    /// or claims their cited line did not bear out. A verdict on the answer, not
+    /// on the page.
+    AllDropped,
+    /// The answer was not a findings object at all.
+    Unparseable,
+}
+
+impl Extraction {
+    /// What this answer amounted to. See [`Outcome`].
+    pub fn outcome(&self) -> Outcome {
+        if self.unparseable {
+            Outcome::Unparseable
+        } else if !self.drafts.is_empty() {
+            Outcome::Proposed
+        } else if self.dropped > 0 {
+            // `dropped` counts array entries, so any drop means the model
+            // offered findings — which is exactly what an empty list did not.
+            Outcome::AllDropped
+        } else {
+            Outcome::NothingOnThePage
+        }
+    }
 }
 
 /// Parse a model answer into draft events, **without** source-line verification.
@@ -905,6 +948,56 @@ mod tests {
         );
         assert_eq!(said_nothing.drafts.len(), 0);
         assert_eq!(said_nothing.dropped, 0);
+    }
+
+    /// Three different answers produce no drafts, and only one of them says
+    /// anything about the page. A caller that records a per-page outcome — the
+    /// node marks *empty* terminally — has to be able to tell them apart, so
+    /// naming them is the extractor's job rather than something reconstructed
+    /// from `drafts.is_empty()` at each call site.
+    #[test]
+    fn the_three_ways_of_proposing_nothing_are_distinguishable() {
+        assert_eq!(
+            parse("I could not read the image.").outcome(),
+            Outcome::Unparseable
+        );
+        assert_eq!(parse("{}").outcome(), Outcome::Unparseable);
+
+        assert_eq!(
+            parse(r#"{"findings":[]}"#).outcome(),
+            Outcome::NothingOnThePage,
+            "the only one that is a conclusion about the page"
+        );
+
+        // The reviewer's reproduction: one finding offered, structurally
+        // malformed, nothing left after validation.
+        let all_dropped = parse_lines(
+            r#"{"findings":[{"kind":"observation","source_line":1,
+               "display":{"text":"Potassium"},"value_quantity":"4.1"}]}"#,
+            &["Potassium 4.1".to_string()],
+        );
+        assert_eq!(all_dropped.outcome(), Outcome::AllDropped);
+        assert_eq!(all_dropped.dropped, 1);
+        assert!(all_dropped.drafts.is_empty());
+
+        // A finding that fails the source-line guard lands in the same place:
+        // the model offered a claim, and it did not check out.
+        let unquotable = parse_lines(
+            r#"{"findings":[{"kind":"observation","source_line":1,
+               "display":"Sodium","value_quantity":"139"}]}"#,
+            &["Potassium 4.1".to_string()],
+        );
+        assert_eq!(unquotable.outcome(), Outcome::AllDropped);
+
+        assert_eq!(
+            parse_lines(
+                r#"{"findings":[{"kind":"observation","source_line":1,
+                   "display":"Potassium","value_quantity":"4.1"}]}"#,
+                &["Potassium 4.1".to_string()],
+            )
+            .outcome(),
+            Outcome::Proposed
+        );
     }
 
     /// Only a literal `"findings": []` is the model reporting a blank page.

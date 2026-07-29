@@ -58,9 +58,12 @@ const PLAINTEXT_BUDGET: usize = 1600;
 pub struct OcrReport {
     /// Sources for which a proposal batch was deposited.
     pub proposals: u64,
-    /// Sources that extracted nothing (recorded processed, not proposed).
+    /// Sources the model read and reported nothing on (recorded processed, not
+    /// proposed). Terminal — so strictly the page it said was blank, never a
+    /// page whose answer merely came back unusable.
     pub empties: u64,
-    /// Sources whose inference or deposit failed this pass (backed off).
+    /// Sources whose read, inference, answer or deposit failed this pass (backed
+    /// off, and eligible again once the back-off elapses).
     pub failed: u64,
     /// Incoming `proposal_result`s that newly resolved a source.
     pub resolved: u64,
@@ -198,26 +201,36 @@ pub fn run(
                     // proposed. This is what a single read-and-code pass could not do.
                     let extracted = extract::parse_lines(&answer, &lines);
                     report.dropped_findings += extracted.dropped;
-                    // A reply that is not a findings object at all is the coding
-                    // model failing to format an answer, not a verdict that the
-                    // page is blank — and `mark_empty` is terminal, so treating
-                    // it as one would bury a readable page for good over a
-                    // formatting quirk. Back off and try again like any other
-                    // transient failure.
-                    if extracted.unparseable {
-                        journal.mark_failed(&job.owner_hex, &source_id, now_secs)?;
-                        report.failed += 1;
-                        tracing::warn!(
-                            owner = short(&job.owner_hex),
-                            model = inference.model(),
-                            "could not parse the coding model's reply; backing off this page"
-                        );
-                        continue;
-                    }
-                    if extracted.drafts.is_empty() {
-                        journal.mark_empty(&job.owner_hex, &source_id)?;
-                        report.empties += 1;
-                        continue;
+                    // Only one of the three empty-handed outcomes is a verdict on
+                    // the page, and `mark_empty` is terminal — so the other two
+                    // have to back off instead, or a bad answer buries a readable
+                    // page for the life of the journal.
+                    match extracted.outcome() {
+                        // The coding model failed to answer in the schema, or
+                        // answered with claims that could not be read or could
+                        // not be verified against the line they cited. Either
+                        // way it says nothing about what is on the page.
+                        outcome
+                        @ (extract::Outcome::Unparseable | extract::Outcome::AllDropped) => {
+                            journal.mark_failed(&job.owner_hex, &source_id, now_secs)?;
+                            report.failed += 1;
+                            tracing::warn!(
+                                owner = short(&job.owner_hex),
+                                model = inference.model(),
+                                dropped = extracted.dropped,
+                                ?outcome,
+                                "no usable findings from the coding model; backing off this page"
+                            );
+                            continue;
+                        }
+                        // The model read the transcript and reported nothing on
+                        // it. Recorded processed, not proposed.
+                        extract::Outcome::NothingOnThePage => {
+                            journal.mark_empty(&job.owner_hex, &source_id)?;
+                            report.empties += 1;
+                            continue;
+                        }
+                        extract::Outcome::Proposed => {}
                     }
                     let drafts = build_draft_proposals(
                         extracted.drafts,
