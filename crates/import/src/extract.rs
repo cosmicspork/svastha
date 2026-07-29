@@ -170,9 +170,10 @@ fn parse_inner(answer: &str, lines: Option<&[String]>) -> Extraction {
 ///   matters. One- and two-letter labels (`K`, `Na`) are checked the same way
 ///   rather than dismissed as too short to be worth checking.
 /// - `value_quantity`, when given, must equal a whole token, or a contiguous run
-///   of them with no dash reaching out of the run. `13` is therefore not "found"
-///   inside `139`, and `5.1` is not found in `3.5-5.1` — while a result that is
-///   itself an interval (`0-2`) verifies when quoted whole.
+///   of them joined as the claim is and with no dash reaching out of the run.
+///   `13` is therefore not "found" inside `139`, `5.1` is not found in
+///   `3.5-5.1`, and `5` is not found in `.5` — while a result that is itself an
+///   interval (`0-2`) verifies when quoted whole, and only as printed.
 /// - `value_text`, when given, must share more than half its tokens with the
 ///   line, so free text is bound to its citation the way a value is.
 ///
@@ -202,10 +203,8 @@ fn quotes_back(f: &Finding, lines: &[String]) -> bool {
         checked_something = true;
     }
 
-    let value: Vec<String> = tokenize(&f.value_quantity)
-        .into_iter()
-        .map(|t| t.text)
-        .collect();
+    // Kept as tokens, not text: the dashes between them are half the claim.
+    let value = tokenize(&f.value_quantity);
     if !value.is_empty() {
         if !contains_run(&tokens, &value) {
             return false;
@@ -246,48 +245,65 @@ struct Token {
 
 /// Split into tokens, recording which of them a dash joins.
 fn tokenize(s: &str) -> Vec<Token> {
+    fn flush(out: &mut Vec<Token>, gaps: &mut Vec<String>, gap: &mut String, current: &mut String) {
+        if current.is_empty() {
+            return;
+        }
+        gaps.push(std::mem::take(gap));
+        out.push(Token {
+            text: std::mem::take(current),
+            joined_to_prev: false,
+        });
+    }
+
     let mut out: Vec<Token> = Vec::new();
     // The raw characters between the previous token and the next one, which is
     // where the dash that makes a range lives.
     let mut gaps: Vec<String> = Vec::new();
     let mut gap = String::new();
     let mut current = String::new();
-    // A `.` belongs to the number only if something follows it: `98.6` keeps its
-    // point, the full stop in `98.6.` is punctuation and must not become part of
-    // the value the guard is matching.
-    let mut held_dot = false;
+    // Periods seen since the last alphanumeric, resolved by what follows them: a
+    // single one against a digit is a decimal point, anything else is
+    // punctuation and belongs in the gap. Both halves matter — `98.6.` must not
+    // keep the full stop, and `.5 mg` must not become `5 mg`, which is ten times
+    // the dose on the page.
+    let mut dots = 0usize;
 
     for c in s.chars() {
         if c.is_alphanumeric() {
-            if held_dot {
+            let decimal = dots == 1
+                && c.is_ascii_digit()
+                && current
+                    .chars()
+                    .next_back()
+                    .is_none_or(|prev| prev.is_ascii_digit());
+            if decimal {
+                // A bare leading point reads as `0.`, so either spelling of the
+                // dose quotes back, while the bare digits still do not.
+                if current.is_empty() {
+                    current.push('0');
+                }
                 current.push('.');
-                held_dot = false;
+            } else if dots > 0 {
+                flush(&mut out, &mut gaps, &mut gap, &mut current);
+                for _ in 0..dots {
+                    gap.push('.');
+                }
             }
+            dots = 0;
             current.extend(c.to_lowercase());
-        } else if c == '.' && !current.is_empty() {
-            held_dot = true;
+        } else if c == '.' {
+            dots += 1;
         } else {
-            if !current.is_empty() {
-                gaps.push(std::mem::take(&mut gap));
-                out.push(Token {
-                    text: std::mem::take(&mut current),
-                    joined_to_prev: false,
-                });
-            }
-            if held_dot {
+            flush(&mut out, &mut gaps, &mut gap, &mut current);
+            for _ in 0..dots {
                 gap.push('.');
-                held_dot = false;
             }
+            dots = 0;
             gap.push(c);
         }
     }
-    if !current.is_empty() {
-        gaps.push(gap);
-        out.push(Token {
-            text: current,
-            joined_to_prev: false,
-        });
-    }
+    flush(&mut out, &mut gaps, &mut gap, &mut current);
 
     for i in 1..out.len() {
         out[i].joined_to_prev =
@@ -309,11 +325,15 @@ fn is_range_dash(gap: &str) -> bool {
             .all(|c| matches!(c, '-' | '\u{2010}' | '\u{2013}' | '\u{2014}'))
 }
 
-/// Whether `needle` appears as a contiguous run of whole tokens with no dash
-/// reaching out of it. Whole tokens are the point: a substring match accepts
-/// `13` from `139` and `45` from `145`. The dash at either end is what separates
-/// a result quoted whole (`0-2`) from one end of a range printed beside it.
-fn contains_run(tokens: &[Token], needle: &[String]) -> bool {
+/// Whether `needle` appears as a contiguous run of whole tokens, joined among
+/// themselves exactly as the claim is and with no dash reaching out of the run.
+///
+/// Whole tokens are the point: a substring match accepts `13` from `139` and
+/// `45` from `145`. Matching the joins as well is what keeps `0-2` and `0 2`
+/// distinct readings of a row — the claim has to have the shape of what it
+/// quotes — while a dash reaching past either end means the claim took one end
+/// of a printed range and left the other behind.
+fn contains_run(tokens: &[Token], needle: &[Token]) -> bool {
     if needle.is_empty() || needle.len() > tokens.len() {
         return false;
     }
@@ -322,7 +342,8 @@ fn contains_run(tokens: &[Token], needle: &[String]) -> bool {
         tokens[start..end]
             .iter()
             .zip(needle)
-            .all(|(t, n)| &t.text == n)
+            .enumerate()
+            .all(|(i, (t, n))| t.text == n.text && (i == 0 || t.joined_to_prev == n.joined_to_prev))
             && !tokens[start].joined_to_prev
             && tokens.get(end).is_none_or(|t| !t.joined_to_prev)
     })
@@ -725,6 +746,71 @@ mod tests {
         );
         assert_eq!(
             parse_lines(&observation(1, "Urine RBC", "2"), &t).dropped,
+            1
+        );
+    }
+
+    /// A dose is often printed with a bare decimal point. Losing that point
+    /// turns .5 mg into 5 mg — a tenfold overdose arriving as a finding the
+    /// guard has certified against the page.
+    #[test]
+    fn a_leading_decimal_point_is_part_of_the_number() {
+        let t = vec!["Digoxin   .5 mg   daily".to_string()];
+        assert_eq!(parse_lines(&observation(1, "Digoxin", "5"), &t).dropped, 1);
+
+        // Either spelling of the dose that is actually printed verifies.
+        assert_eq!(
+            parse_lines(&observation(1, "Digoxin", ".5"), &t)
+                .drafts
+                .len(),
+            1
+        );
+        assert_eq!(
+            parse_lines(&observation(1, "Digoxin", "0.5"), &t)
+                .drafts
+                .len(),
+            1
+        );
+
+        // And the inverse tenth is not on the page either.
+        let whole = vec!["Digoxin   5 mg   daily".to_string()];
+        assert_eq!(
+            parse_lines(&observation(1, "Digoxin", "0.5"), &whole).dropped,
+            1
+        );
+        assert_eq!(
+            parse_lines(&observation(1, "Digoxin", ".5"), &whole).dropped,
+            1
+        );
+    }
+
+    /// A claim has to have the shape of the thing it quotes: an interval and two
+    /// separate numbers are different readings of a row.
+    #[test]
+    fn a_dashed_claim_and_a_spaced_source_do_not_cross_match() {
+        let dashed = vec!["Urine RBC   0-2   /HPF".to_string()];
+        let spaced = vec!["Urine RBC   0 2   /HPF".to_string()];
+
+        assert_eq!(
+            parse_lines(&observation(1, "Urine RBC", "0 2"), &dashed).dropped,
+            1
+        );
+        assert_eq!(
+            parse_lines(&observation(1, "Urine RBC", "0-2"), &spaced).dropped,
+            1
+        );
+
+        // Quoted as printed, either way, still verifies.
+        assert_eq!(
+            parse_lines(&observation(1, "Urine RBC", "0-2"), &dashed)
+                .drafts
+                .len(),
+            1
+        );
+        assert_eq!(
+            parse_lines(&observation(1, "Urine RBC", "0 2"), &spaced)
+                .drafts
+                .len(),
             1
         );
     }
