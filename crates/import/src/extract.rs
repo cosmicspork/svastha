@@ -26,9 +26,9 @@
 //! or read out of the reference-range column of its own row.
 //!
 //! Its limit is worth stating plainly. The guard works at line and token level:
-//! a claimed value must be a whole token of the line it cites and not a bound of
-//! a range printed there. It does not know which *cell* a token came from, so a
-//! swap between two results on the same row still reaches the owner's approval
+//! a claimed value must be a whole token of the line it cites, and not one end
+//! of a range printed there. It does not know which *cell* a token came from, so
+//! a swap between two results on the same row still reaches the owner's approval
 //! queue. It narrows the failure, it does not eliminate it.
 
 use serde::Deserialize;
@@ -169,9 +169,10 @@ fn parse_inner(answer: &str, lines: Option<&[String]>) -> Extraction {
 ///   line reading "Potassium" — while "Sodium" does not, which is the case that
 ///   matters. One- and two-letter labels (`K`, `Na`) are checked the same way
 ///   rather than dismissed as too short to be worth checking.
-/// - `value_quantity`, when given, must equal a whole token — or a run of
-///   them — that is not a bound of a printed reference range. `13` is therefore
-///   not "found" inside `139`, and `5.1` is not found in `3.5-5.1`.
+/// - `value_quantity`, when given, must equal a whole token, or a contiguous run
+///   of them with no dash reaching out of the run. `13` is therefore not "found"
+///   inside `139`, and `5.1` is not found in `3.5-5.1` — while a result that is
+///   itself an interval (`0-2`) verifies when quoted whole.
 /// - `value_text`, when given, must share more than half its tokens with the
 ///   line, so free text is bound to its citation the way a value is.
 ///
@@ -191,7 +192,7 @@ fn quotes_back(f: &Finding, lines: &[String]) -> bool {
 
     let display: Vec<String> = tokenize(&f.display)
         .into_iter()
-        .filter(|t| t.text.chars().any(|c| c.is_ascii_alphabetic()))
+        .filter(|t| t.text.chars().any(char::is_alphabetic))
         .map(|t| t.text)
         .collect();
     if !display.is_empty() {
@@ -231,16 +232,19 @@ fn quotes_back(f: &Finding, lines: &[String]) -> bool {
     checked_something
 }
 
-/// One token of a line: alphanumerics and decimal points, lowercased.
+/// One token of a line: letters and digits of any script, lowercased, with a
+/// decimal point kept only between them.
 struct Token {
     text: String,
-    /// This token is one end of a printed reference range. A bound is a number
-    /// on the line like any other, so without this the guard cannot tell a
-    /// result from the interval printed beside it.
-    in_range: bool,
+    /// A dash on the line joins this token to the one before it, the way a
+    /// printed range joins its bounds. Recorded as the *join* rather than as a
+    /// "this is a bound" flag because a result can itself be an interval
+    /// (`Urine RBC 0-2 /HPF`): quoting the whole of it is quoting the result,
+    /// while quoting one end leaves the join dangling.
+    joined_to_prev: bool,
 }
 
-/// Split into tokens, marking the bounds of any `low-high` range.
+/// Split into tokens, recording which of them a dash joins.
 fn tokenize(s: &str) -> Vec<Token> {
     let mut out: Vec<Token> = Vec::new();
     // The raw characters between the previous token and the next one, which is
@@ -248,17 +252,31 @@ fn tokenize(s: &str) -> Vec<Token> {
     let mut gaps: Vec<String> = Vec::new();
     let mut gap = String::new();
     let mut current = String::new();
+    // A `.` belongs to the number only if something follows it: `98.6` keeps its
+    // point, the full stop in `98.6.` is punctuation and must not become part of
+    // the value the guard is matching.
+    let mut held_dot = false;
 
     for c in s.chars() {
-        if c.is_ascii_alphanumeric() || c == '.' {
-            current.push(c.to_ascii_lowercase());
+        if c.is_alphanumeric() {
+            if held_dot {
+                current.push('.');
+                held_dot = false;
+            }
+            current.extend(c.to_lowercase());
+        } else if c == '.' && !current.is_empty() {
+            held_dot = true;
         } else {
             if !current.is_empty() {
                 gaps.push(std::mem::take(&mut gap));
                 out.push(Token {
                     text: std::mem::take(&mut current),
-                    in_range: false,
+                    joined_to_prev: false,
                 });
+            }
+            if held_dot {
+                gap.push('.');
+                held_dot = false;
             }
             gap.push(c);
         }
@@ -267,15 +285,13 @@ fn tokenize(s: &str) -> Vec<Token> {
         gaps.push(gap);
         out.push(Token {
             text: current,
-            in_range: false,
+            joined_to_prev: false,
         });
     }
 
     for i in 1..out.len() {
-        if is_number(&out[i - 1].text) && is_number(&out[i].text) && is_range_dash(&gaps[i]) {
-            out[i - 1].in_range = true;
-            out[i].in_range = true;
-        }
+        out[i].joined_to_prev =
+            is_number(&out[i - 1].text) && is_number(&out[i].text) && is_range_dash(&gaps[i]);
     }
     out
 }
@@ -293,17 +309,22 @@ fn is_range_dash(gap: &str) -> bool {
             .all(|c| matches!(c, '-' | '\u{2010}' | '\u{2013}' | '\u{2014}'))
 }
 
-/// Whether `needle` appears as a contiguous run of whole tokens, none of them a
-/// range bound. Whole tokens are the point: a substring match accepts `13` from
-/// `139` and `45` from `145`.
+/// Whether `needle` appears as a contiguous run of whole tokens with no dash
+/// reaching out of it. Whole tokens are the point: a substring match accepts
+/// `13` from `139` and `45` from `145`. The dash at either end is what separates
+/// a result quoted whole (`0-2`) from one end of a range printed beside it.
 fn contains_run(tokens: &[Token], needle: &[String]) -> bool {
-    if needle.is_empty() {
+    if needle.is_empty() || needle.len() > tokens.len() {
         return false;
     }
-    tokens.windows(needle.len()).any(|w| {
-        w.iter()
+    (0..=tokens.len() - needle.len()).any(|start| {
+        let end = start + needle.len();
+        tokens[start..end]
+            .iter()
             .zip(needle)
-            .all(|(t, n)| &t.text == n && !t.in_range)
+            .all(|(t, n)| &t.text == n)
+            && !tokens[start].joined_to_prev
+            && tokens.get(end).is_none_or(|t| !t.joined_to_prev)
     })
 }
 
@@ -663,6 +684,68 @@ mod tests {
         let t = vec!["Potassium        5.1      mmol/L    3.5-5.1".to_string()];
         assert_eq!(
             parse_lines(&observation(1, "Potassium", "5.1"), &t)
+                .drafts
+                .len(),
+            1
+        );
+    }
+
+    /// A period ending a sentence is punctuation, not part of the reading.
+    #[test]
+    fn terminal_punctuation_does_not_hide_the_thing_it_follows() {
+        let t = vec!["Temperature 98.6.".to_string()];
+        assert_eq!(
+            parse_lines(&observation(1, "Temperature", "98.6"), &t)
+                .drafts
+                .len(),
+            1
+        );
+
+        let normal = r#"{"findings":[{"kind":"document","source_line":1,
+            "value_text":"Normal"}]}"#;
+        let stopped = ["Normal.".to_string()];
+        assert_eq!(parse_lines(normal, &stopped).drafts.len(), 1);
+    }
+
+    /// Some results *are* an interval — a urine microscopy count is reported as
+    /// one. Quoting it whole is quoting the result; quoting one end of it is
+    /// still picking a bound out of a printed range.
+    #[test]
+    fn a_result_that_is_itself_a_range_verifies_whole_but_not_by_halves() {
+        let t = vec!["Urine RBC       0-2      /HPF".to_string()];
+        assert_eq!(
+            parse_lines(&observation(1, "Urine RBC", "0-2"), &t)
+                .drafts
+                .len(),
+            1
+        );
+        assert_eq!(
+            parse_lines(&observation(1, "Urine RBC", "0"), &t).dropped,
+            1
+        );
+        assert_eq!(
+            parse_lines(&observation(1, "Urine RBC", "2"), &t).dropped,
+            1
+        );
+    }
+
+    /// Records are not all Latin script, and a label that tokenizes to nothing
+    /// is a finding with nothing to check — dropped for the wrong reason.
+    #[test]
+    fn a_non_latin_label_is_checked_not_erased() {
+        let t = vec!["糖尿病（2型）   血糖 7.2".to_string()];
+        let coded = r#"{"findings":[{"kind":"condition","source_line":1,
+            "system":"snomed","code":"44054006","display":"糖尿病"}]}"#;
+        assert_eq!(parse_lines(coded, &t).drafts.len(), 1);
+
+        let elsewhere = r#"{"findings":[{"kind":"condition","source_line":1,
+            "system":"snomed","code":"38341003","display":"高血圧"}]}"#;
+        assert_eq!(parse_lines(elsewhere, &t).dropped, 1);
+
+        // Greek survives the same way, and case folds.
+        let greek = vec!["β-hCG   5   mIU/mL".to_string()];
+        assert_eq!(
+            parse_lines(&observation(1, "Β-hCG", "5"), &greek)
                 .drafts
                 .len(),
             1
