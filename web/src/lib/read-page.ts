@@ -1,16 +1,13 @@
 // Reading a captured page on this device and proposing what it says.
 //
 // The whole path is local except one call: transcribe here, send only the text
-// for coding, validate the reply here. The page image never leaves the device —
-// which is a stronger property than the node ever had, since the node uploads
-// the page itself to a vision endpoint.
+// for coding, validate the reply here. The page image never leaves the device.
 //
 // **Local drafts skip the mailbox entirely.** The proposal mechanism exists
 // because a node cannot sign as the owner, so its suggestions have to travel as
 // sealed envelopes and be approved. This device *is* the owner: it holds the
 // seed. So a page read here writes straight into the same review queue, and the
-// existing approve/reject path signs it exactly as it signs a node's. Nothing
-// about the review changes — only the round-trip disappears.
+// existing approve/reject path signs it exactly as it signs a node's.
 import {
   initSvastha,
   extract_system_prompt,

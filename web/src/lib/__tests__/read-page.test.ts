@@ -143,8 +143,7 @@ describe('readAndPropose', () => {
     wasm.code_from_lines.mockReturnValue('{"drafts":[],"dropped":0}')
   })
 
-  // The property that makes this better than the node: the node uploads the page
-  // itself to a vision endpoint; this sends only the text it read.
+  // The page image stays on the device: only the transcript is sent for coding.
   it('sends the transcript and never the page bytes', async () => {
     await readAndPropose('sha1', new Uint8Array([1, 2, 3]), 'image/jpeg')
     const [, system, user] = inference.chatComplete.mock.calls[0]

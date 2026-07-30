@@ -79,7 +79,7 @@ fn score(candidate: &Candidate<'_>, query: &[String], intent: Intent) -> Option<
 /// Render one event into the single context line the model sees: an optional
 /// current/past tag (only where clinically meaningful), the kind, the date, the
 /// name, and the value.
-pub fn render_line(event: &Event, name: &str, status: ConceptStatus) -> String {
+pub(crate) fn render_line(event: &Event, name: &str, status: ConceptStatus) -> String {
     let mut parts = Vec::new();
     if let Some(tag) = status_tag(&event.kind, status) {
         parts.push(format!("[{tag}]"));

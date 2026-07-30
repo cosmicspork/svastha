@@ -102,14 +102,11 @@ pub struct FsMailboxStore {
 
 impl FsMailboxStore {
     pub fn new(root: impl AsRef<Path>) -> io::Result<Self> {
-        // The `mailbox` segment is what keeps this store's per-recipient
-        // directories out of `store::FsStore`'s per-owner ones. Both key on
-        // `hex(identity)`, so sharing a root made them the same directory for
-        // any identity that both owns blobs and receives mail — i.e. every
-        // real user. `GET /v0/mailbox` then listed the owner's whole blob
-        // namespace as mailbox items, and a client dutifully fetched and
-        // discarded all of them on every pull. Namespaced like the push and
-        // share stores, which got this right.
+        // The `mailbox` segment keeps these per-recipient directories out of
+        // `store::FsStore`'s per-owner ones: both key on `hex(identity)`, so a
+        // shared root is the *same* directory for any identity that both owns
+        // blobs and receives mail — i.e. every real user. Namespaced like the
+        // push and share stores.
         let root = root.as_ref().join("mailbox");
         let tmp = root.join(".tmp");
         fs::create_dir_all(&tmp)?;

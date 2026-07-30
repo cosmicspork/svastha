@@ -24,16 +24,11 @@
     $syncStatus.lastPullAt ? new Date($syncStatus.lastPullAt).toLocaleTimeString() : 'never',
   )
 
-  // Status reflects the relay, not just the browser link: a reachable relay is
-  // "Online", a browser that's offline is "Offline", and a relay we can't reach
-  // while online is "Unreachable" (rather than the old, misleading "Online").
-  //
   // `configured` is checked before reachability because this panel's visibility
   // comes from the *stored relay URL*, not from the engine: after a teardown, or
   // a `connectRelay` that rejected, the URL is still there while the engine holds
-  // no relay client. `reachable` is left at whatever the last contact set, so the
-  // panel used to read "Online" over a sync engine that was down — and "Sync now"
-  // returned at `pullAll`'s guard with nothing to show for it.
+  // no relay client, and `reachable` still holds whatever the last contact set.
+  // Reading that as "Online" would claim a working sync engine over a dead one.
   const statusText = $derived(
     !$syncStatus.online
       ? 'Offline'

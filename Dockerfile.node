@@ -14,6 +14,14 @@ RUN cargo build -p svastha-node --release
 # The page-reading models, baked in rather than fetched at boot: a node that
 # downloads its reader on first use is one that phones out before it has read
 # anything, and one that cannot start when that host is down. ~15 MiB total.
+#
+# Pinned by content. These are unversioned keys in a bucket nobody here
+# controls, so the URL alone is not a pin — the model a node reads medical
+# records with could change under it between two builds of the same commit, with
+# nothing in the image to say so. The bucket offers no versioned path (its object
+# versions are not publicly readable), so the checksums are the pin: a mismatch
+# fails the build rather than shipping an unknown reader. Re-hash and update
+# these deliberately when the models are meant to move.
 FROM debian:bookworm-slim AS models
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
@@ -22,7 +30,12 @@ RUN mkdir -p /models \
     && curl -fsSL -o /models/text-detection.rten \
        https://ocrs-models.s3-accelerate.amazonaws.com/text-detection.rten \
     && curl -fsSL -o /models/text-recognition.rten \
-       https://ocrs-models.s3-accelerate.amazonaws.com/text-recognition.rten
+       https://ocrs-models.s3-accelerate.amazonaws.com/text-recognition.rten \
+    && printf '%s  %s\n' \
+       f15cfb56bd02c4bf478a20343986504a1f01e1665c2b3a0ad66340f054b1b5ca /models/text-detection.rten \
+       e484866d4cce403175bd8d00b128feb08ab42e208de30e42cd9889d8f1735a6e /models/text-recognition.rten \
+       > /tmp/models.sha256 \
+    && sha256sum -c --strict /tmp/models.sha256
 
 FROM debian:bookworm-slim
 WORKDIR /app

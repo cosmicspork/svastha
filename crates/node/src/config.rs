@@ -129,8 +129,8 @@ pub struct Config {
     pub data_dir: PathBuf,
     /// Ephemeral dir for decrypted plaintext.
     pub cache_dir: PathBuf,
-    /// Vision inference target for OCR (D2), validated if present. Resolves the
-    /// OCR-role env vars over the shared base.
+    /// Inference target for coding a transcribed page (D2) — a text model;
+    /// validated if present. Resolves the OCR-role env vars over the shared base.
     pub ocr_inference: Option<InferenceConfig>,
     /// Text inference target for RAG chat (D3), validated if present. Resolves
     /// the chat-role env vars over the shared base.

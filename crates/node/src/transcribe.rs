@@ -1,11 +1,10 @@
 //! Stage A on the node: turning a captured page into text, in-process.
 //!
-//! The node used to send the page *image* to a vision model, which both read and
-//! coded it in one pass — so nothing could check what it claimed. Now the page is
-//! transcribed here and only the text is sent, which means every coded finding
-//! must quote back the numbered line it came from (see
-//! [`svastha_import::extract::parse_lines`]) or it is dropped. The page bytes no
-//! longer leave the node at all.
+//! Transcribing here rather than sending the page to a model that both reads and
+//! codes it in one pass is what makes the coding checkable: because the text is
+//! ground truth on this side, every coded finding must quote back the numbered
+//! line it came from (see [`svastha_import::extract::parse_lines`]) or it is
+//! dropped. The page bytes never leave the node.
 //!
 //! **Pure Rust, deliberately.** `crates/node/README.md` advertises a container
 //! with no OpenSSL and no C toolchain; `ocrs` (with `rten` underneath) keeps that
