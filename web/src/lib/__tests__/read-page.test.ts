@@ -25,17 +25,22 @@ vi.mock('../inference', async () => {
   return { ...inference, InferenceError, normalizeEndpoint: (s: string) => s }
 })
 
-// A faithful stand-in for the store: it answers the one thing readAndPropose
-// asks of it — was this record new? — the way the real one does.
-const stored = vi.hoisted(() => ({ records: [] as { id: string }[] }))
+// A faithful stand-in for the store: it answers whether a proposal exists and
+// replaces it on upsert, the parts of the real store readAndPropose needs.
+const stored = vi.hoisted(() => ({ records: [] as { id: string; drafts: unknown[] }[] }))
 vi.mock('../proposals', async () => {
-  const actual = await vi.importActual<typeof import('../proposals')>('../proposals')
+  const actual = await vi.importActual<Record<string, unknown>>('../proposals')
   return {
     ...actual,
-    upsertProposal: vi.fn(async (r: { id: string }) => {
-      const existing = stored.records.some((seen) => seen.id === r.id)
+    getProposal: vi.fn(async (id: string) => stored.records.find((record) => record.id === id)),
+    upsertProposal: vi.fn(async (r: { id: string; drafts: unknown[] }) => {
+      const index = stored.records.findIndex((seen) => seen.id === r.id)
+      if (index >= 0) {
+        stored.records[index] = r
+        return false
+      }
       stored.records.push(r)
-      return !existing
+      return true
     }),
   }
 })
@@ -260,6 +265,20 @@ describe('readAndPropose', () => {
       totalPages: 1,
     })
     expect(stored.records).toHaveLength(0)
+  })
+
+  it('clears pending proposals when a re-read finds no entries', async () => {
+    wasm.code_from_lines.mockReturnValue(
+      '{"drafts":[{"kind":"observation","code":null,"effective_at":null,"value":{"text":"x"}}],"dropped":0}',
+    )
+    await readAndPropose('sha1', new Uint8Array(), 'image/jpeg')
+
+    wasm.code_from_lines.mockReturnValue('{"drafts":[],"dropped":0,"unparseable":false}')
+    expect(await readAndPropose('sha1', new Uint8Array(), 'image/jpeg')).toMatchObject({
+      proposed: 0,
+      updated: true,
+    })
+    expect(stored.records[0].drafts).toEqual([])
   })
 
   // "I could not parse this reply" is a formatting failure worth retrying;

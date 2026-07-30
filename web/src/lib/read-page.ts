@@ -21,7 +21,7 @@ import { assetsEnabled } from './ocr-assets'
 import { numberedLines, renderColumns } from './ocr-layout'
 import { UnreadablePageError, type OcrLine } from './ocr'
 import { loadConfig, chatComplete, InferenceError } from './inference'
-import { buildProposalRecord, upsertProposal, type DraftEvent } from './proposals'
+import { buildProposalRecord, getProposal, upsertProposal, type DraftEvent } from './proposals'
 import { session } from './session.svelte'
 import type { EventKind, EventValue } from './drafts'
 import type { Code } from './codes'
@@ -231,10 +231,6 @@ export async function readAndPropose(
     throw new UnreadableAnswerError("Your endpoint's answer couldn't be read. Try again.")
   }
 
-  if (coded.drafts.length === 0) {
-    return { proposed: 0, dropped: coded.dropped, updated: false, ...span }
-  }
-
   const record = buildProposalRecord({
     id: proposalIdFor(sourceSha, start),
     fromEd: session.identity.ed25519_public_hex,
@@ -248,6 +244,18 @@ export async function readAndPropose(
       model: config.model,
     })),
   })
+
+  if (record.drafts.length === 0) {
+    // A fresh empty read needs no persistent group. On a re-read, however, an
+    // empty incoming set is what replaces the old pending drafts; decisions
+    // remain because upsertProposal merges them back.
+    if (await getProposal(record.id)) {
+      await upsertProposal(record)
+      return { proposed: 0, dropped: coded.dropped, updated: true, ...span }
+    }
+    return { proposed: 0, dropped: coded.dropped, updated: false, ...span }
+  }
+
   const created = await upsertProposal(record)
 
   return {
