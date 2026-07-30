@@ -25,11 +25,12 @@
 //! dangerous: a value read off one row and attached to the analyte on another,
 //! or read out of the reference-range column of its own row.
 //!
-//! Its limit is worth stating plainly. The guard works at line and token level:
-//! a claimed value must be a whole token of the line it cites, and not one end
-//! of a range printed there. It does not know which *cell* a token came from, so
-//! a swap between two results on the same row still reaches the owner's approval
-//! queue. It narrows the failure, it does not eliminate it.
+//! Its limit is worth stating plainly. The guard reads a line as words and
+//! quantities and matches a claim against those: a claimed value must be a whole
+//! quantity of the line it cites, and not one end of a range printed there. It
+//! does not know which *cell* a quantity came from, so a swap between two
+//! results on the same row still reaches the owner's approval queue. It narrows
+//! the failure, it does not eliminate it.
 
 use serde::Deserialize;
 use svastha_core::event::{Code, EventKind, EventValue};
@@ -159,8 +160,8 @@ fn parse_inner(answer: &str, lines: Option<&[String]>) -> Extraction {
 
 /// Whether a finding's cited line actually contains what it claims to have found.
 ///
-/// Every claim the finding makes is checked against the tokens of that one line,
-/// and a finding that makes no checkable claim at all is dropped:
+/// Every claim the finding makes is checked against that one line, and a finding
+/// that makes no checkable claim at all is dropped:
 ///
 /// - The cited line must exist. No `source_line`, or one out of range, fails —
 ///   an unverifiable claim is not a safer claim.
@@ -171,15 +172,12 @@ fn parse_inner(answer: &str, lines: Option<&[String]>) -> Extraction {
 ///   the label has one: `Hb A1c` does not verify against a plain `Hb` line.
 ///   One- and two-letter labels (`K`, `Na`, `β`) carry the check themselves when
 ///   that is the whole label, rather than being dismissed as too short.
-/// - `value_quantity`, when given, must equal a whole token, or a contiguous run
-///   of them joined as the claim is and with no dash reaching out of the run.
-///   `13` is therefore not "found" inside `139`, `5.1` is not found in
-///   `3.5-5.1`, and `5` is not found in `.5` — while a result that is itself an
-///   interval (`0-2`) verifies when quoted whole, and only as printed. A unit
-///   printed against the number lexes apart from it, by the decimal point
-///   (`4.1mmol/L`) or by matching the unit the finding claims (`139mmol/L` given
-///   `mmol/L`) — while a name that merely begins with digits (`5HIAA`) does not,
-///   see [`attached_unit_quotes_back`].
+/// - `value_quantity`, when given, must be a whole [`Production`] of the line —
+///   or a contiguous run of them, each read exactly as the claim reads it. `13`
+///   is therefore not "found" inside `139` and `5` is not found in `.5`; neither
+///   bound of a printed range is found on its own, whichever of them carries the
+///   unit; and a result that is itself an interval (`0-2`) verifies when quoted
+///   whole, and only as printed.
 /// - `value_text`, when given, must share more than half its tokens with the
 ///   line, so free text is bound to its citation the way a value is.
 ///
@@ -194,55 +192,43 @@ fn quotes_back(f: &Finding, lines: &[String]) -> bool {
     let Some(line) = index.checked_sub(1).and_then(|i| lines.get(i)) else {
         return false;
     };
-    let tokens = tokenize(line);
+    let lexemes = lex(line);
     let mut checked_something = false;
 
-    let display: Vec<String> = tokenize(&f.display)
+    let display: Vec<String> = lex(&f.display)
         .into_iter()
-        .filter(|t| t.text.chars().any(char::is_alphabetic))
-        .map(|t| t.text)
+        .filter(|l| l.text.chars().any(char::is_alphabetic))
+        .map(|l| l.text)
         .collect();
-    // Whether the label named a substantial word of this line: a real analyte
-    // name, as opposed to a letter it happens to share with one. The
-    // attached-unit path below leans on it.
-    let mut named_an_analyte = false;
     if !display.is_empty() {
         // A label that has a distinguishing word must match on one of them:
         // `Hb A1c` shares `hb` with a plain haemoglobin line, and only `a1c`
         // tells a haemoglobin from an A1c. A one- or two-letter token carries
         // the check by itself only when that is the whole label.
         let distinguishing = display.iter().any(|d| d.chars().count() >= 3);
-        let matched: Vec<&String> = display
+        let named = display
             .iter()
             .filter(|d| !distinguishing || d.chars().count() >= 3)
-            .filter(|d| tokens.iter().any(|t| &t.text == *d))
-            .collect();
-        if matched.is_empty() {
+            .any(|d| lexemes.iter().any(|l| &l.text == d));
+        if !named {
             return false;
         }
-        named_an_analyte = matched.iter().any(|d| d.chars().count() >= 3);
         checked_something = true;
     }
 
-    // Kept as tokens, not text: the dashes between them are half the claim.
-    let value = tokenize(&f.value_quantity);
-    if !value.is_empty() {
-        if !contains_run(&tokens, &value)
-            && !attached_unit_quotes_back(f, line, &value, &display, named_an_analyte)
-        {
+    let claimed = productions(&lex(&f.value_quantity));
+    if !claimed.is_empty() {
+        if !quotes_a_run(&productions(&lexemes), &claimed, line, &f.unit) {
             return false;
         }
         checked_something = true;
     }
 
     if !f.value_text.trim().is_empty() {
-        let text: Vec<String> = tokenize(&f.value_text)
-            .into_iter()
-            .map(|t| t.text)
-            .collect();
+        let text: Vec<String> = lex(&f.value_text).into_iter().map(|l| l.text).collect();
         let quoted = text
             .iter()
-            .filter(|w| tokens.iter().any(|t| &&t.text == w))
+            .filter(|w| lexemes.iter().any(|l| &&l.text == w))
             .count();
         // A strict majority, which for one or two tokens means all of them.
         if quoted * 2 <= text.len() {
@@ -254,97 +240,52 @@ fn quotes_back(f: &Finding, lines: &[String]) -> bool {
     checked_something
 }
 
-/// One token of a line: letters and digits of any script, lowercased, with a
+/// One lexeme of a line: letters and digits of any script, lowercased, with a
 /// decimal point kept only between them.
-struct Token {
+struct Lexeme {
     text: String,
-    /// A dash on the line joins this token to the one before it, the way a
-    /// printed range joins its bounds. Recorded as the *join* rather than as a
-    /// "this is a bound" flag because a result can itself be an interval
-    /// (`Urine RBC 0-2 /HPF`): quoting the whole of it is quoting the result,
-    /// while quoting one end leaves the join dangling.
-    joined_to_prev: bool,
+    /// The raw characters between the previous lexeme and this one, which is
+    /// where the dash that prints a range lives.
+    gap: String,
+    /// Set when digits run straight into letters. See [`Fused`].
+    fused: Option<Fused>,
 }
 
-/// A second look for a quantity printed against its unit (`139mmol/L`), lexing
-/// the two apart with the unit the finding itself claims.
-///
-/// Letting the claim drive the split needs a guard the plain lexer does not: a
-/// claimed unit of `HIAA` would otherwise cut the analyte name `5HIAA` in half
-/// and leave a `5` to quote on a row whose result is 6. Two conditions close
-/// that, and both come from the claim rather than from guesswork about the line.
-/// The label must already have named a substantial word of this line — a real
-/// analyte — and no label token may *be* the fused token, which is exactly what
-/// a finding that calls its analyte `5HIAA` says it is.
-fn attached_unit_quotes_back(
-    f: &Finding,
-    line: &str,
-    value: &[Token],
-    display: &[String],
-    named_an_analyte: bool,
-) -> bool {
-    if !named_an_analyte {
-        return false;
-    }
-    // A unit is printed against one number, not across a run of them.
-    let [claimed] = value else {
-        return false;
-    };
-    let Some(unit) = tokenize(&f.unit).into_iter().next() else {
-        return false;
-    };
-    let fused = format!("{}{}", claimed.text, unit.text);
-    if display.contains(&fused) {
-        return false;
-    }
-    // Re-lex the whole line so the joins are recomputed over the split: an upper
-    // bound with its unit attached (`135-145mmol/L`) has to stay a bound.
-    contains_run(&tokenize_with_unit(line, Some(&unit.text)), value)
+/// Digits running straight into letters, which the line by itself cannot read:
+/// `139mmol/L` is a quantity and its unit, `5HIAA` is the name of an analyte,
+/// and nothing about the characters tells the two apart. The lexer records the
+/// numeric reading and where the letters begin; only the finding's own `unit`
+/// settles which reading is right, and only where it is printed — see
+/// [`unit_is_printed_at`].
+struct Fused {
+    number: String,
+    /// Byte offset into the line where the letters begin.
+    unit_at: usize,
 }
 
-/// Split into tokens, recording which of them a dash joins.
-fn tokenize(s: &str) -> Vec<Token> {
-    tokenize_with_unit(s, None)
-}
-
-/// Whether `rest` opens with `unit` and then stops being a word, so a claimed
-/// `mmol` splits `139mmol/L` while a claimed `hi` cannot pick at `5hiaa`.
-fn ends_the_word(rest: &str, unit: &str) -> bool {
-    if unit.is_empty() {
-        return false;
-    }
-    let mut chars = rest.chars();
-    for u in unit.chars() {
-        match chars.next() {
-            Some(c) if c.to_lowercase().eq(u.to_lowercase()) => {}
-            _ => return false,
-        }
-    }
-    chars
-        .next()
-        .is_none_or(|c| !c.is_alphanumeric() && c != '.')
-}
-
-/// As [`tokenize`], additionally ending a numeric token where the claimed unit
-/// is printed against it.
-fn tokenize_with_unit(s: &str, unit: Option<&str>) -> Vec<Token> {
-    fn flush(out: &mut Vec<Token>, gaps: &mut Vec<String>, gap: &mut String, current: &mut String) {
+/// Split a line into lexemes.
+fn lex(s: &str) -> Vec<Lexeme> {
+    fn flush(
+        out: &mut Vec<Lexeme>,
+        gap: &mut String,
+        current: &mut String,
+        fused: &mut Option<Fused>,
+    ) {
         if current.is_empty() {
+            *fused = None;
             return;
         }
-        gaps.push(std::mem::take(gap));
-        out.push(Token {
+        out.push(Lexeme {
             text: std::mem::take(current),
-            joined_to_prev: false,
+            gap: std::mem::take(gap),
+            fused: fused.take(),
         });
     }
 
-    let mut out: Vec<Token> = Vec::new();
-    // The raw characters between the previous token and the next one, which is
-    // where the dash that makes a range lives.
-    let mut gaps: Vec<String> = Vec::new();
+    let mut out: Vec<Lexeme> = Vec::new();
     let mut gap = String::new();
     let mut current = String::new();
+    let mut fused: Option<Fused> = None;
     // Periods seen since the last alphanumeric, resolved by what follows them: a
     // single one against a digit is a decimal point, anything else is
     // punctuation and belongs in the gap. Both halves matter — `98.6.` must not
@@ -368,30 +309,23 @@ fn tokenize_with_unit(s: &str, unit: Option<&str>) -> Vec<Token> {
                 }
                 current.push('.');
             } else if dots > 0 {
-                flush(&mut out, &mut gaps, &mut gap, &mut current);
+                flush(&mut out, &mut gap, &mut current, &mut fused);
                 for _ in 0..dots {
                     gap.push('.');
                 }
             }
             dots = 0;
-            // Labs print the unit against the number as often as beside it. Two
-            // signals end the number there, and both keep a name that merely
-            // starts with digits (`5HIAA`) whole, since splitting one would let
-            // a claim of `5` quote a row whose result is 6: a decimal point on
-            // the digit run makes it a quantity outright (`4.1mmol/L`), and
-            // otherwise the letters must be the unit the finding claims, ending
-            // where the word does (`139mmol/L` given `mmol/L`).
-            let attached_unit = c.is_alphabetic()
-                && is_number(&current)
-                && (current.contains('.') || unit.is_some_and(|u| ends_the_word(&s[i..], u)));
-            if attached_unit {
-                flush(&mut out, &mut gaps, &mut gap, &mut current);
+            if c.is_alphabetic() && fused.is_none() && is_number(&current) {
+                fused = Some(Fused {
+                    number: current.clone(),
+                    unit_at: i,
+                });
             }
             current.extend(c.to_lowercase());
         } else if c == '.' {
             dots += 1;
         } else {
-            flush(&mut out, &mut gaps, &mut gap, &mut current);
+            flush(&mut out, &mut gap, &mut current, &mut fused);
             for _ in 0..dots {
                 gap.push('.');
             }
@@ -399,13 +333,75 @@ fn tokenize_with_unit(s: &str, unit: Option<&str>) -> Vec<Token> {
             gap.push(c);
         }
     }
-    flush(&mut out, &mut gaps, &mut gap, &mut current);
+    flush(&mut out, &mut gap, &mut current, &mut fused);
+    out
+}
 
-    for i in 1..out.len() {
-        out[i].joined_to_prev =
-            is_number(&out[i - 1].text) && is_number(&out[i].text) && is_range_dash(&gaps[i]);
+/// One production of a line: a word, or the numbers printed as a single quantity
+/// or a single dash-joined range.
+///
+/// Range-ness lives here, on the production that spans the bounds, rather than
+/// being inferred between neighbouring tokens after the fact. That is what makes
+/// a printed bound unquotable however its unit is printed: the guard never has
+/// to ask whether a dash it can see joined two things it failed to read as
+/// numbers, which is how the lower bound of `70-99mg/dL` used to come loose.
+struct Production {
+    /// The bounds: one number for a quantity, two or more for a printed range.
+    /// Empty for a word.
+    numbers: Vec<String>,
+    /// Where the letters printed against the last number begin, when there are
+    /// any. A claim has to account for them to read the number out from under.
+    unit_at: Option<usize>,
+    /// The production as a single word, when it is one — including `5hiaa`,
+    /// whose digits belong to a name until a claim shows otherwise.
+    word: Option<String>,
+}
+
+/// Group lexemes into productions.
+fn productions(lexemes: &[Lexeme]) -> Vec<Production> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < lexemes.len() {
+        let Some(first) = bound(&lexemes[i]) else {
+            out.push(Production {
+                numbers: Vec::new(),
+                unit_at: None,
+                word: Some(lexemes[i].text.clone()),
+            });
+            i += 1;
+            continue;
+        };
+        // A dash between two numbers prints a range, however many bounds it runs
+        // to and whatever is printed against the last of them.
+        let mut numbers = vec![first];
+        let mut last = i;
+        while let Some(next) = lexemes
+            .get(last + 1)
+            .filter(|l| is_range_dash(&l.gap))
+            .and_then(bound)
+        {
+            numbers.push(next);
+            last += 1;
+        }
+        out.push(Production {
+            numbers,
+            unit_at: lexemes[last].fused.as_ref().map(|f| f.unit_at),
+            // A dash-joined run of bounds is never also one word.
+            word: (last == i).then(|| lexemes[i].text.clone()),
+        });
+        i = last + 1;
     }
     out
+}
+
+/// The number a lexeme opens with, if any: itself, or the digits a name might be
+/// hiding behind (`139mmol` → `139`).
+fn bound(l: &Lexeme) -> Option<String> {
+    if is_number(&l.text) {
+        Some(l.text.clone())
+    } else {
+        l.fused.as_ref().map(|f| f.number.clone())
+    }
 }
 
 fn is_number(t: &str) -> bool {
@@ -421,28 +417,73 @@ fn is_range_dash(gap: &str) -> bool {
             .all(|c| matches!(c, '-' | '\u{2010}' | '\u{2013}' | '\u{2014}'))
 }
 
-/// Whether `needle` appears as a contiguous run of whole tokens, joined among
-/// themselves exactly as the claim is and with no dash reaching out of the run.
-///
-/// Whole tokens are the point: a substring match accepts `13` from `139` and
-/// `45` from `145`. Matching the joins as well is what keeps `0-2` and `0 2`
-/// distinct readings of a row — the claim has to have the shape of what it
-/// quotes — while a dash reaching past either end means the claim took one end
-/// of a printed range and left the other behind.
-fn contains_run(tokens: &[Token], needle: &[Token]) -> bool {
-    if needle.is_empty() || needle.len() > tokens.len() {
+/// Whether the claim appears on the line as a contiguous run of whole
+/// productions, each read as the claim reads it.
+fn quotes_a_run(printed: &[Production], claimed: &[Production], line: &str, unit: &str) -> bool {
+    if claimed.is_empty() || claimed.len() > printed.len() {
         return false;
     }
-    (0..=tokens.len() - needle.len()).any(|start| {
-        let end = start + needle.len();
-        tokens[start..end]
+    (0..=printed.len() - claimed.len()).any(|start| {
+        printed[start..start + claimed.len()]
             .iter()
-            .zip(needle)
-            .enumerate()
-            .all(|(i, (t, n))| t.text == n.text && (i == 0 || t.joined_to_prev == n.joined_to_prev))
-            && !tokens[start].joined_to_prev
-            && tokens.get(end).is_none_or(|t| !t.joined_to_prev)
+            .zip(claimed)
+            .all(|(p, c)| reads_as(p, c, line, unit))
     })
+}
+
+/// Whether one printed production is what the claim says is there.
+fn reads_as(printed: &Production, claimed: &Production, line: &str, unit: &str) -> bool {
+    if claimed.numbers.is_empty() {
+        return claimed.word.is_some() && printed.word == claimed.word;
+    }
+    if printed.numbers != claimed.numbers {
+        return false;
+    }
+    let Some(at) = printed.unit_at else {
+        // Nothing is printed against the number, so it is a quantity outright.
+        return true;
+    };
+    // Otherwise the letters are a unit only if the finding's own unit is what is
+    // printed there — or if the number is a decimal, which no name begins with.
+    printed.numbers.last().is_some_and(|n| n.contains('.')) || unit_is_printed_at(line, at, unit)
+}
+
+/// Whether the unit a finding claims is the one printed against its number, from
+/// `at`.
+///
+/// Only a unit written in more than one part may take a number out from under
+/// the letters run into it — `mmol/L`, `ug/dL`, `mm[Hg]`, `10*3/uL`. A bare word
+/// never can, because nothing on the line tells a bare unit from the start of a
+/// name: `5HIAA` claiming a unit of `HIAA` is an analyte, and `24hr` claiming
+/// `hr` is a collection window. The price is a dose printed `10mg`, which is
+/// dropped rather than certified — the direction this guard errs in.
+fn unit_is_printed_at(line: &str, at: usize, unit: &str) -> bool {
+    if parts(unit) < 2 {
+        return false;
+    }
+    // A unit is printed against its number, not assembled across the line, so
+    // the reading stops at the first space or dash.
+    let printed = line[at..]
+        .split(|c: char| c.is_whitespace() || c == '-')
+        .next()
+        .unwrap_or_default();
+    !printed.is_empty() && letters_and_digits(printed) == letters_and_digits(unit)
+}
+
+/// How many alphanumeric parts a unit is written in: `mmol/L` is two, `HIAA` one.
+fn parts(unit: &str) -> usize {
+    unit.split(|c: char| !c.is_alphanumeric())
+        .filter(|p| !p.is_empty())
+        .count()
+}
+
+/// The lowercased letters and digits of `s`, so `mmol/L` and `mmol/l` are the
+/// same unit however either side punctuates it.
+fn letters_and_digits(s: &str) -> Vec<char> {
+    s.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 /// Validate one finding into a schema-valid, meaningful [`EventDraft`], or `None`
@@ -751,6 +792,15 @@ mod tests {
             r#"{{"findings":[{{"kind":"observation","source_line":{source_line},
                "system":"loinc","code":"2823-3","display":"{display}",
                "value_quantity":"{value}"}}]}}"#
+        )
+    }
+
+    /// The same, carrying the unit in its own field the way the schema asks.
+    fn measured(source_line: usize, display: &str, value: &str, unit: &str) -> String {
+        format!(
+            r#"{{"findings":[{{"kind":"observation","source_line":{source_line},
+               "system":"loinc","code":"2823-3","display":"{display}",
+               "value_quantity":"{value}","unit":"{unit}"}}]}}"#
         )
     }
 
@@ -1071,5 +1121,130 @@ mod tests {
         let labelled = r#"{"findings":[{"kind":"observation","source_line":3,
             "value_text":"Analyte Result Unit Reference","display":"Analyte"}]}"#;
         assert_eq!(parse_lines(labelled, &transcript).drafts.len(), 1);
+    }
+
+    /// A claimed unit may only be read where the number it belongs to is
+    /// printed. Reading it off the line at large lets a claim take apart a token
+    /// it never named: `5HIAA` is an analyte on a sodium row, not a five of
+    /// something, and `24hr` is a collection window.
+    #[test]
+    fn a_claimed_unit_cannot_split_a_token_it_is_not_printed_against() {
+        for (line, display, value, unit) in [
+            ("Sodium 139 mmol/L 5HIAA 6 mg", "Sodium", "5", "HIAA"),
+            ("Sodium 139 mmol/L 24hr urine 1200 mL", "Sodium", "24", "hr"),
+            (
+                "Glucose 105 mg/dL 2hr postprandial 140 mg/dL",
+                "Glucose",
+                "2",
+                "hr",
+            ),
+            (
+                "Vitamin B12 450 pg/mL 25OHD 42 ng/mL",
+                "Vitamin B12",
+                "25",
+                "OHD",
+            ),
+            ("Acc# 12345AB Sodium 139 mmol/L", "Sodium", "12345", "AB"),
+            // A unit in two parts does not help when it is not what is printed.
+            ("Sodium 139 mmol/L 5HIAA 6 mg", "Sodium", "5", "HIAA/24h"),
+        ] {
+            let t = vec![line.to_string()];
+            assert_eq!(
+                parse_lines(&measured(1, display, value, unit), &t).dropped,
+                1,
+                "{line:?} must not yield {value} {unit} for {display}"
+            );
+        }
+
+        // The results actually printed on those rows still verify.
+        let mixed = vec!["Sodium 139 mmol/L 5HIAA 6 mg".to_string()];
+        assert_eq!(
+            parse_lines(&measured(1, "Sodium", "139", "mmol/L"), &mixed)
+                .drafts
+                .len(),
+            1
+        );
+        assert_eq!(
+            parse_lines(&measured(1, "5HIAA", "6", "mg"), &mixed)
+                .drafts
+                .len(),
+            1
+        );
+    }
+
+    /// The short-label half of the attached-unit printing. A one- or two-letter
+    /// analyte is as entitled to a unit printed against its number as a spelled
+    /// out one; `Na 139mmol/L` is an ordinary sodium result.
+    #[test]
+    fn a_short_label_reads_an_integer_against_its_unit_too() {
+        for (line, display, value, unit) in [
+            ("Na 139mmol/L", "Na", "139", "mmol/L"),
+            ("K 4mmol/L", "K", "4", "mmol/L"),
+            ("Cl 104mmol/L", "Cl", "104", "mmol/L"),
+            ("Fe 85ug/dL", "Fe", "85", "ug/dL"),
+            ("Hb 12g/dL", "Hb", "12", "g/dL"),
+            ("T4 8ug/dL", "T4", "8", "ug/dL"),
+        ] {
+            let t = vec![line.to_string()];
+            assert_eq!(
+                parse_lines(&measured(1, display, value, unit), &t)
+                    .drafts
+                    .len(),
+                1,
+                "{line:?} should read as {value} {unit}"
+            );
+        }
+
+        // Still only the number that is printed there.
+        let na = vec!["Na 139mmol/L".to_string()];
+        assert_eq!(
+            parse_lines(&measured(1, "Na", "13", "mmol/L"), &na).dropped,
+            1
+        );
+    }
+
+    /// A printed bound is unquotable from either end, whichever end carries the
+    /// unit. Reading the dash *between* two tokens made this depend on both
+    /// bounds lexing as numbers, so an upper bound printed `99mg/dL` was not one,
+    /// the join vanished, and the lower bound became quotable as a result.
+    #[test]
+    fn a_bound_stays_a_bound_when_the_other_bound_carries_the_unit() {
+        let fused = vec!["Glucose 105 mg/dL Ref 70-99mg/dL".to_string()];
+        for (value, unit) in [("70", "mg/dL"), ("99", "mg/dL"), ("70", ""), ("99", "")] {
+            assert_eq!(
+                parse_lines(&measured(1, "Glucose", value, unit), &fused).dropped,
+                1,
+                "{value} is a reference bound, not a result"
+            );
+        }
+        // The result on that row still verifies.
+        assert_eq!(
+            parse_lines(&measured(1, "Glucose", "105", "mg/dL"), &fused)
+                .drafts
+                .len(),
+            1
+        );
+
+        // The spaced printing of the same row, and the sodium equivalent.
+        let spaced = vec!["Glucose 105 mg/dL Ref 70-99 mg/dL".to_string()];
+        assert_eq!(
+            parse_lines(&measured(1, "Glucose", "70", "mg/dL"), &spaced).dropped,
+            1
+        );
+        let sodium = vec!["Sodium 139mmol/L 135-145mmol/L".to_string()];
+        assert_eq!(
+            parse_lines(&measured(1, "Sodium", "135", "mmol/L"), &sodium).dropped,
+            1
+        );
+        assert_eq!(
+            parse_lines(&measured(1, "Sodium", "145", "mmol/L"), &sodium).dropped,
+            1
+        );
+        assert_eq!(
+            parse_lines(&measured(1, "Sodium", "139", "mmol/L"), &sodium)
+                .drafts
+                .len(),
+            1
+        );
     }
 }
