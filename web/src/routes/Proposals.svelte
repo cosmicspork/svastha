@@ -36,6 +36,18 @@
     shown = { ...shown, [fromEd]: shownFor(fromEd) + PROPOSALS_PAGE_SIZE }
   }
 
+  // A proposer that no longer has pending drafts has finished this inbox
+  // session. Drop its expanded window so a later, independent batch from the
+  // same identity begins at the first page.
+  $effect(() => {
+    const active = new Set(groups.map(([fromEd]) => fromEd))
+    if (Object.keys(shown).some((fromEd) => !active.has(fromEd))) {
+      shown = Object.fromEntries(
+        Object.entries(shown).filter(([fromEd]) => active.has(fromEd)),
+      )
+    }
+  })
+
   // Approve-all confirmation sheet: holds the proposer whose sheet is open, or
   // null when closed. The records/count are re-derived from `groups` at
   // render time (not snapshotted here) so the sheet stays correct if the
@@ -45,6 +57,14 @@
     groups.find(([fromEd]) => fromEd === confirmFromEd)?.[1] ?? [],
   )
   const confirmCount = $derived(pendingCount(confirmRecords))
+
+  // If a concurrent update resolves this group, discard its confirmation. A
+  // later batch from the same identity must require a new explicit approval.
+  $effect(() => {
+    if (confirmFromEd && !groups.some(([fromEd]) => fromEd === confirmFromEd)) {
+      confirmFromEd = null
+    }
+  })
 
   function closeConfirm(): void {
     confirmFromEd = null

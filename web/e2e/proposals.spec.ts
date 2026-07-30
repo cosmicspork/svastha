@@ -113,9 +113,11 @@ async function depositManyProposals(
   ownerWords: string[],
   drafts: DraftSpec[],
   chunkSize = 5,
+  proposerMnemonic?: string,
+  mailboxItemPrefix = 'proposal',
 ): Promise<Deposited> {
   return page.evaluate(
-    async ({ relay, words, drafts, chunkSize }) => {
+    async ({ relay, words, drafts, chunkSize, proposerMnemonic, mailboxItemPrefix }) => {
       const { initSvastha, WasmIdentity, event_id } = await import('/src/lib/svastha.ts')
       const { RelayClient } = await import('/src/lib/relay.ts')
       const { fromHex } = await import('/src/lib/hex.ts')
@@ -123,7 +125,9 @@ async function depositManyProposals(
       await initSvastha()
 
       const owner = WasmIdentity.from_mnemonic(words.join(' '), '')
-      const proposer = WasmIdentity.generate()
+      const proposer = proposerMnemonic
+        ? WasmIdentity.from_mnemonic(proposerMnemonic, '')
+        : WasmIdentity.generate()
       const client = new RelayClient(relay, proposer)
 
       const isoAt = (i: number): string => {
@@ -158,7 +162,7 @@ async function depositManyProposals(
         )
         await client.putMailbox(
           owner.ed25519_public_hex,
-          `proposal-${start}`,
+          `${mailboxItemPrefix}-${start}`,
           new TextEncoder().encode(envelope),
         )
       }
@@ -175,7 +179,7 @@ async function depositManyProposals(
         eventIds: allEventIds,
       }
     },
-    { relay: RELAY, words: ownerWords, drafts, chunkSize },
+    { relay: RELAY, words: ownerWords, drafts, chunkSize, proposerMnemonic, mailboxItemPrefix },
   )
 }
 
@@ -423,4 +427,54 @@ test('paginates a large group and confirms approve-all via the sheet, including 
   const rejected = results.flatMap((r) => r.rejected)
   expect(accepted.sort()).toEqual([...deposited.eventIds].sort())
   expect(rejected).toEqual([])
+
+  // A completed group is removed from the pending store. When that identity
+  // proposes another large batch later, its new inbox should start at page one,
+  // rather than inheriting the now-absent group's expanded window.
+  const followUpDrafts = Array.from({ length: 23 }, (_, i) => ({
+    value: { text: `Follow-up entry ${i}` },
+  }))
+  await depositManyProposals(
+    page,
+    words,
+    followUpDrafts,
+    5,
+    deposited.proposerMnemonic,
+    'proposal-follow-up',
+  )
+  await syncUntil(page, async () => {
+    await page.evaluate(() => (window.location.hash = '#/proposals'))
+    await expect(page.getByTestId('proposal-draft')).toHaveCount(20)
+  })
+
+  // A concurrent decision can make an open sheet's group disappear. That
+  // abandoned confirmation must not re-open on a later batch from the same
+  // identity — it was never confirmation for that batch.
+  await page.getByTestId('proposer-approve-all').click()
+  await expect(page.getByTestId('approve-all-heading')).toHaveText('Approve 23 entries?')
+  await page.evaluate(async () => {
+    // This must run in the app's browser context to simulate another client
+    // updating the shared IndexedDB state.
+    const { listProposals, setDraftStatus } = await import('/src/lib/proposals.ts')
+    for (const record of await listProposals()) {
+      for (const draft of record.drafts) {
+        await setDraftStatus(record.id, draft.event.id, 'rejected')
+      }
+    }
+  })
+  await expect(page.getByTestId('proposals-empty')).toBeVisible()
+
+  await depositManyProposals(
+    page,
+    words,
+    [{ value: { text: 'Final entry 0' } }, { value: { text: 'Final entry 1' } }],
+    5,
+    deposited.proposerMnemonic,
+    'proposal-final',
+  )
+  await syncUntil(page, async () => {
+    await page.evaluate(() => (window.location.hash = '#/proposals'))
+    await expect(page.getByTestId('proposal-draft')).toHaveCount(2)
+  })
+  await expect(page.getByTestId('approve-all-heading')).toHaveCount(0)
 })
