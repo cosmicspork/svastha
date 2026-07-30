@@ -556,9 +556,24 @@ envelope — it is opaque sealed bytes to the crypto above.
   A mailbox is a set, not a queue, so two of these from one owner can be handed
   over in either order. Within a pass a node therefore applies only the **latest**
   of an owner's `set_answer_scope` commands, ordered by the signed `sent_at` and
-  tie-broken on the envelope id; a superseded one is still answered `ok: true`,
-  saying a later instruction is in force. This is a within-pass rule only — it is
-  not a general ordering guarantee for the mailbox, and no ordering token exists.
+  tie-broken on the envelope id. This is a within-pass rule only — it is not a
+  general ordering guarantee for the mailbox, and no ordering token exists.
+
+  A superseded command is answered **`ok: false`**: on this wire `ok` means
+  *this command was applied*, and a command the node declined to act on has not
+  been. (Answering `true` is what let a second device read its own reply as "the
+  node is doing what I asked" while the node enforced another device's choice.)
+
+  Every `admin_reply` to a `set_answer_scope` — applied or not — ends its
+  `detail` with the scope now in force, in a fixed form a client can parse:
+  `[scope: cycle,mind]`, with category wire names comma-separated in the
+  canonical order, or `[scope: none]` for nothing opted in. A client treats the
+  command as applied **only** when `ok` is true *and* the stated scope equals the
+  set it asked for; a reply stating a different scope means another device won,
+  and a reply stating none at all cannot be checked and must not be read as
+  agreement. `ok` alone is not sufficient, by design — with several devices the
+  question "was my command applied" and the question "what is in force now" have
+  different answers, and only the second one is worth acting on.
 - `admin_reply` — `{ in_reply_to, ok, detail? }`.
 - `chat_msg` — `{ role, text, citations: [event_id…] }`: a retrieval-augmented Q&A
   turn; an answer carries the event ids it cited.

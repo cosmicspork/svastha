@@ -401,6 +401,16 @@
     <button type="button" onclick={retryScope} disabled={optInBusy} data-testid="answer-optin-retry">
       Send again
     </button>
+  {:else if nodeScope.state === 'superseded'}
+    <p class="error" data-testid="answer-optin-node-superseded">
+      Your node is using a different setting — {nodeScope.applied.length > 0
+        ? `it is reading ${nodeScope.applied.map((c) => CATEGORY_META[c].label).join(' and ')}`
+        : 'it is reading neither of these'}, because another of your devices set it more recently.
+      Send again to make this device's choice the one in force.
+    </p>
+    <button type="button" onclick={retryScope} disabled={optInBusy} data-testid="answer-optin-retry">
+      Send again
+    </button>
   {:else if nodeScope.state === 'node-changed'}
     <p class="error" data-testid="answer-optin-node-changed">
       Your node has changed since you last set this, so the node you're using now has never been

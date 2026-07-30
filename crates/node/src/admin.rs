@@ -72,12 +72,13 @@ const DEFAULT_LOG_LINES: usize = 40;
 /// than letting mailbox iteration decide.
 type ScopeStamp = (i64, String);
 
-/// Whether `candidate` is a later instruction than the one already applied in
-/// this pass (if any). See [`ScopeStamp`].
-fn supersedes(candidate: &ScopeStamp, applied: Option<&ScopeStamp>) -> bool {
-    match applied {
+/// Whether `candidate` is a later instruction than `best` (if any) — the rule
+/// [`run`] folds over an owner's scope commands to pick the pass's winner. See
+/// [`ScopeStamp`].
+fn supersedes(candidate: &ScopeStamp, best: Option<&ScopeStamp>) -> bool {
+    match best {
         None => true,
-        Some(applied) => candidate > applied,
+        Some(best) => candidate > best,
     }
 }
 
@@ -114,15 +115,26 @@ pub fn run(
     let mut report = AdminReport::default();
     let node = client.identity();
 
-    // The newest `set_answer_scope` applied so far this pass, per owner. The
-    // mailbox hands items over in no particular order (the relay lists from a
-    // map), so two instructions sent seconds apart can arrive reversed — and the
-    // node would then settle on the stale one, having answered `ok` to both. A
-    // scope command that is older than one already applied is therefore answered
-    // but not applied, which leaves the pass ending on the owner's last word
-    // whichever way round they turn up. Only this command is ordered: it is the
-    // one whose stale application silently keeps disclosing.
-    let mut applied_scopes: BTreeMap<String, ScopeStamp> = BTreeMap::new();
+    // ## Why this pass is in two phases
+    //
+    // The mailbox hands items over in no particular order (the relay lists from a
+    // map), so two `set_answer_scope` instructions sent seconds apart can arrive
+    // reversed. Applying them as they come lands the node on the stale one
+    // whenever that happens.
+    //
+    // A guard that skips an out-of-order command is not enough, and the way it
+    // fails is worth stating: when the older one happens to arrive *first* it is
+    // genuinely applied — and answered `ok: true` — and then overwritten by the
+    // newer one later in the same pass. Its sender is told its scope is in force
+    // when, moments later, it is not. `ok` means applied, so the only way for
+    // every reply in the pass to be true is to decide the winner **before**
+    // answering anyone.
+    //
+    // So: phase one gathers and vets, phase two applies and replies. Only
+    // `set_answer_scope` is ordered this way — it is the one whose stale
+    // application keeps disclosing silently.
+    let mut gathered: Vec<Gathered> = Vec::new();
+    let mut winners: BTreeMap<String, ScopeStamp> = BTreeMap::new();
 
     for entry in client.list_mailbox()? {
         let Some((bytes, from_relay)) = client.get_mailbox(&entry.id)? else {
@@ -168,36 +180,96 @@ pub fn run(
             continue;
         };
 
-        let (ok, detail) = execute(
-            &body.command,
+        let stamp: ScopeStamp = (msg.sent_at, msg_id.clone());
+        if matches!(body.command, AdminCommand::SetAnswerScope { .. })
+            && supersedes(&stamp, winners.get(&owner_hex))
+        {
+            winners.insert(owner_hex.clone(), stamp.clone());
+        }
+
+        gathered.push(Gathered {
+            entry_id: entry.id,
+            msg_id,
+            owner_hex,
+            owner_x25519,
+            stamp,
+            command: body.command,
+        });
+    }
+
+    // Phase two, first the winners. Applying them before anything is answered is
+    // what lets every reply below describe the scope the pass actually settled
+    // on — a superseded command's reply names the scope that beat it, and a
+    // `job_status` in the same pass reports the same thing. Answering in arrival
+    // order would let a reply quote a scope that was true only mid-pass.
+    let mut settled: BTreeMap<String, (bool, String)> = BTreeMap::new();
+    for item in &gathered {
+        let is_winner = matches!(item.command, AdminCommand::SetAnswerScope { .. })
+            && winners.get(&item.owner_hex) == Some(&item.stamp);
+        if !is_winner {
+            continue;
+        }
+        let outcome = execute(
+            &item.command,
             state,
             inference,
             control,
             scopes,
             logs,
-            &owner_hex,
-            (msg.sent_at, msg_id.clone()),
-            &mut applied_scopes,
+            &item.owner_hex,
+            false,
         );
+        settled.insert(item.msg_id.clone(), outcome);
+    }
+
+    // Then answer everyone, winners included (their outcome is already decided).
+    for item in gathered {
+        let (ok, detail) = match settled.remove(&item.msg_id) {
+            Some(outcome) => outcome,
+            None => {
+                let superseded = matches!(item.command, AdminCommand::SetAnswerScope { .. });
+                execute(
+                    &item.command,
+                    state,
+                    inference,
+                    control,
+                    scopes,
+                    logs,
+                    &item.owner_hex,
+                    superseded,
+                )
+            }
+        };
         let reply = AdminReplyBody {
-            in_reply_to: msg_id.clone(),
+            in_reply_to: item.msg_id.clone(),
             ok,
             detail: Some(detail),
         };
-        match deposit_reply(client, node, &owner_hex, owner_x25519, &reply) {
+        match deposit_reply(client, node, &item.owner_hex, item.owner_x25519, &reply) {
             Ok(()) => {
-                journal.mark_request_handled(&msg_id)?;
-                let _ = client.delete_mailbox(&entry.id);
+                journal.mark_request_handled(&item.msg_id)?;
+                let _ = client.delete_mailbox(&item.entry_id);
                 report.replied += 1;
-                tracing::info!(owner = short(&owner_hex), ok, "admin command answered");
+                tracing::info!(owner = short(&item.owner_hex), ok, "admin command answered");
             }
             Err(e) => {
                 report.deferred += 1;
-                tracing::warn!(owner = short(&owner_hex), error = %e, "admin reply deposit failed; will retry");
+                tracing::warn!(owner = short(&item.owner_hex), error = %e, "admin reply deposit failed; will retry");
             }
         }
     }
     Ok(report)
+}
+
+/// One vetted command, held between the pass's two phases. Carries only what
+/// phase two needs; the envelope itself is not kept.
+struct Gathered {
+    entry_id: String,
+    msg_id: String,
+    owner_hex: String,
+    owner_x25519: [u8; 32],
+    stamp: ScopeStamp,
+    command: AdminCommand,
 }
 
 /// Execute one command, returning `(ok, detail)`. Never fails the pass — a bad
@@ -211,8 +283,10 @@ fn execute(
     scopes: &mut AnswerScopeControl,
     logs: &LogBuffer,
     owner_hex: &str,
-    stamp: ScopeStamp,
-    applied_scopes: &mut BTreeMap<String, ScopeStamp>,
+    // Set only for a `set_answer_scope` that is not this owner's latest in the
+    // pass. Decided by the caller, which is the only place that can see all of
+    // them (see `run`).
+    superseded: bool,
 ) -> (bool, String) {
     match command {
         AdminCommand::JobStatus => (
@@ -242,21 +316,37 @@ fn execute(
         // for the same reason pausing is, and for one more: an opt-in to your own
         // cycle or mind entries is not a choice anyone else can make for you.
         AdminCommand::SetAnswerScope { include } => {
-            if !supersedes(&stamp, applied_scopes.get(owner_hex)) {
-                // Understood and accepted — it simply is not the owner's latest
-                // word, and applying it would undo one they sent afterwards.
+            if superseded {
+                // Understood, and deliberately **not applied** — a later
+                // instruction from this owner is in force, and applying this one
+                // would undo it.
+                //
+                // `ok: false`, because on this wire `ok` means applied. Answering
+                // `true` for a command the node declined to act on is the one
+                // thing a second device cannot detect: it would read its own
+                // reply as "the node is doing what I asked" while the node was
+                // enforcing the other device's choice. The marker then says what
+                // *is* in force, so the device can see the difference rather than
+                // take the boolean's word for it.
+                let scope = scopes.scope(owner_hex);
                 return (
-                    true,
+                    false,
                     format!(
-                        "a later instruction of yours is in force, so this one was not applied; {}",
-                        scopes.scope(owner_hex).describe()
+                        "a later instruction of yours is in force, so this one was not applied; {} {}",
+                        scope.describe(),
+                        scope.marker()
                     ),
                 );
             }
             match scopes.set_scope(owner_hex, include) {
                 Ok(detail) => {
-                    applied_scopes.insert(owner_hex.to_string(), stamp);
-                    (true, detail)
+                    // Applied — and it still states the resulting scope, so a
+                    // client confirms on an exact match rather than on `ok`
+                    // alone. One rule for every reply.
+                    (
+                        true,
+                        format!("{detail} {}", scopes.scope(owner_hex).marker()),
+                    )
                 }
                 Err(msg) => (false, msg),
             }

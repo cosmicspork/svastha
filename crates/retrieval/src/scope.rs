@@ -145,6 +145,26 @@ impl AnswerScope {
         self.include.is_empty()
     }
 
+    /// The machine-readable half of an `admin_reply` detail: `[scope: cycle,mind]`,
+    /// or `[scope: none]` when nothing is opted in.
+    ///
+    /// A reply's `ok` says whether *that command* was applied; this says what is
+    /// in force **now**. The two are different questions, and the client needs
+    /// the second one to check that the node ended up where it asked rather than
+    /// trusting a boolean — with several devices, a command can be understood,
+    /// answered, and still not be the instruction the node settled on.
+    ///
+    /// Wire format, so the wording is fixed even though the prose around it is
+    /// not: square brackets, the literal `scope: `, category wire names in
+    /// [`SensitiveCategory::ALL`] order separated by commas, `none` for empty.
+    pub fn marker(&self) -> String {
+        if self.include.is_empty() {
+            return "[scope: none]".to_string();
+        }
+        let names: Vec<&str> = self.included().map(|c| c.wire_name()).collect();
+        format!("[scope: {}]", names.join(","))
+    }
+
     /// An owner-facing description of what an answer may read — the text an
     /// `admin_reply` carries back so the owner can check the node agrees with
     /// the switches in the app.
@@ -277,6 +297,21 @@ mod tests {
         );
         assert_eq!(SensitiveCategory::parse("vital"), None);
         assert_eq!(SensitiveCategory::parse("Cycle"), None);
+    }
+
+    #[test]
+    fn the_marker_states_the_scope_in_a_parseable_form() {
+        assert_eq!(AnswerScope::default().marker(), "[scope: none]");
+        assert_eq!(
+            AnswerScope::new([SensitiveCategory::Cycle]).marker(),
+            "[scope: cycle]"
+        );
+        // Stable order regardless of how the set was built, so a client can
+        // compare it against its own ordered list element-wise.
+        assert_eq!(
+            AnswerScope::new([SensitiveCategory::Mind, SensitiveCategory::Cycle]).marker(),
+            "[scope: cycle,mind]"
+        );
     }
 
     #[test]

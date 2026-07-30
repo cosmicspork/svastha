@@ -177,6 +177,10 @@ export type NodeScopeState =
    * the current node is doing is simply unknown — it was never told — so nothing
    * about the old node's answer carries over. */
   | { state: 'node-changed' }
+  /** The node answered, and stated a scope that is not the one this device
+   * asked for — another device set it more recently. `applied` is what the node
+   * says is in force. */
+  | { state: 'superseded'; applied: Category[] }
 
 /** The reply-bearing shape {@link resolveNodeScopeState} reads from the admin
  * log. Structurally satisfied by `nodeadmin.ts`'s `AdminLogEntry`, taken as a
@@ -225,9 +229,45 @@ export function resolveNodeScopeState(
   if (pending.nodeEd !== enrolledNodeEd) return { state: 'node-changed' }
 
   const reply = log.find((e) => e.id === pending.id)?.reply
-  if (reply) return reply.ok ? { state: 'confirmed' } : { state: 'refused', detail: reply.detail }
+  if (reply) {
+    // Verify, do not trust. `ok` is the node's claim that *this command* was
+    // applied; the marker is what it says is in force now. With more than one
+    // device, those come apart — an instruction can be understood, answered, and
+    // still not be the one the node settled on. So a confirmation needs the
+    // stated scope to be the scope this device asked for.
+    const applied = parseScopeMarker(reply.detail)
+    if (applied && !sameInclude(applied, include)) return { state: 'superseded', applied }
+    if (!reply.ok) return { state: 'refused', detail: reply.detail }
+    // Answered ok, but stated nothing: an older node build that applies the
+    // command without saying what it applied. Nothing to check it against, so it
+    // gets the same treatment as a node that never answered — and the same
+    // re-send offer.
+    if (!applied) return { state: 'unconfirmed' }
+    return { state: 'confirmed' }
+  }
   const age = now - new Date(pending.sentAt).getTime()
   return age < CONFIRM_WINDOW_MS ? { state: 'pending' } : { state: 'unconfirmed' }
+}
+
+/**
+ * Read the scope a node stated in an `admin_reply` detail: `[scope: cycle,mind]`,
+ * or `[scope: none]` for nothing opted in. Null when the detail states no scope
+ * at all, which is the one thing a caller must not read as agreement.
+ *
+ * A category this build does not know is dropped rather than guessed at — the
+ * comparison it feeds is about *this* build's switches, and an unknown name is
+ * not one of them.
+ */
+export function parseScopeMarker(detail: string | undefined): Category[] | null {
+  if (!detail) return null
+  const match = /\[scope: ([^\]]+)\]/.exec(detail)
+  if (!match) return null
+  const body = match[1].trim()
+  if (body === 'none') return []
+  const named = new Set(body.split(',').map((s) => s.trim()))
+  // Rebuilt in OPT_IN_CATEGORIES order so the comparison against `include`
+  // (built by `includeList`, same order) is a plain element-wise one.
+  return OPT_IN_CATEGORIES.filter((c) => named.has(c))
 }
 
 /** Both lists are built by {@link includeList}, so they are already in a stable

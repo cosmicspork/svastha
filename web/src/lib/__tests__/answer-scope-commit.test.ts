@@ -74,6 +74,7 @@ import {
   loadOptIns,
   loadAnswerScope,
   resolveNodeScopeState,
+  parseScopeMarker,
   CONFIRM_WINDOW_MS,
   type AnswerScopeRecord,
 } from '../answerScope'
@@ -254,7 +255,9 @@ describe('what this device may claim about the node', () => {
   it('never leaves a stale confirmation eligible when an opt-out is only half-written', async () => {
     node.value = NODE
     await commitAnswerScope(set('cycle'))
-    const confirmedLog = [{ id: 'cmd-1', reply: { ok: true } }]
+    // The node states what it applied; the device checks it against what it
+    // asked for rather than trusting `ok`.
+    const confirmedLog = [{ id: 'cmd-1', reply: { ok: true, detail: 'applied [scope: cycle]' } }]
     expect(
       resolveNodeScopeState(await loadAnswerScope(), confirmedLog, NODE.ed, Date.now()),
     ).toEqual({ state: 'confirmed' })
@@ -340,13 +343,18 @@ describe('resolveNodeScopeState', () => {
 
   it('is confirmed only on an ok reply to this very command', () => {
     expect(
-      resolveNodeScopeState(pending(), [{ id: 'cmd-1', reply: { ok: true } }], NODE.ed, now),
+      resolveNodeScopeState(
+        pending(),
+        [{ id: 'cmd-1', reply: { ok: true, detail: 'applied [scope: cycle]' } }],
+        NODE.ed,
+        now,
+      ),
     ).toEqual({ state: 'confirmed' })
     // A reply to some other command proves nothing about this one.
     expect(
       resolveNodeScopeState(
         pending(),
-        [{ id: 'cmd-0', reply: { ok: true } }],
+        [{ id: 'cmd-0', reply: { ok: true, detail: 'applied [scope: cycle]' } }],
         NODE.ed,
         now + CONFIRM_WINDOW_MS,
       ),
@@ -521,7 +529,7 @@ describe('confirmation is bound to the node that received the command', () => {
   it('stops confirming once a different node is enrolled', async () => {
     node.value = NODE
     const commit = await commitAnswerScope(set())
-    const log = [{ id: commit.record.pending.id!, reply: { ok: true } }]
+    const log = [{ id: commit.record.pending.id!, reply: { ok: true, detail: 'x [scope: none]' } }]
 
     expect(resolveNodeScopeState(commit.record, log, NODE.ed, Date.now())).toEqual({
       state: 'confirmed',
@@ -550,7 +558,7 @@ describe('confirmation is bound to the node that received the command', () => {
     expect(
       resolveNodeScopeState(
         retry.record,
-        [{ id: retry.record.pending.id!, reply: { ok: true } }],
+        [{ id: retry.record.pending.id!, reply: { ok: true, detail: 'x [scope: none]' } }],
         NODE_B.ed,
         Date.now(),
       ),
@@ -612,5 +620,108 @@ describe('a retry that started before a newer choice', () => {
 
     // Whatever the retry wrote, it cannot predate the choice it must not undo.
     expect((await loadAnswerScope())!.generation).toBeGreaterThanOrEqual(opted_out)
+  })
+})
+
+// --- the losing device must not claim the node agrees with it ---------------
+//
+// Two devices, one owner. Both set a scope; the node applies the later one and
+// skips the earlier. The skipped command used to be answered `ok: true` — it was
+// understood, after all — and the client mapped any matching `ok: true` to
+// confirmed. So the device that LOST displayed "Your node has applied this"
+// while the node was in fact enforcing the other device's set.
+//
+// `ok` means applied. The fix is that the reply also states which scope is now
+// in force, and the client confirms only when that equals what it asked for —
+// it verifies rather than trusts.
+
+describe('two devices, one owner', () => {
+  const deviceRecord = (include: Category[], id: string): AnswerScopeRecord => ({
+    include,
+    generation: 1,
+    pending: { id, include, sentAt: new Date(1_000_000).toISOString(), nodeEd: NODE.ed },
+  })
+
+  const now = 1_000_100
+
+  it('the device whose instruction lost does not resolve confirmed', () => {
+    // This device asked for Cycle on. The node ended on the other device's
+    // opt-out and says so.
+    const loser = deviceRecord(['cycle'], 'cmd-loser')
+    const reply = {
+      ok: false,
+      detail: 'a later instruction of yours is in force, so this one was not applied [scope: none]',
+    }
+    const state = resolveNodeScopeState(loser, [{ id: 'cmd-loser', reply }], NODE.ed, now)
+
+    expect(state).not.toMatchObject({ state: 'confirmed' })
+    expect(state).toEqual({ state: 'superseded', applied: [] })
+  })
+
+  it('the device whose instruction won does resolve confirmed', () => {
+    const winner = deviceRecord([], 'cmd-winner')
+    const reply = {
+      ok: true,
+      detail: 'no opt-in entries; answers read your ordinary record only [scope: none]',
+    }
+    expect(resolveNodeScopeState(winner, [{ id: 'cmd-winner', reply }], NODE.ed, now)).toEqual({
+      state: 'confirmed',
+    })
+  })
+
+  // The general rule, not just the two-device case: an `ok` whose echoed scope
+  // is not the one asked for is not a confirmation of anything.
+  it('never confirms on an ok whose echoed scope differs from the desired set', () => {
+    const record = deviceRecord(['cycle', 'mind'], 'cmd-1')
+    const reply = { ok: true, detail: 'applied [scope: cycle]' }
+    expect(resolveNodeScopeState(record, [{ id: 'cmd-1', reply }], NODE.ed, now)).toEqual({
+      state: 'superseded',
+      applied: ['cycle'],
+    })
+  })
+
+  it('confirms on an exact match, including the empty set', () => {
+    const record = deviceRecord(['cycle', 'mind'], 'cmd-1')
+    const reply = { ok: true, detail: 'applied [scope: cycle,mind]' }
+    expect(resolveNodeScopeState(record, [{ id: 'cmd-1', reply }], NODE.ed, now)).toEqual({
+      state: 'confirmed',
+    })
+  })
+
+  // A node that answers but states nothing cannot be taken at its word — same
+  // remedy as a node too old to reply at all, and the same re-send offer.
+  it('does not confirm a reply that states no scope', () => {
+    const record = deviceRecord(['cycle'], 'cmd-1')
+    const reply = { ok: true, detail: 'applied' }
+    expect(resolveNodeScopeState(record, [{ id: 'cmd-1', reply }], NODE.ed, now)).toEqual({
+      state: 'unconfirmed',
+    })
+  })
+
+  it('still reports a genuine refusal as a refusal', () => {
+    const record = deviceRecord(['cycle'], 'cmd-1')
+    const reply = { ok: false, detail: 'could not save the answer scope: EIO' }
+    expect(resolveNodeScopeState(record, [{ id: 'cmd-1', reply }], NODE.ed, now)).toEqual({
+      state: 'refused',
+      detail: 'could not save the answer scope: EIO',
+    })
+  })
+})
+
+describe('parseScopeMarker', () => {
+  it('reads the echoed set, with none meaning empty', () => {
+    expect(parseScopeMarker('x [scope: cycle,mind]')).toEqual(['cycle', 'mind'])
+    expect(parseScopeMarker('x [scope: none]')).toEqual([])
+    expect(parseScopeMarker('x [scope: cycle]')).toEqual(['cycle'])
+  })
+
+  it('is null when nothing states a scope, so nothing can be assumed', () => {
+    expect(parseScopeMarker(undefined)).toBeNull()
+    expect(parseScopeMarker('applied')).toBeNull()
+    expect(parseScopeMarker('[scope:]')).toBeNull()
+  })
+
+  it('drops a category this build does not know rather than guessing', () => {
+    expect(parseScopeMarker('x [scope: cycle,dreams]')).toEqual(['cycle'])
   })
 })

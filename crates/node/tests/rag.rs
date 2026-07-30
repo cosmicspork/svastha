@@ -1245,7 +1245,7 @@ fn the_later_scope_instruction_wins_whatever_order_it_arrives_in() {
             (vec!["mind".into()], vec!["cycle".into()])
         };
 
-        command_at(
+        let older_id = command_at(
             &owner.id,
             &owner.client,
             &h.node,
@@ -1254,7 +1254,7 @@ fn the_later_scope_instruction_wins_whatever_order_it_arrives_in() {
             },
             1_753_000_000_000 + round * 10,
         );
-        command_at(
+        let newer_id = command_at(
             &owner.id,
             &owner.client,
             &h.node,
@@ -1276,10 +1276,27 @@ fn the_later_scope_instruction_wins_whatever_order_it_arrives_in() {
         .unwrap();
         assert_eq!(report.replied, 2, "both are answered (round {round})");
 
-        // Both instructions were understood, so both answer ok — the owner is
-        // not told anything failed, which is why the end state has to be right.
-        for reply in read_admin_replies(&owner.client, &owner.id) {
-            assert!(reply.ok, "round {round}: {:?}", reply.detail);
+        // Both are answered, but only the applied one answers `ok` — `ok` means
+        // applied, and the device whose instruction lost must be able to tell.
+        let replies = read_admin_replies(&owner.client, &owner.id);
+        let older_reply = replies
+            .iter()
+            .find(|r| r.in_reply_to == older_id)
+            .expect("the superseded command is still answered");
+        let newer_reply = replies
+            .iter()
+            .find(|r| r.in_reply_to == newer_id)
+            .expect("the applied command is answered");
+        assert!(!older_reply.ok, "round {round}: superseded is not applied");
+        assert!(newer_reply.ok, "round {round}: the later one is applied");
+        // And both state the same in-force scope, so either device can check.
+        let marker = format!("[scope: {}]", newer.join(","));
+        for reply in [older_reply, newer_reply] {
+            let detail = reply.detail.as_deref().unwrap_or_default();
+            assert!(
+                detail.contains(&marker),
+                "round {round}: reply states the scope in force, got: {detail}"
+            );
         }
 
         let scope = sc.scope(&hex_ed(&owner.id));
@@ -1297,4 +1314,127 @@ fn the_later_scope_instruction_wins_whatever_order_it_arrives_in() {
             );
         }
     }
+}
+
+/// What the node tells each device when two of an owner's scope instructions
+/// land in one pass.
+///
+/// `ok` on this wire means **applied**. A skipped command answered `ok: true`
+/// broke that: the device whose instruction lost was told, in the only field it
+/// could check, that its scope was in force — while the node was enforcing the
+/// other device's. So a skipped command answers `ok: false`, and every reply
+/// states the scope now in force in a form the client can parse and compare, so
+/// a device verifies rather than trusts.
+#[test]
+fn a_superseded_scope_command_is_not_reported_as_applied() {
+    let h = Harness::new(b"scope reply node");
+    let owner = h.add_owner(b"scope reply owner");
+    h.enroll_and_sync();
+
+    // Device A asks for Cycle on; device B, later, asks for nothing.
+    let a = command_at(
+        &owner.id,
+        &owner.client,
+        &h.node,
+        AdminCommand::SetAnswerScope {
+            include: vec!["cycle".into()],
+        },
+        1_753_000_000_000,
+    );
+    let b = command_at(
+        &owner.id,
+        &owner.client,
+        &h.node,
+        AdminCommand::SetAnswerScope { include: vec![] },
+        1_753_000_000_005,
+    );
+
+    let logs = LogBuffer::new();
+    let mut rt = runtime(h.dir.path(), "https://inference.internal/v1");
+    let mut journal = h.journal();
+    let mut sc = scopes(&h);
+    admin::run(
+        &h.node_client,
+        &h.state,
+        &mut rt,
+        &mut control(&h),
+        &mut sc,
+        &logs,
+        &mut journal,
+    )
+    .unwrap();
+
+    let replies = read_admin_replies(&owner.client, &owner.id);
+    let reply_a = replies
+        .iter()
+        .find(|r| r.in_reply_to == a)
+        .expect("A is answered");
+    let reply_b = replies
+        .iter()
+        .find(|r| r.in_reply_to == b)
+        .expect("B is answered");
+
+    // A lost. It must not be able to read its reply as "applied".
+    assert!(
+        !reply_a.ok,
+        "a command that was not applied cannot answer ok: true"
+    );
+    // B won.
+    assert!(reply_b.ok);
+
+    // Both state the scope actually in force, so either device can compare it
+    // with what it asked for rather than trusting a boolean.
+    for reply in [reply_a, reply_b] {
+        let detail = reply.detail.as_deref().unwrap_or_default();
+        assert!(
+            detail.contains("[scope: none]"),
+            "reply states the scope in force, got: {detail}"
+        );
+    }
+    // And the scope really is B's.
+    let mood = app_local_entry(&owner.id, "mood", "Mood", "2026-01-05");
+    let cycle = app_local_entry(&owner.id, "cycle-start", "Period start", "2026-01-05");
+    let scope = sc.scope(&hex_ed(&owner.id));
+    assert!(!scope.allows(&mood.event) && !scope.allows(&cycle.event));
+}
+
+/// An applied command echoes what it applied, not merely that it worked.
+#[test]
+fn an_applied_scope_command_states_the_scope_it_put_in_force() {
+    let h = Harness::new(b"scope echo node");
+    let owner = h.add_owner(b"scope echo owner");
+    h.enroll_and_sync();
+
+    let id = command(
+        &owner.id,
+        &owner.client,
+        &h.node,
+        AdminCommand::SetAnswerScope {
+            include: vec!["cycle".into(), "mind".into()],
+        },
+    );
+    let logs = LogBuffer::new();
+    let mut rt = runtime(h.dir.path(), "https://inference.internal/v1");
+    let mut journal = h.journal();
+    admin::run(
+        &h.node_client,
+        &h.state,
+        &mut rt,
+        &mut control(&h),
+        &mut scopes(&h),
+        &logs,
+        &mut journal,
+    )
+    .unwrap();
+
+    let reply = read_admin_replies(&owner.client, &owner.id)
+        .into_iter()
+        .find(|r| r.in_reply_to == id)
+        .expect("answered");
+    assert!(reply.ok);
+    let detail = reply.detail.as_deref().unwrap();
+    assert!(
+        detail.contains("[scope: cycle,mind]"),
+        "echoes the applied set in a parseable form, got: {detail}"
+    );
 }
