@@ -58,9 +58,12 @@ const PLAINTEXT_BUDGET: usize = 1600;
 pub struct OcrReport {
     /// Sources for which a proposal batch was deposited.
     pub proposals: u64,
-    /// Sources that extracted nothing (recorded processed, not proposed).
+    /// Sources the model read and reported nothing on (recorded processed, not
+    /// proposed). Terminal — so strictly the page it said was blank, never a
+    /// page whose answer merely came back unusable.
     pub empties: u64,
-    /// Sources whose inference or deposit failed this pass (backed off).
+    /// Sources whose read, inference, answer or deposit failed this pass (backed
+    /// off, and eligible again once the back-off elapses).
     pub failed: u64,
     /// Incoming `proposal_result`s that newly resolved a source.
     pub resolved: u64,
@@ -109,6 +112,11 @@ pub fn run(
     // nothing to do with whether we are reading. Only the reading stops.
     if control.paused() {
         report.paused = true;
+        // `queued` is a gauge, not a record of this pass. Skipping the record
+        // while paused freezes it at whatever it was the moment the owner
+        // paused, so an owner who pauses and then asks what is outstanding is
+        // answered with a stale number.
+        record_run(state, journal, &report);
         return Ok(report);
     }
 
@@ -124,8 +132,8 @@ pub fn run(
             }
             // Stand down for this pass once the cap is reached; the next
             // reconcile picks up where this left off. Counted against pages
-            // actually read, not pages skipped, so a large already-processed
-            // vault still makes progress on its few new pages.
+            // attempted, not pages skipped, so a large already-processed vault
+            // still makes progress on its few new pages.
             if read_this_pass >= control.max_pages_per_pass() {
                 report.deferred_to_next_pass += 1;
                 break 'outer;
@@ -139,6 +147,13 @@ pub fn run(
                     continue;
                 }
             };
+
+            // Counted before the read, not after a successful one: the OCR pass
+            // below costs the same whether the page comes back as text, as
+            // nothing, or as an error, so charging only the successes let a
+            // vault of unreadable pages run unbounded reads in one reconcile —
+            // exactly the loop the cap exists to bound.
+            read_this_pass += 1;
 
             // Stage A, in-process: the page becomes text here and the bytes go
             // no further. A page that cannot be read is terminal for this pass —
@@ -167,8 +182,6 @@ pub fn run(
                 }
             };
 
-            read_this_pass += 1;
-
             // Stage B: only the transcript crosses to the endpoint.
             match inference.code_page(&crate::transcribe::numbered(&lines)) {
                 Err(e) => {
@@ -188,10 +201,36 @@ pub fn run(
                     // proposed. This is what a single read-and-code pass could not do.
                     let extracted = extract::parse_lines(&answer, &lines);
                     report.dropped_findings += extracted.dropped;
-                    if extracted.drafts.is_empty() {
-                        journal.mark_empty(&job.owner_hex, &source_id)?;
-                        report.empties += 1;
-                        continue;
+                    // Only one of the three empty-handed outcomes is a verdict on
+                    // the page, and `mark_empty` is terminal — so the other two
+                    // have to back off instead, or a bad answer buries a readable
+                    // page for the life of the journal.
+                    match extracted.outcome() {
+                        // The coding model failed to answer in the schema, or
+                        // answered with claims that could not be read or could
+                        // not be verified against the line they cited. Either
+                        // way it says nothing about what is on the page.
+                        outcome
+                        @ (extract::Outcome::Unparseable | extract::Outcome::AllDropped) => {
+                            journal.mark_failed(&job.owner_hex, &source_id, now_secs)?;
+                            report.failed += 1;
+                            tracing::warn!(
+                                owner = short(&job.owner_hex),
+                                model = inference.model(),
+                                dropped = extracted.dropped,
+                                ?outcome,
+                                "no usable findings from the coding model; backing off this page"
+                            );
+                            continue;
+                        }
+                        // The model read the transcript and reported nothing on
+                        // it. Recorded processed, not proposed.
+                        extract::Outcome::NothingOnThePage => {
+                            journal.mark_empty(&job.owner_hex, &source_id)?;
+                            report.empties += 1;
+                            continue;
+                        }
+                        extract::Outcome::Proposed => {}
                     }
                     let drafts = build_draft_proposals(
                         extracted.drafts,
@@ -219,13 +258,20 @@ pub fn run(
         }
     }
 
-    let queued = journal.awaiting_retry();
+    record_run(state, journal, &report);
+    Ok(report)
+}
+
+/// Fold one pass's outcome into the job-status counters: refresh the `queued`
+/// gauge from the journal and add this pass's work to the cumulative totals.
+/// Called on every path out of [`run`], including the paused one, where the
+/// work is zero but the gauge still has to be current.
+fn record_run(state: &Mutex<NodeState>, journal: &Journal, report: &OcrReport) {
     state.lock().expect("node state mutex").record_ocr_run(
-        queued,
+        journal.awaiting_retry(),
         report.proposals + report.empties,
         report.failed,
     );
-    Ok(report)
 }
 
 /// Snapshot each owner's image-attachment work list under the state lock.

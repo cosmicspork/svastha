@@ -627,9 +627,11 @@ pub fn extract_user_prompt() -> String {
 /// was coded from. `lines_json` is a JSON array of the numbered lines in order,
 /// so `lines_json[0]` is line 1.
 ///
-/// Returns `{"drafts": [...], "dropped": n}`. A finding that cites no line,
-/// cites one that does not exist, or cites a line that does not contain what it
-/// claims is dropped and counted — never proposed.
+/// Returns `{"drafts": [...], "dropped": n, "unparseable": bool}`. A finding
+/// that cites no line, cites one that does not exist, or cites a line that does
+/// not contain what it claims is dropped and counted — never proposed.
+/// `unparseable` marks an answer that was not a findings object at all, which is
+/// a formatting failure rather than a page with nothing on it.
 #[wasm_bindgen]
 pub fn code_from_lines(answer: &str, lines_json: &str) -> Result<String, JsError> {
     let lines: Vec<String> = serde_json::from_str(lines_json).map_err(to_js)?;
