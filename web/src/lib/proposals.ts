@@ -159,6 +159,53 @@ export function pendingDraftCount(records: ProposalRecord[]): number {
   return records.reduce((n, r) => n + r.drafts.filter((d) => d.status === 'pending').length, 0)
 }
 
+// --- pagination (M5/D5): a proposer group renders 20 drafts at a time ---
+
+export const PROPOSALS_PAGE_SIZE = 20
+
+/** Flatten a proposer's records into their drafts in the order the inbox
+ * displays them (record order, then each record's own draft order). A
+ * draft's position depends only on this order, never on its `status` — so
+ * approving/rejecting a draft in place can't move the pagination boundary. */
+export function flattenDrafts(
+  records: ProposalRecord[],
+): { record: ProposalRecord; draft: ProposalDraft }[] {
+  const out: { record: ProposalRecord; draft: ProposalDraft }[] = []
+  for (const record of records) {
+    for (const draft of record.drafts) out.push({ record, draft })
+  }
+  return out
+}
+
+/** The first `shown` drafts of a group (decided or pending — pagination
+ * doesn't discriminate) plus how many are still hidden, for the "Show N
+ * more" control. */
+export function visibleDrafts(
+  records: ProposalRecord[],
+  shown: number,
+): { visible: { record: ProposalRecord; draft: ProposalDraft }[]; remaining: number } {
+  const flat = flattenDrafts(records)
+  return { visible: flat.slice(0, shown), remaining: Math.max(0, flat.length - shown) }
+}
+
+// --- approve-all confirmation sheet (M5/D5) ---
+
+/** Copy for the approve-all confirmation sheet. Design-locked: both the
+ * heading and the confirm button echo the exact pending count, so "all"
+ * never reads as ambiguous about scope (it's every pending draft in the
+ * group, not just what's currently paginated into view). */
+export function approveAllSheetCopy(count: number): {
+  heading: string
+  body: string
+  confirmLabel: string
+} {
+  return {
+    heading: `Approve ${count} entries?`,
+    body: 'Each one is signed with your key, exactly as if you had logged it yourself. You can still edit or remove entries afterwards.',
+    confirmLabel: `Approve ${count}`,
+  }
+}
+
 // --- store ---
 
 /** All records with pending drafts, mirrored for the badge and the inbox
