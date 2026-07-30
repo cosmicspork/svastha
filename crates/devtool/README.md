@@ -56,6 +56,10 @@ just accuracy --only tight-rows  # one fixture
 just accuracy --vision           # add the retired vision path (needs _VISION_MODEL)
 ```
 
+`--only` is diagnostic: if its filter omits any committed fixture, the ship
+gates report `INCONCLUSIVE` and the command exits non-zero. A partial run is
+useful for investigating one page, never for clearing a default.
+
 | Variable | |
 |---|---|
 | `SVASTHA_DEVTOOL_ENDPOINT` | OpenAI-compatible base URL. **Required** — without it the tool refuses and explains. |

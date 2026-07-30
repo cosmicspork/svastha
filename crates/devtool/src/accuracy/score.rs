@@ -44,11 +44,12 @@ pub struct Truth {
     pub expected: Vec<Expected>,
 }
 
-/// One (analyte, value) pair a reader's run actually proposed.
+/// One (analyte, value, unit) result a reader's run actually proposed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Proposed {
     pub analyte: String,
     pub value: String,
+    pub unit: String,
 }
 
 /// What one proposed pair turned out to be.
@@ -117,19 +118,27 @@ pub fn unreadable(truth: &Truth, why: String) -> Score {
     }
 }
 
-/// Recover the (analyte, value) pair a draft asserts, or `None` for a draft that
-/// makes no such claim — a coded condition with no measurement, say. Those are
-/// neither right nor wrong against an answer key made of result rows, so they
-/// are left out of the score entirely rather than counted as false positives.
+/// Recover a measured result a draft asserts. A coded condition with no
+/// measurement is out of scope for answer keys made of result rows, but a
+/// quantity without an analyte code is still a spurious proposed event and must
+/// not disappear from precision.
 pub fn proposed_from(draft: &EventDraft) -> Option<Proposed> {
-    let code = draft.code.as_ref()?;
-    let analyte = code.display.clone().unwrap_or_else(|| code.code.clone());
-    let Some(EventValue::Quantity { value, .. }) = draft.value.as_ref() else {
+    let Some(EventValue::Quantity { value, unit }) = draft.value.as_ref() else {
         return None;
     };
+    let analyte = draft
+        .code
+        .as_ref()
+        .map(|code| code.display.clone().unwrap_or_else(|| code.code.clone()))
+        .unwrap_or_default();
+    let unit = unit
+        .as_ref()
+        .map(|unit| unit.code.clone())
+        .unwrap_or_default();
     Some(Proposed {
         analyte,
         value: value.clone(),
+        unit,
     })
 }
 
@@ -199,15 +208,62 @@ fn analyte_eq(expected: &str, proposed: &str) -> bool {
     !ca.is_empty() && ca == cb
 }
 
+/// Units are compared case-insensitively with whitespace removed, but their
+/// punctuation stays meaningful. A blank unit only matches a blank unit.
+fn unit_eq(expected: &str, proposed: &str) -> bool {
+    let normalize = |unit: &str| {
+        unit.chars()
+            .filter(|character| !character.is_whitespace())
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
+    normalize(expected) == normalize(proposed)
+}
+
+/// The normalized sign, whole and fractional parts of a base-10 number. Empty
+/// whole and fraction parts stand for zero, so `4.10` and `4.1` compare equal
+/// without ever rounding through a binary float.
+fn decimal_parts(value: &str) -> Option<(bool, &str, &str)> {
+    let (negative, unsigned) = match value.strip_prefix('-') {
+        Some(unsigned) => (true, unsigned),
+        None => (false, value.strip_prefix('+').unwrap_or(value)),
+    };
+    let (whole, fraction) = unsigned.split_once('.').unwrap_or((unsigned, ""));
+    if (whole.is_empty() && fraction.is_empty())
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let whole = whole.trim_start_matches('0');
+    let fraction = fraction.trim_end_matches('0');
+    Some((
+        negative && !(whole.is_empty() && fraction.is_empty()),
+        whole,
+        fraction,
+    ))
+}
+
 /// Numeric equality on the printed form. `4.1` and `4.10` are the same reading
-/// and both are correct; `4.1` and `41` are not.
+/// and both are correct; `4.1` and `41` are not. Empty and non-finite numbers
+/// never form a result-row match.
 fn value_eq(expected: &str, proposed: &str) -> bool {
     let (a, b) = (expected.trim(), proposed.trim());
-    if a == b {
-        return true;
+    if a.is_empty() || b.is_empty() {
+        return false;
     }
-    match (a.parse::<f64>(), b.parse::<f64>()) {
-        (Ok(x), Ok(y)) => (x - y).abs() < f64::EPSILON,
+    let is_non_finite = |value: &str| {
+        let unsigned = value.trim_start_matches(['+', '-']);
+        unsigned.eq_ignore_ascii_case("nan")
+            || unsigned.eq_ignore_ascii_case("inf")
+            || unsigned.eq_ignore_ascii_case("infinity")
+    };
+    if is_non_finite(a) || is_non_finite(b) {
+        return false;
+    }
+    match (decimal_parts(a), decimal_parts(b)) {
+        (Some(a), Some(b)) => a == b,
+        (None, None) => a == b,
         _ => false,
     }
 }
@@ -219,7 +275,11 @@ fn classify(p: &Proposed, expected: &[Expected], claimed: &mut [bool]) -> Class 
     let exact: Vec<usize> = expected
         .iter()
         .enumerate()
-        .filter(|(_, e)| analyte_eq(&e.analyte, &p.analyte) && value_eq(&e.value, &p.value))
+        .filter(|(_, e)| {
+            analyte_eq(&e.analyte, &p.analyte)
+                && value_eq(&e.value, &p.value)
+                && unit_eq(&e.unit, &p.unit)
+        })
         .map(|(i, _)| i)
         .collect();
 
@@ -234,12 +294,15 @@ fn classify(p: &Proposed, expected: &[Expected], claimed: &mut [bool]) -> Class 
         };
     }
 
-    // Not a pair on the page. It is the *dangerous* kind only if both halves are
-    // real and came from different rows — that is a mis-association, as opposed
-    // to a misread label or an invented number.
+    // Not a row on the page. It is the *dangerous* kind only if the analyte
+    // and the complete value-plus-unit result are real and came from different
+    // rows — that is a mis-association, as opposed to a misread label, unit, or
+    // invented number.
     let analyte_on_page = expected.iter().any(|e| analyte_eq(&e.analyte, &p.analyte));
-    let value_on_page = expected.iter().any(|e| value_eq(&e.value, &p.value));
-    if analyte_on_page && value_on_page {
+    let result_on_page = expected
+        .iter()
+        .any(|e| value_eq(&e.value, &p.value) && unit_eq(&e.unit, &p.unit));
+    if analyte_on_page && result_on_page {
         Class::CrossRow
     } else {
         Class::Spurious
@@ -375,6 +438,7 @@ mod tests {
         let p = Proposed {
             analyte: "Potassium".into(),
             value: "139".into(),
+            unit: "mmol/L".into(),
         };
         let t = truth();
         let mut claimed = vec![false; t.expected.len()];
@@ -409,6 +473,7 @@ mod tests {
         let p = Proposed {
             analyte: "Sodium".into(),
             value: "135".into(),
+            unit: "mmol/L".into(),
         };
         let t = truth();
         let mut claimed = vec![false; t.expected.len()];
@@ -420,10 +485,36 @@ mod tests {
         let p = Proposed {
             analyte: "Magnesium".into(),
             value: "139".into(),
+            unit: "mmol/L".into(),
         };
         let t = truth();
         let mut claimed = vec![false; t.expected.len()];
         assert_eq!(classify(&p, &t.expected, &mut claimed), Class::Spurious);
+    }
+    #[test]
+    fn a_quantity_without_an_analyte_code_is_spurious() {
+        let a = r#"{"findings":[{"kind":"observation","source_line":6,"display":"Sodium","value_quantity":"139","unit":"mmol/L","confidence":0.9}]}"#;
+        let s = score(&truth(), &svastha_import::extract::parse_lines(a, &lines()));
+
+        assert_eq!(s.proposed, 1);
+        assert_eq!(s.correct, 0);
+        assert_eq!(s.spurious, 1);
+    }
+
+    #[test]
+    fn a_wrong_unit_is_not_a_correct_row() {
+        let a = answer(&[finding(6, "Sodium", "139", "mg/dL")]);
+        let s = score(&truth(), &svastha_import::extract::parse(&a));
+
+        assert_eq!(s.proposed, 1);
+        assert_eq!(s.correct, 0);
+        assert_eq!(s.spurious, 1);
+    }
+
+    #[test]
+    fn punctuation_only_units_remain_matchable() {
+        assert!(unit_eq("%", "%"));
+        assert!(unit_eq("mg/dL", "mg / dl"));
     }
 
     #[test]
@@ -433,6 +524,7 @@ mod tests {
         let p = Proposed {
             analyte: "Sodium".into(),
             value: "139".into(),
+            unit: "mmol/L".into(),
         };
         assert_eq!(classify(&p, &t.expected, &mut claimed), Class::Correct);
         assert_eq!(classify(&p, &t.expected, &mut claimed), Class::Duplicate);
@@ -458,11 +550,14 @@ mod tests {
     }
 
     #[test]
-    fn a_trailing_zero_is_the_same_reading() {
+    fn numeric_equality_rejects_empty_and_non_finite_values() {
         assert!(value_eq("4.1", "4.10"));
         assert!(value_eq("139", "139"));
         assert!(!value_eq("4.1", "41"));
         assert!(!value_eq("0.9", "9"));
+        assert!(!value_eq("", ""));
+        assert!(!value_eq("NaN", "NaN"));
+        assert!(!value_eq("9007199254740992", "9007199254740993"));
     }
 
     /// Recall has to fall when rows go unread, and the missed rows have to be

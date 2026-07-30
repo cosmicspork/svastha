@@ -63,39 +63,94 @@ struct Fixture {
     truth: Truth,
 }
 
-/// Load every `<name>.truth.json` in `fixtures/ocr/` that has a `<name>.png`.
+/// Load every `<name>.truth.json` in `fixtures/ocr/` with its matching
+/// `<name>.png`.
 ///
-/// Driven from the answer keys rather than the images so a page committed
-/// without ground truth is skipped loudly (it appears in neither the table nor
-/// the gates) instead of being scored against nothing.
+/// A fixture pair is one test case. A missing, mismatched, or empty answer key
+/// would leave a hole in the gate's evidence, so reject it rather than silently
+/// omitting it from the report.
 fn load_fixtures(dir: &Path, only: Option<&str>) -> Result<Vec<Fixture>> {
-    let mut out = Vec::new();
     let mut entries: Vec<PathBuf> = fs::read_dir(dir)
         .with_context(|| format!("could not read {}", dir.display()))?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.to_string_lossy().ends_with(".truth.json"))
-        .collect();
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<_>>()
+        .with_context(|| format!("could not list {}", dir.display()))?;
     entries.sort();
 
-    for truth_path in entries {
-        let raw = fs::read_to_string(&truth_path)?;
+    for page in entries
+        .iter()
+        .filter(|path| path.extension().and_then(|extension| extension.to_str()) == Some("png"))
+    {
+        let name = page
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .filter(|stem| !stem.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("invalid fixture page name {}", page.display()))?;
+        let truth_path = dir.join(format!("{name}.truth.json"));
+        anyhow::ensure!(
+            truth_path.is_file(),
+            "{} has no answer key {}; every fixture page must be scored",
+            page.display(),
+            truth_path.display()
+        );
+    }
+
+    let mut out = Vec::new();
+    for truth_path in entries.iter().filter(|path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".truth.json"))
+    }) {
+        let name = truth_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_suffix(".truth.json"))
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("invalid answer-key name {}", truth_path.display()))?;
+        let expected_page = format!("{name}.png");
+        let raw = fs::read_to_string(truth_path)?;
         let truth: Truth = serde_json::from_str(&raw)
             .with_context(|| format!("could not parse {}", truth_path.display()))?;
-        let name = truth.page.trim_end_matches(".png").to_string();
-        if let Some(filter) = only {
-            if !name.contains(filter) {
-                continue;
-            }
-        }
-        let path = dir.join(&truth.page);
-        if !path.exists() {
-            anyhow::bail!(
-                "{} names {} but that page is not committed",
-                truth_path.display(),
-                truth.page
+        anyhow::ensure!(
+            truth.page == expected_page,
+            "{} names {} but must name {}",
+            truth_path.display(),
+            truth.page,
+            expected_page
+        );
+        anyhow::ensure!(
+            !truth.expected.is_empty(),
+            "{} has no expected rows",
+            truth_path.display()
+        );
+        for row in &truth.expected {
+            anyhow::ensure!(
+                !row.analyte.trim().is_empty(),
+                "{} has an expected row without an analyte",
+                truth_path.display()
+            );
+            anyhow::ensure!(
+                !row.value.trim().is_empty(),
+                "{} has an expected row without a value",
+                truth_path.display()
             );
         }
-        out.push(Fixture { name, path, truth });
+
+        let path = dir.join(&expected_page);
+        anyhow::ensure!(
+            path.is_file(),
+            "{} names {} but that page is not committed",
+            truth_path.display(),
+            expected_page
+        );
+        if only.is_some_and(|filter| !name.contains(filter)) {
+            continue;
+        }
+        out.push(Fixture {
+            name: name.to_string(),
+            path,
+            truth,
+        });
     }
     Ok(out)
 }
@@ -104,7 +159,18 @@ fn load_fixtures(dir: &Path, only: Option<&str>) -> Result<Vec<Fixture>> {
 pub fn run(config: &AccuracyConfig) -> Result<Report> {
     let endpoint = Endpoint::from_env()?;
     let root = reader::repo_root();
-    let fixtures = load_fixtures(&root.join("fixtures/ocr"), config.only.as_deref())?;
+    let all_fixtures = load_fixtures(&root.join("fixtures/ocr"), None)?;
+    let fixture_names: Vec<String> = all_fixtures
+        .iter()
+        .map(|fixture| fixture.name.clone())
+        .collect();
+    let fixtures: Vec<Fixture> = all_fixtures
+        .into_iter()
+        .filter(|fixture| match config.only.as_deref() {
+            Some(filter) => fixture.name.contains(filter),
+            None => true,
+        })
+        .collect();
     anyhow::ensure!(!fixtures.is_empty(), "no fixtures matched");
 
     let mut runs: Vec<Run> = Vec::new();
@@ -168,7 +234,7 @@ pub fn run(config: &AccuracyConfig) -> Result<Report> {
         }
     }
 
-    Ok(Report::new(runs, skipped))
+    Ok(Report::new(runs, skipped, &fixture_names))
 }
 
 /// Code one transcript through the node's real request shape and score what
@@ -248,6 +314,63 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_truth_file_must_name_the_page_with_its_own_stem() {
+        let dir = tempfile::tempdir().expect("temporary fixture directory");
+        std::fs::write(
+            dir.path().join("control.truth.json"),
+            r#"{"page":"other.png","expected":[{"analyte":"Sodium","value":"139"}]}"#,
+        )
+        .expect("write truth");
+        std::fs::write(dir.path().join("other.png"), []).expect("write page");
+        std::fs::write(dir.path().join("control.png"), []).expect("write page");
+        std::fs::write(
+            dir.path().join("other.truth.json"),
+            r#"{"page":"other.png","expected":[{"analyte":"Potassium","value":"4.1"}]}"#,
+        )
+        .expect("write truth");
+
+        let error = load_fixtures(dir.path(), None)
+            .err()
+            .expect("mismatched fixture identity must fail");
+        assert!(
+            error.to_string().contains("control.png"),
+            "error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn every_fixture_page_requires_an_answer_key() {
+        let dir = tempfile::tempdir().expect("temporary fixture directory");
+        std::fs::write(dir.path().join("orphan.png"), []).expect("write page");
+
+        let error = load_fixtures(dir.path(), None)
+            .err()
+            .expect("a page without truth must fail");
+        assert!(
+            error.to_string().contains("orphan.truth.json"),
+            "error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn empty_answer_keys_are_rejected_at_load_time() {
+        let dir = tempfile::tempdir().expect("temporary fixture directory");
+        std::fs::write(dir.path().join("empty.png"), []).expect("write page");
+        std::fs::write(
+            dir.path().join("empty.truth.json"),
+            r#"{"page":"empty.png","expected":[]}"#,
+        )
+        .expect("write truth");
+
+        let error = load_fixtures(dir.path(), None)
+            .err()
+            .expect("an empty denominator must fail");
+        assert!(
+            error.to_string().contains("no expected rows"),
+            "error: {error:#}"
+        );
+    }
     #[test]
     fn a_filter_narrows_the_run() {
         let dir = reader::repo_root().join("fixtures/ocr");

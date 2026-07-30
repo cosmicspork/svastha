@@ -25,7 +25,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { chromium } from '@playwright/test'
+import { chromium, type Browser } from '@playwright/test'
+import { withTimeout } from './timeout.ts'
 
 /** The one Bun-specific API this script uses: its bundler, to turn the app's
  * TypeScript modules (and the `tesseract.js` bare import inside them) into one
@@ -148,13 +149,15 @@ async function main(): Promise<void> {
     const address = server.address()
     const port = typeof address === 'object' && address !== null ? address.port : 0
 
-    const browser = await chromium.launch()
+    let browser: Browser | undefined
     try {
+      browser = await chromium.launch()
       const page = await browser.newPage()
       page.setDefaultTimeout(PAGE_TIMEOUT_MS)
       await page.goto(`http://127.0.0.1:${port}/`)
 
-      const lines: string[] = await page.evaluate(
+      const lines: string[] = await withTimeout(
+        page.evaluate(
         `(async () => {
            const { recognizeImage, enableAssets } = globalThis.__accuracy
            // The real opt-in, hashes and all — not a flag flipped past it.
@@ -163,14 +166,20 @@ async function main(): Promise<void> {
            const read = await recognizeImage(bytes, ${JSON.stringify(mime)})
            return read.map((l) => l.text).filter((t) => t !== '')
          })()`,
+        ),
+        PAGE_TIMEOUT_MS,
+        'browser reader timed out before it returned a transcript',
       )
 
       // stdout carries the transcript and nothing else — the Rust side parses
       // it whole.
       console.log(JSON.stringify(lines))
     } finally {
-      await browser.close()
-      await new Promise<void>((resolve) => server.close(() => resolve()))
+      try {
+        await browser?.close()
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()))
+      }
     }
   } finally {
     await rm(work, { recursive: true, force: true })

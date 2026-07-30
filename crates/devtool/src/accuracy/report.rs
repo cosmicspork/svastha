@@ -6,6 +6,7 @@
 //! `browser default-on gate: FAIL — cross-row=2 on tight-rows-panel` does not.
 
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 use super::reader::Reader;
 use super::score::Score;
@@ -48,7 +49,7 @@ pub struct Report {
 /// handwritten page "answers couldn't read this page rather than guessing". A
 /// reader that instead emits a confident mis-pairing off a page it cannot read
 /// has broken that promise, and the gate is the place that shows up.
-fn cross_row_gate(name: &str, reader: Reader, runs: &[Run]) -> Gate {
+fn cross_row_gate(name: &str, reader: Reader, runs: &[Run], fixture_names: &[String]) -> Gate {
     let gate = |passed, detail| Gate {
         name: name.to_string(),
         passed,
@@ -71,6 +72,56 @@ fn cross_row_gate(name: &str, reader: Reader, runs: &[Run]) -> Gate {
         .collect();
     if !offenders.is_empty() {
         return gate(Some(false), offenders.join(", "));
+    }
+
+    if fixture_names.is_empty() {
+        return gate(
+            None,
+            "no fixture suite was supplied — nothing can clear this gate".to_string(),
+        );
+    }
+
+    let mut runs_per_fixture: BTreeMap<&str, usize> = BTreeMap::new();
+    for run in &mine {
+        *runs_per_fixture.entry(run.fixture.as_str()).or_default() += 1;
+    }
+    let missing: Vec<&str> = fixture_names
+        .iter()
+        .map(String::as_str)
+        .filter(|fixture| !runs_per_fixture.contains_key(*fixture))
+        .collect();
+    let repeated: Vec<String> = runs_per_fixture
+        .iter()
+        .filter(|(_, count)| **count > 1)
+        .map(|(fixture, count)| format!("{fixture} ({count} runs)"))
+        .collect();
+    let unexpected: Vec<&str> = runs_per_fixture
+        .keys()
+        .copied()
+        .filter(|fixture| {
+            !fixture_names
+                .iter()
+                .any(|expected| expected.as_str() == *fixture)
+        })
+        .collect();
+    if !missing.is_empty() || !repeated.is_empty() || !unexpected.is_empty() {
+        let mut detail = Vec::new();
+        if !missing.is_empty() {
+            detail.push(format!("missing {}", missing.join(", ")));
+        }
+        if !repeated.is_empty() {
+            detail.push(format!("multiple runs for {}", repeated.join(", ")));
+        }
+        if !unexpected.is_empty() {
+            detail.push(format!("unexpected {}", unexpected.join(", ")));
+        }
+        return gate(
+            None,
+            format!(
+                "incomplete fixture coverage — {}; a partial run cannot clear this gate",
+                detail.join("; ")
+            ),
+        );
     }
 
     // Zero cross-row is trivially true of a reader that proposed nothing, so on
@@ -156,10 +207,20 @@ fn handwriting_note(runs: &[Run]) -> Gate {
 }
 
 impl Report {
-    pub fn new(runs: Vec<Run>, skipped: Vec<String>) -> Self {
+    pub fn new(runs: Vec<Run>, skipped: Vec<String>, fixture_names: &[String]) -> Self {
         let gates = vec![
-            cross_row_gate("browser default-on gate", Reader::Tesseract, &runs),
-            cross_row_gate("node unattended / bulk-read gate", Reader::Ocrs, &runs),
+            cross_row_gate(
+                "browser default-on gate",
+                Reader::Tesseract,
+                &runs,
+                fixture_names,
+            ),
+            cross_row_gate(
+                "node unattended / bulk-read gate",
+                Reader::Ocrs,
+                &runs,
+                fixture_names,
+            ),
             handwriting_note(&runs),
         ];
         Self {
@@ -296,7 +357,11 @@ mod tests {
 
     #[test]
     fn a_clean_sweep_passes_its_gate() {
-        let report = Report::new(vec![run("cmp-panel", Reader::Tesseract, 0)], vec![]);
+        let report = Report::new(
+            vec![run("cmp-panel", Reader::Tesseract, 0)],
+            vec![],
+            &["cmp-panel".to_string()],
+        );
         let gate = &report.gates[0];
         assert_eq!(gate.passed, Some(true));
         assert!(report.render().contains("browser default-on gate: PASS"));
@@ -312,6 +377,7 @@ mod tests {
                 run("tight-rows-panel", Reader::Tesseract, 2),
             ],
             vec![],
+            &["cmp-panel".to_string(), "tight-rows-panel".to_string()],
         );
         let rendered = report.render();
         assert!(
@@ -325,7 +391,11 @@ mod tests {
     /// strength of a run where the reader was never configured.
     #[test]
     fn a_reader_that_never_ran_is_not_a_pass() {
-        let report = Report::new(vec![run("cmp-panel", Reader::Tesseract, 0)], vec![]);
+        let report = Report::new(
+            vec![run("cmp-panel", Reader::Tesseract, 0)],
+            vec![],
+            &["cmp-panel".to_string()],
+        );
         let node_gate = report
             .gates
             .iter()
@@ -349,6 +419,7 @@ mod tests {
                 silent("cmp-panel", Reader::Ocrs),
             ],
             vec![],
+            &["cmp-panel".to_string(), "tight-rows-panel".to_string()],
         );
         let gate = report
             .gates
@@ -359,6 +430,22 @@ mod tests {
         assert!(gate.detail.contains("cmp-panel"), "got: {}", gate.detail);
         assert!(!report.all_gates_pass());
         assert!(report.render().contains("INCONCLUSIVE"));
+    }
+    #[test]
+    fn a_partial_fixture_run_cannot_clear_a_ship_gate() {
+        let report = Report::new(
+            vec![run("cmp-panel", Reader::Tesseract, 0)],
+            vec![],
+            &["cmp-panel".to_string(), "tight-rows-panel".to_string()],
+        );
+        let gate = &report.gates[0];
+        assert_eq!(gate.passed, None);
+        assert!(
+            gate.detail.contains("tight-rows-panel"),
+            "got: {}",
+            gate.detail
+        );
+        assert!(!report.all_gates_pass());
     }
 
     /// ...but declining a hand-style page is the documented correct answer, so
@@ -371,6 +458,7 @@ mod tests {
                 silent("handwritten-vitals", Reader::Tesseract),
             ],
             vec![],
+            &["cmp-panel".to_string(), "handwritten-vitals".to_string()],
         );
         let gate = &report.gates[0];
         assert_eq!(gate.passed, Some(true), "detail: {}", gate.detail);
@@ -388,6 +476,7 @@ mod tests {
                 run("handwritten-vitals", Reader::Ocrs, 0),
             ],
             vec![],
+            &["cmp-panel".to_string(), "handwritten-vitals".to_string()],
         );
         let hand = report
             .gates
@@ -409,6 +498,7 @@ mod tests {
                 run("handwritten-meds", Reader::Ocrs, 1),
             ],
             vec![],
+            &["cmp-panel".to_string(), "handwritten-meds".to_string()],
         );
         let gate = report
             .gates
