@@ -75,7 +75,7 @@ pause-by-default keeps reading by setting `SVASTHA_NODE_OCR_PAUSED=false` — no
 owner has a persisted choice yet, and it applies to all of them.
 
 `job_status` reports whether reading is on **for you** (`paused by you` /
-`reading`) and the current cap.
+`reading`), the current cap, and the answer scope your questions run under.
 
 **Multi-owner reading is not scheduled, and can starve.** Every pass walks the
 enrolled owners in owner-id order from the start and stops when the per-pass cap
@@ -154,17 +154,31 @@ mirroring the web's posture.
 - **Tenancy isolation is structural.** Retrieval is handed exactly one owner's
   index, so a question from owner A can only ever be answered from — and cite —
   A's vault, by construction rather than by discipline.
+- **Opt-in entries stay out.** Cycle and mind entries are excluded from an
+  owner's retrieval candidates **before ranking**, so they never reach the
+  inference endpoint, until that owner opts the category in with
+  `set_answer_scope { include: [category…] }` — the same rule their doctor shares
+  follow. The choice is per owner and persisted; a question only excluded entries
+  could answer gets the ordinary honest "couldn't answer" rather than a guess
+  assembled without them.
 - **Admin commands.** An `admin_cmd` from an enrolled owner administers the node's
   work on *their* vault (design §2): `job_status` (this owner's index sizes, the
   global OCR counters, the resolved OCR and chat model ids, and the last
   reconcile time — all content-free; model ids are config, already stamped into
   proposal provenance),
-  `log_tail` (recent lines of the node's own content-free logs), and
+  `log_tail` (recent lines of the node's own content-free logs),
   `set_inference_endpoint` (updates the runtime endpoint, persisted so it survives
   a restart — the override takes precedence over the env boot default; still
   subject to the boot-time validation, so a Batch-API path answers `ok: false`
-  with the reason). Node-global operations (restart, upgrade) are the host
-  operator's, never commands. Each command gets a sealed `admin_reply`.
+  with the reason), `pause_ocr`/`resume_ocr`, and `set_answer_scope` (the whole
+  set of opt-in categories that owner's answers may read; a category name this
+  build does not know is answered `ok: false` with nothing changed, rather than
+  silently dropped). Node-global operations (restart, upgrade) are the host
+  operator's, never commands. Each command gets a sealed `admin_reply` — including
+  a command whose `cmd` tag this build does not know at all, which parses into a
+  catch-all and answers `ok: false`. That reply is what lets an app distinguish a
+  node that refuses from a node that never heard it, which for the disclosure
+  switches is the difference between an honest state and a false one.
 - **Idempotence.** Handled question/command message ids are recorded in the same
   content-free journal, so a restart never re-answers a question or re-runs a
   command, and the handled item is deleted from the node's mailbox.

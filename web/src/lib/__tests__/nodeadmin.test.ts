@@ -33,6 +33,12 @@ describe('pure helpers', () => {
     expect(describeCommand({ cmd: 'job_status' })).toMatch(/job status/i)
     expect(describeCommand({ cmd: 'log_tail' })).toMatch(/log tail/i)
     expect(describeCommand({ cmd: 'log_tail', lines: 50 })).toContain('50')
+    // The log row has to distinguish opting in from opting back out — an empty
+    // include is a real instruction, not a no-op.
+    expect(describeCommand({ cmd: 'set_answer_scope', include: ['cycle', 'mind'] })).toBe(
+      'Let answers read Cycle and Mind',
+    )
+    expect(describeCommand({ cmd: 'set_answer_scope', include: [] })).toMatch(/kept .*out of answers/i)
   })
 
   it('orders the log newest-sent first', () => {

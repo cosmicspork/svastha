@@ -176,6 +176,66 @@ export async function put(
   await requestToPromise(s.put(value, key))
 }
 
+/**
+ * Read-modify-write one record inside a **single** `readwrite` transaction.
+ *
+ * `get` then `put` as two calls is two transactions, so another tab (or another
+ * in-flight task in this one) can land between them and be overwritten. This
+ * keeps both in one transaction, which is what makes a compare-and-update
+ * actually compare: `mutate` can read the stored value, decide it is not the one
+ * it meant to update, and decline — with no window in which that decision goes
+ * stale. See `answerScope.ts`'s `trackScopeDelivery`.
+ *
+ * `fn` must be **synchronous and side-effect-free**. It runs inside the
+ * transaction's request callback; an `await` in there would let the transaction
+ * auto-commit and the `put` would throw `TransactionInactiveError`. Deliberately
+ * built on raw request callbacks rather than the promise helper above so there is
+ * no microtask hop between the read and the write to reason about.
+ *
+ * Returning `undefined` from `fn` declines the write and leaves the stored value
+ * untouched; `written` says which happened, and `value` is the stored value
+ * afterwards either way.
+ */
+export function mutate<T>(
+  storeName: string,
+  key: IDBValidKey,
+  fn: (current: T | undefined) => T | undefined,
+): Promise<{ written: boolean; value: T | undefined }> {
+  return openDb().then(
+    (db) =>
+      new Promise((resolve, reject) => {
+        let outcome: { written: boolean; value: T | undefined } | undefined
+        let failure: unknown
+        const tx = db.transaction(storeName, 'readwrite')
+        const s = tx.objectStore(storeName)
+        const read = s.get(key)
+        read.onsuccess = () => {
+          let next: T | undefined
+          try {
+            next = fn(read.result as T | undefined)
+          } catch (e) {
+            // A throwing mutator must not commit a half-decided write.
+            failure = e
+            tx.abort()
+            return
+          }
+          if (next === undefined) {
+            outcome = { written: false, value: read.result as T | undefined }
+            return
+          }
+          const write = s.put(next, key)
+          write.onsuccess = () => (outcome = { written: true, value: next })
+        }
+        tx.oncomplete = () =>
+          outcome
+            ? resolve(outcome)
+            : reject(failure ?? tx.error ?? new Error('mutate completed without a result'))
+        tx.onerror = () => reject(failure ?? tx.error)
+        tx.onabort = () => reject(failure ?? tx.error ?? new Error('mutate aborted'))
+      }),
+  )
+}
+
 export async function del(storeName: string, key: IDBValidKey): Promise<void> {
   const s = await store(storeName, 'readwrite')
   await requestToPromise(s.delete(key))

@@ -517,21 +517,63 @@ envelope — it is opaque sealed bytes to the crypto above.
 - `proposal_result` — `{ proposal_id, accepted: [id…], rejected: [id…] }`: the
   owner's decision echoed to the proposer (event content ids).
 - `admin_cmd` — `{ command }`, a tagged owner→node command
-  (`set_inference_endpoint`, `job_status`, `log_tail`, `pause_ocr`, `resume_ocr`).
+  (`set_inference_endpoint`, `job_status`, `log_tail`, `pause_ocr`, `resume_ocr`,
+  `set_answer_scope`).
   The node accepts commands only from an identity holding a live grant *it itself*
   issued. **Scope differs per command, and the difference is not cosmetic:**
   `pause_ocr`/`resume_ocr` act on the **sender's own vault only** — they stop and
   start the node's reading of that owner's pages, never another owner's, and the
-  choice is persisted per owner. `set_inference_endpoint` is **node-wide**: it
-  reconfigures the endpoint the node uses for *every* enrolled owner, so on a
-  node serving several owners any one of them can change it for all of them.
-  `log_tail` returns the node's own (content-free) log, and `job_status` mixes
-  the sender's own index sizes and reading state with node-wide OCR counters. A
-  deployment that cannot accept those shared surfaces should enrol one owner per
-  node. Node-*process* administration — restart, upgrade, whether the node runs
-  at all — is the host operator's and has deliberately no command here. The set
-  is additive: a reader that does not know a command answers `ok: false` rather
-  than acting on a guess.
+  choice is persisted per owner — and `set_answer_scope` narrows that owner's
+  answers alone, likewise persisted per owner. `set_inference_endpoint` is
+  **node-wide**: it reconfigures the endpoint the node uses for *every* enrolled
+  owner, so on a node serving several owners any one of them can change it for
+  all of them. `log_tail` returns the node's own (content-free) log, and
+  `job_status` mixes the sender's own index sizes and reading state with
+  node-wide OCR counters. A deployment that cannot accept those shared surfaces
+  should enrol one owner per node. Node-*process* administration — restart,
+  upgrade, whether the node runs at all — is the host operator's and has
+  deliberately no command here. The set is additive: a reader that does not know
+  a command parses it into a catch-all and answers `ok: false` rather than
+  acting on a guess. It **answers** rather than dropping the envelope
+  deliberately — a sender cannot otherwise tell a node that refuses from a node
+  that never received anything, and for a command that governs disclosure that
+  difference is the whole point. (A *known* command with a malformed payload is
+  still a parse failure, and is dropped: the catch-all is for commands a build
+  does not know, not a way to swallow a corrupt one.)
+  `set_answer_scope { include: [category…] }` carries the **whole** set of opt-in
+  categories the owner wants (switch positions, not a delta), so `[]` is the
+  meaningful "none" — and it is where a node starts, for every owner, until one
+  says otherwise. The categories are the ones a doctor share also treats as
+  opt-in (`cycle`, `mind`); entries in a category that is off are excluded from
+  the node's retrieval candidates **before ranking**, so they never reach an
+  inference endpoint. Names ride as strings, not a closed enum, so a category a
+  node's build does not know reaches it and is answered `ok: false` with nothing
+  changed, rather than failing to parse and leaving the owner with no reply.
+  A client must treat the command as applied **only** on a matching `admin_reply`
+  with `ok: true`: a deposit is not an application, and an older node, an offline
+  node, and a node that could not persist the change are all cases where the
+  owner's switch and the node's behaviour disagree until a reply says otherwise.
+  A mailbox is a set, not a queue, so two of these from one owner can be handed
+  over in either order. Within a pass a node therefore applies only the **latest**
+  of an owner's `set_answer_scope` commands, ordered by the signed `sent_at` and
+  tie-broken on the envelope id. This is a within-pass rule only — it is not a
+  general ordering guarantee for the mailbox, and no ordering token exists.
+
+  A superseded command is answered **`ok: false`**: on this wire `ok` means
+  *this command was applied*, and a command the node declined to act on has not
+  been. (Answering `true` is what let a second device read its own reply as "the
+  node is doing what I asked" while the node enforced another device's choice.)
+
+  Every `admin_reply` to a `set_answer_scope` — applied or not — ends its
+  `detail` with the scope now in force, in a fixed form a client can parse:
+  `[scope: cycle,mind]`, with category wire names comma-separated in the
+  canonical order, or `[scope: none]` for nothing opted in. A client treats the
+  command as applied **only** when `ok` is true *and* the stated scope equals the
+  set it asked for; a reply stating a different scope means another device won,
+  and a reply stating none at all cannot be checked and must not be read as
+  agreement. `ok` alone is not sufficient, by design — with several devices the
+  question "was my command applied" and the question "what is in force now" have
+  different answers, and only the second one is worth acting on.
 - `admin_reply` — `{ in_reply_to, ok, detail? }`.
 - `chat_msg` — `{ role, text, citations: [event_id…] }`: a retrieval-augmented Q&A
   turn; an answer carries the event ids it cited.

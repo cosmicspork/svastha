@@ -24,6 +24,11 @@
 //! [`VaultIndex`](crate::index::VaultIndex) (see [`crate::retrieval`]), so a
 //! question from owner A can only ever be answered from — and cite — A's vault.
 //!
+//! **Scoped to what the owner opted in:** the sender's own
+//! [`AnswerScopeControl`] choice narrows that index further before ranking, so
+//! cycle and mind entries reach the endpoint only where the owner said they may
+//! (see [`crate::answer_scope`]).
+//!
 //! **Content-free logs.** Never the question, the answer, the context, or any
 //! record content — only counts, message ids, and short owner-key prefixes.
 
@@ -36,6 +41,7 @@ use svastha_core::mailbox::{
 };
 use x25519_dalek::PublicKey;
 
+use crate::answer_scope::AnswerScopeControl;
 use crate::client::RelayClient;
 use crate::inference::InferenceClient;
 use crate::journal::Journal;
@@ -75,6 +81,7 @@ pub fn run(
     client: &RelayClient,
     state: &Mutex<NodeState>,
     inference: &InferenceClient,
+    scopes: &AnswerScopeControl,
     journal: &mut Journal,
 ) -> Result<ChatReport> {
     let mut report = ChatReport::default();
@@ -124,12 +131,16 @@ pub fn run(
         // sender must be an enrolled owner, and retrieval reads ONLY that owner's
         // index. `retrieve` is handed one `VaultIndex`, so cross-tenant leakage is
         // impossible by construction, not by discipline.
+        // The sender's own opt-in choice (answer_scope.rs) is resolved here, from
+        // the same identity the gate just checked — so the scope a question is
+        // answered under is always the asker's, never a node-wide setting.
+        let scope = scopes.scope(&owner_hex);
         let prepared = {
             let guard = state.lock().expect("node state mutex");
             guard.owner(&owner_hex).map(|os| {
                 (
                     os.owner_x25519,
-                    retrieval::retrieve(&os.index, &body.text, MAX_CONTEXT),
+                    retrieval::retrieve(&os.index, &scope, &body.text, MAX_CONTEXT),
                 )
             })
         };

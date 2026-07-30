@@ -5,8 +5,13 @@
 // them in wasm, build the prompt, send only the retrieved lines to the endpoint,
 // then ground the reply back to real event ids.
 //
-// Two properties this module exists to preserve:
+// Three properties this module exists to preserve:
 //
+//   0. **Opt-in entries are not candidates at all.** Cycle and mind entries are
+//      filtered out before ranking (see `answerScope.ts`) unless the owner turned
+//      that category on in Settings → AI, so they cannot be scored, rendered, or
+//      sent. Scoping after ranking would be too late: an excluded entry would
+//      already have shaped the prompt.
 //   1. **Only the retrieved lines leave.** Not the vault, not the whole record —
 //      the top `MAX_CONTEXT` rendered lines for this one question. What the
 //      endpoint sees is bounded by what retrieval selected.
@@ -32,6 +37,7 @@ import { buildCodeNameIndex, resolveDisplay } from './code-names'
 import { loadDictionaryIndex } from './dictionary'
 import { conceptKey } from './summary'
 import { loadConfig, chatComplete, InferenceError } from './inference'
+import { filterSensitive, loadOptIns } from './answerScope'
 import type { Code } from './codes'
 
 /** How many ranked items reach the model. Matches the node's `MAX_CONTEXT` so
@@ -146,7 +152,27 @@ async function gatherCandidates(): Promise<Candidate[]> {
   // The dictionary is optional and may not be downloaded; an empty map just
   // means codes fall through to the layers above it.
   const dictionary = await loadDictionaryIndex().catch(() => new Map<string, string>())
-  return buildCandidates(events, statuses, names, buildCodeNameIndex(events), dictionary)
+  // Scope before ranking, never after: an entry the owner has not opted in must
+  // not be scored, rendered, or sent.
+  //
+  // And every index built alongside the candidates is derived from `inScope`
+  // too, not from `events` — filtering only the candidate list is not enough.
+  // `buildCodeNameIndex` keys on `system|code` *without* the kind, so a vault-
+  // wide index will lend an excluded mind entry's `display` to an in-scope
+  // event carrying the same code: the excluded entry never appears as a
+  // candidate, and its label narrates the answer regardless. An excluded entry
+  // has to be absent from everything the prompt is built from, not merely from
+  // the list of things that can be cited.
+  //
+  // `statuses` and `names` need no such filtering, and the reason is worth
+  // stating: both are keyed by `conceptKey`, which includes the event *kind*
+  // alongside the coding, and two events sharing a concept key therefore share
+  // the kind and coding that decide their category. Same key implies same
+  // sensitivity, so a lookup by an in-scope candidate's key can never return a
+  // record belonging to an excluded one. `buildCodeNameIndex` is the odd one
+  // out precisely because it drops the kind from its key.
+  const inScope = filterSensitive(events, await loadOptIns())
+  return buildCandidates(inScope, statuses, names, buildCodeNameIndex(inScope), dictionary)
 }
 
 /** Whether this device can answer without a node. */

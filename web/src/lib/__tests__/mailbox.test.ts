@@ -9,6 +9,7 @@ import {
   resolveProposalIfDone,
   sendChatMessage,
   sendAdminCommand,
+  commitAnswerScope,
   type MailboxClient,
   type MailboxIdentity,
   type Envelope,
@@ -17,6 +18,7 @@ import { pendingInvites, type KeyHandoffInfo } from '../shared'
 import { getProposal, upsertProposal, putProposer, buildProposalRecord } from '../proposals'
 import { listChatTurns } from '../chat'
 import { listAdminLog, recordCommand, getNodeLastSeen } from '../nodeadmin'
+import { loadOptIns } from '../answerScope'
 
 beforeEach(async () => {
   await deleteDb()
@@ -524,11 +526,79 @@ describe('outbound send', () => {
 
     const sent = await sendAdminCommand({ ed: NODE, x25519: NODE_X }, { cmd: 'job_status' })
 
-    expect(sent).toBe(true)
+    // The envelope message id, not a bare boolean: it is the only handle a
+    // caller has on whether the node ever answered this command.
+    expect(sent).toBe('sent-admin_cmd')
     expect(client.put[0].recipient).toBe(NODE)
     expect(client.put[0].id).toBe('admin-sent-admin_cmd')
     const log = await listAdminLog()
     expect(log.map((e) => e.id)).toEqual(['sent-admin_cmd'])
     expect(log[0].command).toEqual({ cmd: 'job_status' })
+  })
+})
+
+describe('commitAnswerScope', () => {
+  const sealingIdentity = () =>
+    fakeIdentity({ seal_message: (_x, kind) => JSON.stringify({ id: `sent-${kind}` }) })
+
+  it('saves the choice and tells an enrolled node the whole set', async () => {
+    const client = fakeClient([])
+    configureMailbox(client, sealingIdentity(), verifyOk)
+    await putProposer({ ed: NODE, x25519: NODE_X, label: 'Home node', kind: 'node' })
+
+    // `pending`, never `sent`: the relay accepted a deposit, which is not the
+    // node applying it (see answerScope.ts's resolveNodeScopeState).
+    expect(await commitAnswerScope(new Set(['cycle']))).toMatchObject({
+      include: ['cycle'],
+      node: 'pending',
+      // The persisted record, handed back so the caller needs no second read.
+      record: { include: ['cycle'], pending: { id: 'sent-admin_cmd', nodeEd: NODE } },
+    })
+
+    expect(await loadOptIns()).toEqual(new Set(['cycle']))
+    expect(client.put[0].recipient).toBe(NODE)
+    const log = await listAdminLog()
+    expect(log[0].command).toEqual({ cmd: 'set_answer_scope', include: ['cycle'] })
+  })
+
+  // Turning the last category off is an instruction, not the absence of one —
+  // a node left holding the previous set would keep reading what the owner just
+  // switched off.
+  it('sends an empty include when the owner turns everything back off', async () => {
+    const client = fakeClient([])
+    configureMailbox(client, sealingIdentity(), verifyOk)
+    await putProposer({ ed: NODE, x25519: NODE_X, label: 'Home node', kind: 'node' })
+
+    await commitAnswerScope(new Set(['cycle', 'mind']))
+    await commitAnswerScope(new Set())
+
+    expect(await loadOptIns()).toEqual(new Set())
+    const log = await listAdminLog()
+    expect(log[0].command).toEqual({ cmd: 'set_answer_scope', include: [] })
+  })
+
+  it('is local-only when no node is enrolled, and still saves', async () => {
+    const client = fakeClient([])
+    configureMailbox(client, sealingIdentity(), verifyOk)
+
+    expect(await commitAnswerScope(new Set(['mind']))).toMatchObject({
+      include: ['mind'],
+      node: 'no-node',
+    })
+    expect(await loadOptIns()).toEqual(new Set(['mind']))
+    expect(client.put).toHaveLength(0)
+  })
+
+  // The device's own answers obey the local choice, so a node that cannot be
+  // reached must not leave the owner thinking nothing happened.
+  it('still saves when the command cannot be deposited', async () => {
+    teardownMailbox()
+    await putProposer({ ed: NODE, x25519: NODE_X, label: 'Home node', kind: 'node' })
+
+    expect(await commitAnswerScope(new Set(['cycle']))).toMatchObject({
+      include: ['cycle'],
+      node: 'unsent',
+    })
+    expect(await loadOptIns()).toEqual(new Set(['cycle']))
   })
 })

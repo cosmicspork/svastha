@@ -30,12 +30,22 @@
 //! owned resolution. Status still shapes both the rendering (`[current]`/`[past]`)
 //! and the ranking — a "what am I *currently* taking" question demotes resolved
 //! concepts, and a "what did I *used to*..." question demotes active ones.
+//!
+//! ## Scope is decided before ranking, not after
+//!
+//! [`AnswerScope`] says which of the owner's entries a candidate list may be
+//! built from at all. Cycle and mind entries are excluded unless the owner opted
+//! that category in, and the filter runs *before* [`rank`] — a scored-then-
+//! dropped item has already been shaped into a prompt, and an excluded entry
+//! must never influence what an endpoint is told. See [`scope`].
 
 mod prompt;
 mod rank;
+mod scope;
 
 pub use prompt::{build_prompt, ground, CANT_ANSWER, SYSTEM_PROMPT};
 pub use rank::{rank, render_line};
+pub use scope::{sensitive_category, AnswerScope, SensitiveCategory};
 
 use serde::{Deserialize, Serialize};
 use svastha_core::event::Event;

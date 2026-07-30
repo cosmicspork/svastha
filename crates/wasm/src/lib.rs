@@ -603,6 +603,36 @@ pub fn cant_answer_text() -> String {
     svastha_retrieval::CANT_ANSWER.to_string()
 }
 
+/// The content ids of the events in `events_json` that the answer scope
+/// `include_json` leaves out of retrieval, as a JSON array.
+///
+/// `events_json` is a JSON array of `Event`s; `include_json` a JSON array of
+/// opted-in category wire names (`["cycle"]`, `[]`, …). An unknown name is
+/// ignored here rather than rejected — this binding answers "what would be left
+/// out", and a name that classifies nothing leaves nothing in.
+///
+/// The browser filters with `category.ts` on its own hot path (it already owns
+/// the full taxonomy, and going through WASM per event would buy nothing). This
+/// exists so a test can hold the two implementations against the same events and
+/// fail the moment they disagree — the exclusion rule is a privacy promise made
+/// in two languages, and the promise is only as good as their agreement.
+#[wasm_bindgen]
+pub fn answer_scope_exclusions(events_json: &str, include_json: &str) -> Result<String, JsError> {
+    let events: Vec<Event> = serde_json::from_str(events_json).map_err(to_js)?;
+    let names: Vec<String> = serde_json::from_str(include_json).map_err(to_js)?;
+    let scope = svastha_retrieval::AnswerScope::new(
+        names
+            .iter()
+            .filter_map(|n| svastha_retrieval::SensitiveCategory::parse(n)),
+    );
+    let excluded: Vec<String> = events
+        .iter()
+        .filter(|e| !scope.allows(e))
+        .map(|e| e.id.to_hex())
+        .collect();
+    serde_json::to_string(&excluded).map_err(to_js)
+}
+
 // --- OCR extraction: coding transcribed text into draft events --------------
 //
 // The browser transcribes a page locally (a PDF's text layer, or the on-device

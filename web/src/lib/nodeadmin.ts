@@ -12,6 +12,7 @@
 // the host operator and deliberately have no command here.
 import { writable } from 'svelte/store'
 import { getAll, get, put } from './db'
+import { CATEGORY_META, type Category } from './category'
 import { listProposers, type ProposerRecord } from './proposals'
 import { getGrantMeta } from './grants'
 
@@ -29,6 +30,11 @@ export type AdminCommand =
   | { cmd: 'resume_ocr' }
   | { cmd: 'job_status' }
   | { cmd: 'log_tail'; lines?: number }
+  // Which opt-in categories the node's answers may read for this vault
+  // (crates/node/src/answer_scope.rs). `include` is the whole set of switch
+  // positions, not a delta, so `[]` is the meaningful "none" — turning the last
+  // category off has to reach the node just as turning one on does.
+  | { cmd: 'set_answer_scope'; include: Category[] }
 
 /** The node's answer to one command (mirrors core's `AdminReplyBody`, minus the
  * `in_reply_to` id which becomes this row's key). */
@@ -63,6 +69,10 @@ export function describeCommand(command: AdminCommand): string {
       return 'Paused page reading'
     case 'resume_ocr':
       return 'Resumed page reading'
+    case 'set_answer_scope':
+      return command.include.length > 0
+        ? `Let answers read ${command.include.map((c) => CATEGORY_META[c].label).join(' and ')}`
+        : 'Kept opt-in entries out of answers'
   }
 }
 

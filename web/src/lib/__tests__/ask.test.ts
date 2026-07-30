@@ -41,12 +41,21 @@ vi.mock('../curation', () => ({
   allStatuses: vi.fn(async () => new Map()),
   allNames: vi.fn(async () => new Map()),
 }))
-vi.mock('../code-names', () => ({
-  buildCodeNameIndex: vi.fn(() => new Map()),
-  resolveDisplay: vi.fn(() => null),
-}))
+// Real, not stubbed: the vault-wide name index is prompt-shaping input, so a
+// stub could not show a display crossing from an excluded event into an
+// in-scope one (see the leak regression below). It is pure over `StoredEvent[]`
+// and needs no browser.
 vi.mock('../dictionary', () => ({ loadDictionaryIndex: vi.fn(async () => new Map()) }))
 vi.mock('../summary', () => ({ conceptKey: vi.fn(() => 'k') }))
+
+// The opt-in choice is read on the answering path. The filter itself stays real
+// (it is the thing under test in the scope block below); only the stored answer
+// is steered.
+const optIns = vi.hoisted(() => ({ value: new Set<string>() }))
+vi.mock('../answerScope', async () => {
+  const actual = await vi.importActual<typeof import('../answerScope')>('../answerScope')
+  return { ...actual, loadOptIns: vi.fn(async () => optIns.value) }
+})
 
 import {
   askLocally,
@@ -57,6 +66,10 @@ import {
   MAX_CONTEXT,
 } from '../ask'
 import { InferenceError } from '../inference'
+import { allEvents } from '../events'
+import { CYCLE_START, MOOD, BP_SYSTOLIC } from '../codes'
+import type { Category } from '../category'
+import type { StoredEvent } from '../events'
 
 const fetchMock = vi.fn()
 
@@ -66,6 +79,7 @@ beforeEach(() => {
   wasm.rank_context.mockReset()
   wasm.ground_answer.mockReset()
   config.value = { endpoint: 'https://x/v1', model: 'm', apiKey: 'sk' }
+  optIns.value = new Set()
 })
 afterEach(() => vi.unstubAllGlobals())
 
@@ -237,5 +251,134 @@ describe('candidate assembly', () => {
       'ibuprofen',
     )
     expect(resolveName(event(), 'k', new Map(), new Map(), new Map())).toBe('medication_statement')
+  })
+})
+
+// --- what retrieval is even allowed to see -----------------------------------
+//
+// Ranking is stubbed everywhere else in this file, which is exactly right for
+// asserting what leaves the device — and it is what makes this block possible:
+// the candidate list handed to `rank_context` IS the set of entries that could
+// reach the endpoint, so asserting on it asserts the disclosure boundary
+// directly rather than through the ranker's scoring.
+
+describe('opt-in entries', () => {
+  const ev = (
+    id: string,
+    code: StoredEvent['event']['code'],
+    kind: StoredEvent['event']['kind'] = 'observation',
+  ): StoredEvent =>
+    ({
+      event: {
+        id,
+        kind,
+        code,
+        effective_at: '2026-03-15T09:00:00Z',
+        value: { text: 'x' },
+        provenance: { source: 'self', source_doc: null },
+      },
+      author: 'a'.repeat(64),
+      signature: 'b'.repeat(128),
+    }) as StoredEvent
+
+  const VAULT = [ev('cyc', CYCLE_START), ev('mood', MOOD), ev('bp', BP_SYSTOLIC)]
+
+  /** The event ids that reached the ranker — i.e. that could have been sent. */
+  function rankedIds(): string[] {
+    const candidates = JSON.parse(wasm.rank_context.mock.calls[0][0]) as {
+      event: { id: string }
+    }[]
+    return candidates.map((c) => c.event.id)
+  }
+
+  beforeEach(() => {
+    vi.mocked(allEvents).mockResolvedValue(VAULT)
+    wasm.rank_context.mockReturnValue(ranked([]))
+  })
+
+  it('keeps cycle and mind out of the candidates by default', async () => {
+    await askLocally('how have I been')
+    expect(rankedIds()).toEqual(['bp'])
+  })
+
+  it('admits a category the owner opted in, and only that one', async () => {
+    optIns.value = new Set<Category>(['cycle'])
+    await askLocally('how have I been')
+    expect(rankedIds()).toEqual(['cyc', 'bp'])
+  })
+
+  it('admits both when both are on', async () => {
+    optIns.value = new Set<Category>(['cycle', 'mind'])
+    await askLocally('how have I been')
+    expect(rankedIds()).toEqual(['cyc', 'mood', 'bp'])
+  })
+
+  // The honest cost of the default, and the reason it is safe to have one: a
+  // question only excluded entries could answer is refused without the endpoint
+  // ever being told the question, let alone the entries.
+  it('answers honestly and calls nothing when only excluded entries could answer', async () => {
+    vi.mocked(allEvents).mockResolvedValue([ev('cyc', CYCLE_START), ev('mood', MOOD)])
+    const answer = await askLocally('when did my last period start?')
+    expect(rankedIds()).toEqual([])
+    expect(answer.citations).toEqual([])
+    expect(answer.text).toMatch(/couldn't find/i)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+// --- the second way an excluded entry can reach the prompt ---------------
+//
+// Filtering the candidate list is not enough on its own. Every index built
+// alongside it is prompt-shaping input too, and `buildCodeNameIndex` keys on
+// `system|code` WITHOUT the kind — so it happily lends a display from an event
+// the owner excluded to an in-scope event carrying the same code. The excluded
+// entry never appears as a candidate, and its label narrates the answer anyway.
+
+describe('indexes built alongside the candidates', () => {
+  const MOOD_CODE = { system: 'urn:svastha:codes', code: 'mood' }
+
+  /** The excluded mind observation, carrying a display the owner wrote. */
+  const privateMood: StoredEvent = {
+    event: {
+      id: 'mood',
+      kind: 'observation',
+      code: { ...MOOD_CODE, display: 'Private mood label' },
+      effective_at: '2026-03-15T09:00:00Z',
+      value: null,
+      provenance: { source: 'self', source_doc: null },
+    },
+    author: 'a'.repeat(64),
+    signature: 'b'.repeat(128),
+  } as StoredEvent
+
+  /** In scope, same code, no display of its own — so it looks for a borrowed one. */
+  const medication: StoredEvent = {
+    event: {
+      id: 'med',
+      kind: 'medication_statement',
+      code: { ...MOOD_CODE },
+      effective_at: '2026-03-16T09:00:00Z',
+      value: null,
+      provenance: { source: 'self', source_doc: null },
+    },
+    author: 'a'.repeat(64),
+    signature: 'b'.repeat(128),
+  } as StoredEvent
+
+  it('never lends an excluded entry’s display to an in-scope one', async () => {
+    vi.mocked(allEvents).mockResolvedValue([privateMood, medication])
+    wasm.rank_context.mockReturnValue(ranked([]))
+
+    await askLocally('what am I taking?')
+
+    const candidates = JSON.parse(wasm.rank_context.mock.calls[0][0]) as {
+      event: { id: string }
+      name: string
+    }[]
+    expect(candidates.map((c) => c.event.id)).toEqual(['med'])
+    expect(candidates[0].name).not.toBe('Private mood label')
+    // Nothing named this code in scope, so it renders as the bare coding —
+    // less pretty, and the only honest option.
+    expect(candidates[0].name).toBe('urn:svastha:codes mood')
   })
 })

@@ -22,9 +22,16 @@
 //! `name:` display override becomes the candidate's name, and the `status:`
 //! current-vs-past distinction becomes its status — which the ranker both shows
 //! the model (`[current]`/`[past]`) and uses to re-rank.
+//!
+//! ## Scope-aware, before anything is scored
+//!
+//! The owner's opt-in categories ([`crate::answer_scope`]) gate the candidate
+//! list itself. An entry the owner has not opted in never becomes a
+//! [`Candidate`], so it cannot be ranked, rendered, or cited — the exclusion is a
+//! property of what retrieval was given, not of what it chose to return.
 
 use svastha_core::event::{Event, EventKind, EventValue};
-use svastha_retrieval::{rank, Candidate};
+use svastha_retrieval::{rank, AnswerScope, Candidate};
 
 pub use svastha_retrieval::ContextItem;
 
@@ -35,9 +42,19 @@ use crate::index::VaultIndex;
 /// overlap are returned, so an unanswerable question yields an **empty** result —
 /// which [`crate::chat`] turns into an honest "couldn't answer", never uncited
 /// prose over an irrelevant dump of the record.
-pub fn retrieve(index: &VaultIndex, question: &str, max_items: usize) -> Vec<ContextItem> {
+///
+/// `scope` is the owner's own opt-in choice; entries outside it are dropped
+/// before ranking, so a question only they could answer yields that same empty
+/// result rather than a guess assembled without them.
+pub fn retrieve(
+    index: &VaultIndex,
+    scope: &AnswerScope,
+    question: &str,
+    max_items: usize,
+) -> Vec<ContextItem> {
     let candidates: Vec<Candidate<'_>> = index
         .events()
+        .filter(|signed| scope.allows(&signed.event))
         .map(|signed| {
             let event = &signed.event;
             let concept = VaultIndex::concept_key(event);
@@ -96,6 +113,7 @@ mod tests {
     use serde_json::json;
     use svastha_core::event::{Code, Event, EventKind, EventValue, Provenance, SignedEvent};
     use svastha_core::keys::Identity;
+    use svastha_retrieval::SensitiveCategory;
 
     fn owner() -> Identity {
         Identity::from_seed(b"retrieval owner")
@@ -144,7 +162,7 @@ mod tests {
         let o = owner();
         let m = med(&o, "197361", "Lisinopril 10mg", "2025-01-01");
         let idx = idx(&o, &[m.clone(), note(&o, "annual eye exam", "2024-02-02")]);
-        let hits = retrieve(&idx, "am I on lisinopril?", 10);
+        let hits = retrieve(&idx, &AnswerScope::default(), "am I on lisinopril?", 10);
         assert_eq!(hits.len(), 1, "only the lisinopril med matches");
         assert_eq!(hits[0].event_id, m.event.id.to_hex());
     }
@@ -154,7 +172,13 @@ mod tests {
         let o = owner();
         let idx = idx(&o, &[med(&o, "197361", "Lisinopril", "2025-01-01")]);
         assert!(
-            retrieve(&idx, "what vaccines have I had?", 10).is_empty(),
+            retrieve(
+                &idx,
+                &AnswerScope::default(),
+                "what vaccines have I had?",
+                10
+            )
+            .is_empty(),
             "no keyword overlap → empty, so chat answers honestly"
         );
     }
@@ -163,8 +187,8 @@ mod tests {
     fn empty_or_stopword_only_question_returns_nothing() {
         let o = owner();
         let idx = idx(&o, &[med(&o, "197361", "Lisinopril", "2025-01-01")]);
-        assert!(retrieve(&idx, "what is that?", 10).is_empty());
-        assert!(retrieve(&idx, "", 10).is_empty());
+        assert!(retrieve(&idx, &AnswerScope::default(), "what is that?", 10).is_empty());
+        assert!(retrieve(&idx, &AnswerScope::default(), "", 10).is_empty());
     }
 
     #[test]
@@ -183,7 +207,12 @@ mod tests {
             1000,
         ));
 
-        let hits = retrieve(&idx, "what metformin am I currently taking?", 10);
+        let hits = retrieve(
+            &idx,
+            &AnswerScope::default(),
+            "what metformin am I currently taking?",
+            10,
+        );
         assert_eq!(hits.len(), 2, "both mention metformin");
         assert_eq!(
             hits[0].event_id,
@@ -218,7 +247,7 @@ mod tests {
             json!({ "display": "Lisinopril" }),
             1,
         ));
-        let hits = retrieve(&idx, "lisinopril dose?", 10);
+        let hits = retrieve(&idx, &AnswerScope::default(), "lisinopril dose?", 10);
         assert_eq!(hits.len(), 1);
         assert!(
             hits[0].text.contains("Lisinopril"),
@@ -233,7 +262,7 @@ mod tests {
         let old = note(&o, "headache reported", "2010-05-05");
         let new = note(&o, "headache reported", "2024-05-05");
         let idx = idx(&o, &[old.clone(), new.clone()]);
-        let hits = retrieve(&idx, "headache", 10);
+        let hits = retrieve(&idx, &AnswerScope::default(), "headache", 10);
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].event_id, new.event.id.to_hex(), "newer first");
     }
@@ -275,7 +304,7 @@ mod tests {
         ));
         let idx = idx(&o, std::slice::from_ref(&e));
 
-        let node = retrieve(&idx, "peanut allergy", 10);
+        let node = retrieve(&idx, &AnswerScope::default(), "peanut allergy", 10);
         assert_eq!(node.len(), 1);
 
         let browser_input = serde_json::to_string(&json!([{
@@ -296,6 +325,74 @@ mod tests {
         assert_eq!(node[0].text, "allergy_intolerance 2024-01-01 Peanut");
     }
 
+    /// A coded app-local observation — `urn:svastha:codes` is where cycle and
+    /// mind entries live (see `svastha_retrieval::sensitive_category`).
+    fn app_local(o: &Identity, code: &str, display: &str, date: &str) -> SignedEvent {
+        o.sign_event(Event::new(
+            EventKind::Observation,
+            Some(Code {
+                system: "urn:svastha:codes".into(),
+                code: code.into(),
+                display: Some(display.into()),
+            }),
+            Some(date.into()),
+            None,
+            Provenance {
+                source: "self".into(),
+                source_doc: None,
+            },
+        ))
+    }
+
+    #[test]
+    fn sensitive_entries_are_out_of_retrieval_by_default() {
+        let o = owner();
+        let cycle = app_local(&o, "menstrual-flow", "Menstrual flow", "2026-01-05");
+        let mind = app_local(&o, "mood", "Mood", "2026-01-06");
+        let vital = med(&o, "197361", "flow meter lisinopril mood", "2026-01-07");
+        let idx = idx(&o, &[cycle, mind, vital.clone()]);
+
+        let hits = retrieve(&idx, &AnswerScope::default(), "flow and mood", 10);
+        assert_eq!(
+            hits.iter().map(|h| &h.event_id).collect::<Vec<_>>(),
+            vec![&vital.event.id.to_hex()],
+            "cycle and mind never reach the ranker until the owner opts them in"
+        );
+    }
+
+    #[test]
+    fn a_question_only_excluded_entries_answer_retrieves_nothing() {
+        // The honest empty result chat.rs turns into "your record doesn't say",
+        // rather than a guess assembled without the entries that would have said.
+        let o = owner();
+        let idx = idx(
+            &o,
+            &[app_local(
+                &o,
+                "menstrual-flow",
+                "Menstrual flow",
+                "2026-01-05",
+            )],
+        );
+        assert!(retrieve(&idx, &AnswerScope::default(), "menstrual flow", 10).is_empty());
+    }
+
+    #[test]
+    fn opting_a_category_in_admits_only_that_one() {
+        let o = owner();
+        let cycle = app_local(&o, "menstrual-flow", "Menstrual flow", "2026-01-05");
+        let mind = app_local(&o, "mood", "Mood flow", "2026-01-06");
+        let idx = idx(&o, &[cycle.clone(), mind]);
+
+        let scope = AnswerScope::new([SensitiveCategory::Cycle]);
+        let hits = retrieve(&idx, &scope, "flow", 10);
+        assert_eq!(
+            hits.iter().map(|h| &h.event_id).collect::<Vec<_>>(),
+            vec![&cycle.event.id.to_hex()],
+            "cycle in, mind still out"
+        );
+    }
+
     #[test]
     fn respects_the_item_cap() {
         let o = owner();
@@ -303,6 +400,10 @@ mod tests {
             .map(|i| note(&o, &format!("headache episode {i}"), "2024-01-01"))
             .collect();
         let idx = idx(&o, &events);
-        assert_eq!(retrieve(&idx, "headache", 5).len(), 5, "capped");
+        assert_eq!(
+            retrieve(&idx, &AnswerScope::default(), "headache", 5).len(),
+            5,
+            "capped"
+        );
     }
 }
