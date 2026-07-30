@@ -50,6 +50,20 @@ reviewer cannot infer from the code. No restating the change.
 Comment the non-obvious why: a constraint, a trade-off, a gotcha. Skip comments
 that restate the code.
 
+### Guarantees, tests, and scope
+
+- A comment that states a guarantee ("X cannot happen") must have a test
+  that fails when the guarantee breaks. No test, no claim.
+- Never mock the unit a test is named after. A test of `upsertProposal`
+  that mocks `upsertProposal` certifies nothing.
+- Every safety guard ships with adversarial fixtures — inputs chosen to
+  defeat it, not to satisfy it.
+- Reversing a documented design decision, deleting a working capability,
+  or changing trust-contract docs requires owner sign-off before the PR,
+  recorded in the PR description — never argued retroactively.
+- One behavior change per PR. A fix PR does not also change concurrency,
+  defaults, or protocol surface.
+
 ### Verify before committing
 
 - Rust: `just check` (fmt-check, clippy) and `just test`.
