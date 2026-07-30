@@ -25,16 +25,27 @@ vi.mock('../inference', async () => {
   return { ...inference, InferenceError, normalizeEndpoint: (s: string) => s }
 })
 
-const stored = vi.hoisted(() => ({ records: [] as unknown[] }))
+// A faithful stand-in for the store: it answers whether a proposal exists and
+// replaces it on upsert, the parts of the real store readAndPropose needs.
+const stored = vi.hoisted(() => ({ records: [] as { id: string; drafts: unknown[] }[] }))
 vi.mock('../proposals', async () => {
-  const actual = await vi.importActual<typeof import('../proposals')>('../proposals')
+  const actual = await vi.importActual<Record<string, unknown>>('../proposals')
   return {
     ...actual,
-    upsertProposal: vi.fn(async (r: unknown) => {
+    getProposal: vi.fn(async (id: string) => stored.records.find((record) => record.id === id)),
+    upsertProposal: vi.fn(async (r: { id: string; drafts: unknown[] }) => {
+      const index = stored.records.findIndex((seen) => seen.id === r.id)
+      if (index >= 0) {
+        stored.records[index] = r
+        return false
+      }
       stored.records.push(r)
+      return true
     }),
   }
 })
+const ocr = vi.hoisted(() => ({ assetsEnabled: vi.fn(async () => true) }))
+vi.mock('../ocr-assets', () => ocr)
 vi.mock('../session.svelte', () => ({
   session: { identity: { ed25519_public_hex: 'owner-ed' } },
 }))
@@ -48,7 +59,15 @@ vi.mock('../answerWhere', async () => {
   return { ...actual, loadAnswerWhere: vi.fn(async () => where.value) }
 })
 
-import { readAndPropose, transcribe, buildExtractionPrompt, UnreadablePageError } from '../read-page'
+import {
+  readAndPropose,
+  transcribe,
+  buildExtractionPrompt,
+  UnreadablePageError,
+  UnreadableAnswerError,
+  ReadingOffError,
+  PAGES_PER_PASS,
+} from '../read-page'
 import { renderColumns } from '../ocr-layout'
 import { InferenceError } from '../inference'
 import type { OcrLine, OcrWord } from '../ocr'
@@ -77,8 +96,13 @@ const row = (index: number, words: OcrWord[]): OcrLine => ({
   y: 0,
 })
 
+/** `count` single-line pages, each naming its own page number. */
+const longDocument = (count: number): OcrLine[][] =>
+  Array.from({ length: count }, (_, i) => [row(1, [word(`page`, 0, 30), word(`${i + 1}`, 40, 60)])])
+
 beforeEach(() => {
   stored.records = []
+  ocr.assetsEnabled.mockResolvedValue(true)
   for (const fn of [...Object.values(wasm), ...Object.values(engines), ...Object.values(inference)]) {
     if (typeof fn === 'function' && 'mockReset' in fn) (fn as { mockReset: () => void }).mockReset()
   }
@@ -109,6 +133,26 @@ describe('transcribe', () => {
     await expect(transcribe(new Uint8Array(), 'image/jpeg')).rejects.toBeInstanceOf(
       UnreadablePageError,
     )
+  })
+
+  // A PDF with no text layer is a scan. Whether the recognizer is switched on
+  // is the one thing about that the owner can change, so it is what the error
+  // has to say — and only when it is true.
+  it('names the switch when a scan meets a reader that is off', async () => {
+    ocr.assetsEnabled.mockResolvedValue(false)
+    const err = await transcribe(new Uint8Array(), 'application/pdf').catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(ReadingOffError)
+    expect((err as Error).message).toBe(
+      "This PDF is a scan, and reading scans on this device isn't switched on.",
+    )
+  })
+
+  it('does not offer the switch for a scan when the reader is already on', async () => {
+    ocr.assetsEnabled.mockResolvedValue(true)
+    const err = await transcribe(new Uint8Array(), 'application/pdf').catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(UnreadablePageError)
+    expect(err).not.toBeInstanceOf(ReadingOffError)
+    expect((err as Error).message).not.toContain('switched on')
   })
 })
 
@@ -196,7 +240,15 @@ describe('readAndPropose', () => {
     )
     const result = await readAndPropose('sha1', new Uint8Array(), 'image/jpeg')
 
-    expect(result).toEqual({ proposed: 1, dropped: 2, proposalId: 'local-sha1' })
+    expect(result).toEqual({
+      proposed: 1,
+      dropped: 2,
+      proposalId: 'local-sha1',
+      updated: false,
+      fromPage: 1,
+      toPage: 1,
+      totalPages: 1,
+    })
     const record = stored.records[0] as {
       id: string
       fromEd: string
@@ -216,14 +268,17 @@ describe('readAndPropose', () => {
     expect(record.drafts[0].model).toBe('m')
   })
 
-  // Re-reading the same page must update the pending record, not stack a second.
-  it('keys the record on the source page so a re-read dedupes', async () => {
+  // Re-reading the same page must update the pending record, not stack a second
+  // — and must say which of the two it did.
+  it('keys the record on the source page so a re-read dedupes, and reports it', async () => {
     wasm.code_from_lines.mockReturnValue(
       '{"drafts":[{"kind":"observation","code":null,"effective_at":null,"value":{"text":"x"}}],"dropped":0}',
     )
     const a = await readAndPropose('sha1', new Uint8Array(), 'image/jpeg')
     const b = await readAndPropose('sha1', new Uint8Array(), 'image/jpeg')
     expect(a.proposalId).toBe(b.proposalId)
+    expect(a.updated).toBe(false)
+    expect(b.updated).toBe(true)
   })
 
   it('proposes nothing when every finding was dropped', async () => {
@@ -231,8 +286,45 @@ describe('readAndPropose', () => {
     expect(await readAndPropose('sha1', new Uint8Array(), 'image/jpeg')).toEqual({
       proposed: 0,
       dropped: 3,
+      updated: false,
+      fromPage: 1,
+      toPage: 1,
+      totalPages: 1,
     })
     expect(stored.records).toHaveLength(0)
+  })
+
+  it('clears pending proposals when a re-read finds no entries', async () => {
+    wasm.code_from_lines.mockReturnValue(
+      '{"drafts":[{"kind":"observation","code":null,"effective_at":null,"value":{"text":"x"}}],"dropped":0}',
+    )
+    await readAndPropose('sha1', new Uint8Array(), 'image/jpeg')
+
+    wasm.code_from_lines.mockReturnValue('{"drafts":[],"dropped":0,"unparseable":false}')
+    expect(await readAndPropose('sha1', new Uint8Array(), 'image/jpeg')).toMatchObject({
+      proposed: 0,
+      updated: true,
+    })
+    expect(stored.records[0].drafts).toEqual([])
+  })
+
+  // "I could not parse this reply" is a formatting failure worth retrying;
+  // "this page has nothing on it" is a conclusion about the page. Reporting the
+  // first as the second tells the owner a readable page was blank.
+  it('raises an unparseable answer instead of calling the page empty', async () => {
+    wasm.code_from_lines.mockReturnValue('{"drafts":[],"dropped":0,"unparseable":true}')
+    await expect(readAndPropose('sha1', new Uint8Array(), 'image/jpeg')).rejects.toBeInstanceOf(
+      UnreadableAnswerError,
+    )
+    expect(stored.records).toHaveLength(0)
+  })
+
+  it('treats an empty findings list as a statement about the page', async () => {
+    wasm.code_from_lines.mockReturnValue('{"drafts":[],"dropped":0,"unparseable":false}')
+    expect(await readAndPropose('sha1', new Uint8Array(), 'image/jpeg')).toMatchObject({
+      proposed: 0,
+      dropped: 0,
+    })
   })
 
   it('refuses without a configured endpoint', async () => {
@@ -240,5 +332,57 @@ describe('readAndPropose', () => {
     await expect(readAndPropose('sha1', new Uint8Array(), 'image/jpeg')).rejects.toBeInstanceOf(
       InferenceError,
     )
+  })
+})
+
+describe('readAndPropose over a long document', () => {
+  beforeEach(() => {
+    engines.pdf.mockResolvedValue(longDocument(32))
+    inference.chatComplete.mockResolvedValue('{"findings":[]}')
+    wasm.code_from_lines.mockReturnValue('{"drafts":[],"dropped":0,"unparseable":false}')
+  })
+
+  // A whole report in one prompt is silently truncated past the context window,
+  // and the guard can only check what it was sent.
+  it('sends one capped chunk and reports the span it covered', async () => {
+    const result = await readAndPropose('sha1', new Uint8Array(), 'application/pdf')
+
+    expect(result).toMatchObject({ fromPage: 1, toPage: PAGES_PER_PASS, totalPages: 32 })
+    const user = inference.chatComplete.mock.calls[0][2] as string
+    expect(user).toContain(`[${PAGES_PER_PASS}] page ${PAGES_PER_PASS}`)
+    expect(user).not.toContain(`page ${PAGES_PER_PASS + 1}`)
+  })
+
+  // The guard resolves a cited number against the list that was sent, so a
+  // later chunk's numbering has to be that list's — not the document's.
+  it('numbers a later chunk from one, matching what the guard checks against', async () => {
+    const result = await readAndPropose('sha1', new Uint8Array(), 'application/pdf', 11)
+
+    expect(result).toMatchObject({ fromPage: 11, toPage: 20, totalPages: 32 })
+    const user = inference.chatComplete.mock.calls[0][2] as string
+    expect(user).toContain('[1] page 11')
+    expect(user).not.toContain('page 10')
+    const lines = JSON.parse(wasm.code_from_lines.mock.calls[0][1] as string) as string[]
+    expect(lines[0]).toBe('page 11')
+    expect(lines).toHaveLength(PAGES_PER_PASS)
+  })
+
+  it('reads the short last chunk without running past the end', async () => {
+    const result = await readAndPropose('sha1', new Uint8Array(), 'application/pdf', 31)
+    expect(result).toMatchObject({ fromPage: 31, toPage: 32, totalPages: 32 })
+    expect(JSON.parse(wasm.code_from_lines.mock.calls[0][1] as string)).toHaveLength(2)
+  })
+
+  // Each chunk is its own pending group: continuing a long document adds to the
+  // queue rather than replacing the chunk before it.
+  it('files each chunk under its own record', async () => {
+    wasm.code_from_lines.mockReturnValue(
+      '{"drafts":[{"kind":"observation","code":null,"effective_at":null,"value":{"text":"x"}}],"dropped":0}',
+    )
+    const first = await readAndPropose('sha1', new Uint8Array(), 'application/pdf', 1)
+    const second = await readAndPropose('sha1', new Uint8Array(), 'application/pdf', 11)
+    expect(first.proposalId).toBe('local-sha1')
+    expect(second.proposalId).toBe('local-sha1-p11')
+    expect(second.updated).toBe(false)
   })
 })

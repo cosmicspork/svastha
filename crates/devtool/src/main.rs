@@ -1,14 +1,20 @@
-//! Thin CLI wrapper around `svastha_devtool`. Two subcommands, same env vars
-//! (`SVASTHA_MNEMONIC`, `SVASTHA_RELAY_URL`); see the crate doc comment
-//! (`lib.rs`) and `.env.example` at the repo root.
+//! Thin CLI wrapper around `svastha_devtool`. Three subcommands; see the crate
+//! doc comment (`lib.rs`) and `.env.example` at the repo root.
+//!
+//! `decrypt` and `import` share `SVASTHA_MNEMONIC` + `SVASTHA_RELAY_URL`;
+//! `accuracy` shares neither, and uses `SVASTHA_DEVTOOL_*` instead — it never
+//! touches a relay or a real vault.
 //!
 //! - no args: pull and decrypt this identity's relay blobs (`just decrypt`).
 //! - `import [--dry-run]`: re-derive events from the relay's stored source
 //!   documents and push only the new ones (`just import-derive`).
+//! - `accuracy [--json] [--vision] [--only <substr>]`: score the page readers
+//!   against the fixture pages (`just accuracy`). See `crates/devtool/README.md`.
 
 use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Context, Result};
+use svastha_devtool::accuracy::{self, AccuracyConfig};
 use svastha_devtool::{import_run, run, Config, ImportConfig};
 
 fn main() -> Result<()> {
@@ -16,8 +22,50 @@ fn main() -> Result<()> {
     match args.first().map(String::as_str) {
         None => decrypt(),
         Some("import") => import(&args[1..]),
-        Some(other) => bail!("unknown subcommand {other:?} — use `import`, or no args to decrypt"),
+        Some("accuracy") => accuracy_cmd(&args[1..]),
+        Some(other) => bail!(
+            "unknown subcommand {other:?} — use `import` or `accuracy`, or no args to decrypt"
+        ),
     }
+}
+
+fn accuracy_cmd(args: &[String]) -> Result<()> {
+    let mut config = AccuracyConfig {
+        json: false,
+        vision: false,
+        only: None,
+    };
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--json" => config.json = true,
+            "--vision" => config.vision = true,
+            "--only" => {
+                config.only = Some(
+                    rest.next()
+                        .ok_or_else(|| anyhow!("--only needs a fixture-name substring"))?
+                        .clone(),
+                )
+            }
+            other => bail!(
+                "unknown flag {other:?} for `accuracy` — supported: --json, --vision, --only <substr>"
+            ),
+        }
+    }
+
+    let report = accuracy::run(&config)?;
+    if config.json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print!("{}", report.render());
+    }
+
+    // A failed gate is a failed run: the exit code is what stops this being
+    // pasted into a PR as evidence without anyone reading the verdict line.
+    if !report.all_gates_pass() {
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 fn decrypt() -> Result<()> {

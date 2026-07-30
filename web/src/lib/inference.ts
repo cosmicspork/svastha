@@ -84,6 +84,38 @@ export function normalizeEndpoint(raw: string): string {
   return raw.trim().replace(/\/+$/, '')
 }
 
+/** Longest host a label can carry before it crowds the mode pill it sits in. */
+const HOST_MAX = 28
+
+/**
+ * The host an endpoint reaches, for labelling where an answer came from.
+ *
+ * An over-long host loses *leading* labels rather than trailing ones. The tail
+ * is what says whose machine this is — `…inference.example.com` is still
+ * plainly not your LAN box, where a head-truncated `my-tailscale-node…` could
+ * be anything.
+ */
+export function endpointHost(endpoint: string): string {
+  const raw = endpoint.trim()
+  if (!raw) return ''
+
+  let host = raw
+  try {
+    // `host`, not `hostname`: a non-default port is part of which service this
+    // is, and URL already drops :443 and :80 for us.
+    host = new URL(raw).host
+  } catch {
+    // Not a URL at all — never true of a saved config, which is validated
+    // before it is stored. Showing the raw string beats showing nothing.
+  }
+
+  const labels = host.split('.')
+  while (labels.length > 1 && labels.join('.').length > HOST_MAX) labels.shift()
+  const kept = labels.join('.')
+  if (kept.length > HOST_MAX) return `…${kept.slice(kept.length - HOST_MAX)}`
+  return kept.length < host.length ? `…${kept}` : kept
+}
+
 // --- config storage -------------------------------------------------------
 
 export async function loadConfig(): Promise<InferenceConfig | null> {
@@ -319,6 +351,16 @@ export function parseModelIds(body: unknown): string[] {
 // --- completions ----------------------------------------------------------
 
 /**
+ * How long one completion may run before the app gives up on it.
+ *
+ * A hung endpoint is otherwise indistinguishable from a slow one, and nothing
+ * else ever resolves the wait: the caller's screen stays disabled for as long as
+ * the socket stays open, which on a stalled LAN box is forever. Thirty seconds
+ * is past the slow end of a real answer and well short of that.
+ */
+export const COMPLETION_TIMEOUT_MS = 30_000
+
+/**
  * One synchronous chat completion. The single network call every AI feature on
  * this device makes, so the failure messages are written once and read the same
  * whether you were asking a question or reading a page.
@@ -334,36 +376,58 @@ export async function chatComplete(
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`
 
-  let response: Response
-  try {
-    response = await fetch(`${normalizeEndpoint(config.endpoint)}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model: config.model,
-        temperature: 0,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user },
-        ],
-      }),
-    })
-  } catch {
-    throw new InferenceError(
-      'Could not reach the inference endpoint. It may be offline, or it may not allow requests from web apps (CORS).',
+  const host = endpointHost(config.endpoint)
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), COMPLETION_TIMEOUT_MS)
+  // Names the host and the limit, because the two things worth knowing are
+  // which machine went quiet and that the app — not the endpoint — decided to
+  // stop waiting.
+  const timedOut = () =>
+    new InferenceError(
+      `${host} didn't answer within 30 seconds, so the app stopped waiting. It may be overloaded, or the model may be too large for it.`,
     )
-  }
 
-  if (response.status === 401 || response.status === 403) {
-    throw new InferenceError('The inference endpoint rejected the API key.')
-  }
-  if (!response.ok) {
-    throw new InferenceError(`The inference endpoint answered ${response.status}.`)
-  }
+  try {
+    let response: Response
+    try {
+      response = await fetch(`${normalizeEndpoint(config.endpoint)}/chat/completions`, {
+        method: 'POST',
+        headers,
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: config.model,
+          temperature: 0,
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: user },
+          ],
+        }),
+      })
+    } catch {
+      // An abort and a network/CORS failure arrive here identically; only the
+      // signal can tell them apart.
+      if (controller.signal.aborted) throw timedOut()
+      throw new InferenceError(
+        'Could not reach the inference endpoint. It may be offline, or it may not allow requests from web apps (CORS).',
+      )
+    }
 
-  const body = (await response.json().catch(() => null)) as {
-    choices?: { message?: { content?: unknown } }[]
-  } | null
-  const content = body?.choices?.[0]?.message?.content
-  return typeof content === 'string' ? content : ''
+    if (response.status === 401 || response.status === 403) {
+      throw new InferenceError('The inference endpoint rejected the API key.')
+    }
+    if (!response.ok) {
+      throw new InferenceError(`The inference endpoint answered ${response.status}.`)
+    }
+
+    // The deadline covers the body too: headers can arrive promptly and the
+    // stream then stall, which is the same hang from the owner's side.
+    const body = (await response.json().catch(() => null)) as {
+      choices?: { message?: { content?: unknown } }[]
+    } | null
+    if (controller.signal.aborted) throw timedOut()
+    const content = body?.choices?.[0]?.message?.content
+    return typeof content === 'string' ? content : ''
+  } finally {
+    clearTimeout(timeout)
+  }
 }

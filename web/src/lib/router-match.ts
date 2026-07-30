@@ -23,6 +23,7 @@ const KNOWN_PATTERNS = [
   '/settings/security',
   '/settings/sync',
   '/settings/notifications',
+  '/settings/ai',
   '/settings/data',
   '/settings/about',
   '/share',

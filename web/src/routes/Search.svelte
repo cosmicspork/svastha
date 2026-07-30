@@ -9,8 +9,8 @@
   import { categorize } from '../lib/category'
   import { focusedEventId } from '../lib/spine-focus'
   import { pullMailbox, sendChatMessage } from '../lib/mailbox'
-  import { chatTurns, refreshChat, conversationState, appendLocalTurn } from '../lib/chat'
-  import { askLocally, canAnswerLocally } from '../lib/ask'
+  import { chatTurns, refreshChat, conversationState } from '../lib/chat'
+  import { askAndRecord, localAnswerer } from '../lib/ask'
   import { InferenceError } from '../lib/inference'
   import { enrolledNode, getNodeLastSeen } from '../lib/nodeadmin'
   import { loadDictionaryIndex, dictionaryStatus } from '../lib/dictionary'
@@ -43,11 +43,21 @@
   let aiOn = $state(false)
   let sending = $state(false)
   let ready = $state(false)
-  // This device can answer on its own once an inference endpoint is configured
-  // (Settings -> AI). It is preferred over the node when both are available: no
-  // mailbox round-trip, and it works while the node is asleep.
+  // The owner's Answers preference decides whether the next question stays
+  // here. Keep endpoint capability separately: "Device" deliberately routes
+  // here without one so the attempt fails honestly instead of using the node.
   let localReady = $state(false)
+  let localConfigured = $state(false)
+  // The current endpoint host. It labels the mode pill; each completed local
+  // answer keeps its own host in the transcript so Settings changes do not
+  // rewrite where an earlier answer came from.
+  let localHost = $state('')
   let askError = $state('')
+  // Who the outstanding question went to. A one-off fallback to the node does
+  // not change the mode, so `localReady` cannot answer this. Null before the
+  // first send of the session, including a mount that restores an unanswered
+  // question — there the configured mode is the only evidence available.
+  let answering = $state<'local' | 'node' | null>(null)
 
   // A node is "asleep" only once it has been heard from and then gone quiet — a
   // freshly enrolled node (never seen) is still askable, so it gets the benefit
@@ -68,9 +78,13 @@
     aiOn ? { hits: [] as SearchHit[], truncated: false } : searchEvents(events, query, dictionary),
   )
   const convoState = $derived(conversationState($chatTurns))
+  const nodeLabel = $derived(node?.label || 'Node')
+  // "On-device" is true only with AI off, where nothing leaves at all. With AI
+  // on, the label is the place the question goes.
   const modeLabel = $derived(
-    !aiOn ? 'On-device' : localReady ? 'This device' : `${node?.label || 'Node'} Node`,
+    !aiOn ? 'On-device' : localReady ? localHost || 'This device' : `${nodeLabel} Node`,
   )
+  const waitingOnNode = $derived(answering ? answering === 'node' : !localReady)
 
   onMount(async () => {
     if (person) {
@@ -87,7 +101,10 @@
       await refreshChat()
       node = await enrolledNode()
       nodeSeenAt = (await getNodeLastSeen()) ?? null
-      localReady = await canAnswerLocally()
+      const local = await localAnswerer()
+      localReady = local.answerHere
+      localConfigured = local.ready
+      localHost = local.host
     }
     ready = true
   })
@@ -100,24 +117,28 @@
   async function ask(): Promise<void> {
     const text = query.trim()
     if (!text || sending || !aiAvailable) return
+    await send(text, localReady ? 'local' : 'node')
+  }
+
+  /** Send this question to the node once, after the local endpoint failed. Not
+   * a mode change: the next question goes wherever the mode says again. */
+  async function askNodeInstead(): Promise<void> {
+    const text = query.trim()
+    if (!text || sending || !nodeAvailable) return
+    await send(text, 'node')
+  }
+
+  async function send(text: string, via: 'local' | 'node'): Promise<void> {
     sending = true
     askError = ''
+    answering = via
     try {
-      if (localReady) {
-        // The question is recorded before the model is called, so the transcript
-        // shows it (and reads as `waiting`) for however long the endpoint takes.
-        await appendLocalTurn('user', text)
-        query = ''
-        const answer = await askLocally(text)
-        // The caveat goes into the turn itself, not a transient banner: the
-        // transcript is what gets re-read later, and an answer recorded without
-        // the note that records were missing from it reads as complete forever.
-        const body = answer.caveat ? `${answer.text}\n\n${answer.caveat}` : answer.text
-        await appendLocalTurn('node', body, answer.citations)
+      if (via === 'local') {
+        await askAndRecord(text)
       } else if (node) {
         await sendChatMessage({ ed: node.ed, x25519: node.x25519 }, text)
-        query = ''
       }
+      query = ''
     } catch (err) {
       // Only an unusable endpoint lands here — a question the record cannot
       // answer comes back as a normal, honest turn.
@@ -127,6 +148,11 @@
           : err instanceof Error
             ? err.message
             : 'Could not answer on this device.'
+      // The question stays in the composer rather than the transcript, so "Try
+      // again" has something to re-send and the failed attempt leaves no trace
+      // that reads as still-pending.
+      query = text
+      answering = null
     } finally {
       sending = false
     }
@@ -181,6 +207,11 @@
         Ask a question about your record — a medication history, when a symptom last showed up. The
         answer cites the entries it used, and is not medical advice.
       </p>
+      <p class="muted" data-testid="search-ai-expectations">
+        Answers match the words in your entries, so ask with the names you logged — "lipid panel",
+        not "cholesterol numbers". Each question stands on its own — name what you're asking about
+        each time.
+      </p>
     {:else}
       <ol class="transcript" data-testid="search-transcript">
         {#each $chatTurns as turn (turn.id)}
@@ -189,8 +220,8 @@
               >{turn.role === 'user'
                 ? 'You'
                 : turn.id.startsWith('local-')
-                  ? 'This device'
-                  : node?.label || 'Node'}</span
+                  ? turn.sourceHost || localHost
+                  : nodeLabel}</span
             >
             <p class="text">{turn.text}</p>
             {#if turn.role === 'node'}
@@ -201,10 +232,34 @@
       </ol>
     {/if}
     {#if askError}
-      <p class="error" data-testid="search-ask-error">{askError}</p>
+      <div class="failcard" role="alert" data-testid="search-ask-error">
+        <p class="error">{askError}</p>
+        <div class="failacts">
+          <button
+            type="button"
+            class="tonal"
+            onclick={() => void ask()}
+            disabled={sending}
+            data-testid="search-ask-retry"
+          >
+            Try again
+          </button>
+          {#if localReady && nodeAvailable}
+            <button
+              type="button"
+              class="tonal"
+              onclick={() => void askNodeInstead()}
+              disabled={sending}
+              data-testid="search-ask-node-instead"
+            >
+              Ask {nodeLabel} instead
+            </button>
+          {/if}
+        </div>
+      </div>
     {:else if convoState === 'waiting'}
       <p class="muted waiting" data-testid="search-waiting">
-        {localReady ? 'Reading your record…' : 'Waiting for your node to answer…'}
+        {waitingOnNode ? 'Waiting for your node to answer…' : 'Reading your record…'}
       </p>
     {/if}
   {:else if query.trim() === ''}
@@ -259,6 +314,28 @@
     {#if result.truncated}
       <p class="muted more" data-testid="search-truncated">Showing the first {result.hits.length} matches — refine your search to narrow them.</p>
     {/if}
+  {/if}
+
+  <!-- Keep the setup card tied to actual capability, not routing preference:
+       "Device" may expose the Ask flow without an endpoint so it can fail
+       honestly, but the owner still needs a visible route to configure one.
+       Never show it while searching someone else's record. -->
+  {#if ready && !person && !node && !localConfigured}
+    <div class="hintcard" data-testid="search-ai-hint">
+      <h2>Ask AI</h2>
+      <p class="muted">
+        Ask a question and get an answer that cites your own entries. Answers come from an endpoint
+        you choose — this device or a node can do the reading.
+      </p>
+      <button
+        type="button"
+        class="tonal"
+        onclick={() => navigate('#/settings/ai')}
+        data-testid="search-ai-setup"
+      >
+        Set up in Settings
+      </button>
+    </div>
   {/if}
 </div>
 
@@ -455,6 +532,40 @@
   }
   .waiting {
     font-size: var(--text-sm);
+  }
+
+  .hintcard,
+  .failcard {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+    margin-top: var(--space-4);
+    padding: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+  }
+
+  .hintcard h2 {
+    margin: 0;
+    font-size: var(--text-lg);
+  }
+
+  .hintcard p,
+  .failcard p {
+    margin: 0;
+    font-size: var(--text-sm);
+  }
+
+  .failcard {
+    border-color: var(--danger);
+  }
+
+  .failacts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
   }
 
   .composer {

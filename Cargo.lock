@@ -2686,6 +2686,7 @@ dependencies = [
  "sha2",
  "svastha-core",
  "svastha-import",
+ "svastha-node",
  "svastha-relay",
  "tempfile",
  "tokio",

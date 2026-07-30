@@ -60,11 +60,49 @@ is tested deterministically with no model and no recognition engine in the loop.
   produces when a table has been flattened row-major. `parse_lines` must drop
   all of them; the test asserts the count, not just a sample.
 
-The synthetic-only rule at the top of this file applies with no exceptions here.
-A photographed or scanned page of a real lab report, prescription, or discharge
-summary must never land in this directory — the transcript form is if anything
-easier to leak by accident, because it looks like plain text rather than a
-document. Hand-write the lines, as these fixtures are.
+### Rendered pages, for the accuracy harness
+
+Five synthetic **page images** and their answer keys, scored by
+`cargo run -p svastha-devtool -- accuracy` (see `crates/devtool/README.md`).
+Where the transcripts above test the coding step with no recognizer in the loop,
+these test the recognizers themselves.
+
+- `cmp-panel.png` — the `cmp-panel.lines.json` rows typeset as a page. The
+  control: no deliberate hazard.
+- `tight-rows-panel.png` — rows set solid (no leading) beneath section headers
+  several times their height. This is the layout that makes a line-grouper
+  anchored to a row's tallest member swallow the rows below it.
+- `skewed-panel.png` — the same panel rotated ~2°, enough that a row droops by
+  more than its own height from its first cell to its last.
+- `handwritten-vitals.png`, `handwritten-meds.png` — **synthetic hand-style**: a
+  cursive face with deterministic per-glyph jitter. Clearly *not* real
+  handwriting, and labelled that way in their answer keys; a reader that fails
+  here would fail on real handwriting, but a reader that passes here has not
+  been shown to handle it.
+
+Each has a `<name>.truth.json` answer key listing the result rows actually
+printed on the page. Reference ranges are deliberately **excluded** from the
+keys even though they are printed: a reader that reports `Sodium 135` has read
+the low end of the range as the result, and that must score as a miss, not a hit.
+
+Both the PNG and its key are generated from one spec by
+`web/scripts/accuracy/render.ts` (`cd web && bun run scripts/accuracy/render.ts`),
+so an edited value changes the pixels and the ground truth together or not at
+all. The PNGs are committed rather than rendered on demand because text
+rasterization is not reproducible across machines — regenerating them on a
+different box will shift pixels, which is fine deliberately and not fine
+silently. Regenerating the hand-style pages needs a cursive font installed
+(the script names the ones it looks for and refuses rather than quietly
+emitting typeset text under a handwriting filename).
+
+### The rule
+
+The synthetic-only rule at the top of this file applies with no exceptions here,
+to the transcripts and the rendered pages alike. A photographed or scanned page
+of a real lab report, prescription, or discharge summary must never land in this
+directory — and the transcript form is if anything easier to leak by accident,
+because it looks like plain text rather than a document. Hand-write the lines and
+invent the values, as these fixtures do; the patient is always "Synthetic Test".
 
 ## Golden tests
 

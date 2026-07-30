@@ -14,6 +14,10 @@ svastha-core = { path = "../core" }
 # The `import` subcommand re-runs the C-CDA/FHIR mappers headlessly; path-only
 # (no version marker) since this crate never publishes.
 svastha-import = { path = "../import" }
+# The `accuracy` subcommand scores the node's *actual* page reader and sends the
+# node's *actual* coding request, rather than a copy of either that could drift
+# from what ships. Nothing here changes the node; it only calls its public API.
+svastha-node = { path = "../node" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"

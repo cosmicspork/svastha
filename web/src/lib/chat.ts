@@ -7,7 +7,7 @@
 // incoming answer) lives in mailbox.ts, which owns the configured client and
 // identity.
 import { writable } from 'svelte/store'
-import { getAll, get, put, clear } from './db'
+import { getAll, get, put, del, clear } from './db'
 
 const STORE = 'chat'
 
@@ -21,6 +21,9 @@ export interface ChatTurn {
   text: string
   /** Event content ids an answer cited (always empty on a `user` turn). */
   citations: string[]
+  /** Endpoint host that generated this local answer. Kept with the turn so a
+   * later Settings change cannot rewrite where a recorded answer came from. */
+  sourceHost?: string
   /** ISO instant this turn was recorded on this device. Drives order. */
   createdAt: string
 }
@@ -81,16 +84,31 @@ export async function appendLocalTurn(
   role: ChatTurn['role'],
   text: string,
   citations: string[] = [],
+  sourceHost?: string,
 ): Promise<ChatTurn> {
   const turn: ChatTurn = {
     id: `local-${crypto.randomUUID()}`,
     role,
     text,
     citations,
+    ...(sourceHost ? { sourceHost } : {}),
     createdAt: new Date().toISOString(),
   }
   await appendTurn(turn)
   return turn
+}
+
+/**
+ * Forget one turn.
+ *
+ * For a question whose answer failed outright: the transcript is a record of
+ * exchanges, and a question with no reply and no reply coming is not one — it is
+ * what `conversationState` would read as `waiting` forever. Not an undo, and not
+ * offered to the owner: nothing deletes an answered turn.
+ */
+export async function dropTurn(id: string): Promise<void> {
+  await del(STORE, id)
+  await refreshChat()
 }
 
 /** Forget the whole conversation (store + IndexedDB). Used by lock/teardown and
