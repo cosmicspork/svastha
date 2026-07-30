@@ -1,20 +1,11 @@
-// The ask screen's conversation state: retrieval-augmented Q&A turns with the
-// owner's processing node, ridden over the mailbox as `chat_msg` envelopes
-// (design §9; body schema `{ role, text, citations }` in `spec/README.md`). This
-// module is the pure persistence + state layer — IndexedDB and a plain
-// `svelte/store` only, no wasm and no relay — so it unit-tests under node vitest
-// exactly like proposals.ts / notifications.ts. The crypto (seal a question to
-// the node, open an incoming answer) lives in mailbox.ts, which owns the
-// configured client and identity; the UI (routes/Search.svelte) drives sending and
-// renders answers with their citations.
+// The ask screen's conversation state: retrieval-augmented Q&A turns, ridden
+// over the mailbox as `chat_msg` envelopes (design §9; body schema
+// `{ role, text, citations }` in `spec/README.md`).
 //
-// Answers arrive two ways. A **node** turn is routed in from the mailbox, so the
-// question sits in `waiting` until the node deposits one. A **local** turn is
-// produced on this device (see ask.ts) and lands as soon as the endpoint
-// replies; the question still passes through `waiting` while the model is
-// working, which is the honest reading of that state rather than a flicker.
-// Either way `waiting` reflects the turns themselves — never a fake spinner that
-// resolves itself.
+// Kept to IndexedDB and a plain `svelte/store` — no wasm and no relay — so it
+// unit-tests under node vitest. The crypto (seal a question to the node, open an
+// incoming answer) lives in mailbox.ts, which owns the configured client and
+// identity.
 import { writable } from 'svelte/store'
 import { getAll, get, put, clear } from './db'
 
@@ -34,11 +25,9 @@ export interface ChatTurn {
   createdAt: string
 }
 
-/** Where the conversation stands, for the honest pending UI:
- * - `empty` — no turns yet.
- * - `waiting` — the newest turn is the owner's question; no answer has arrived.
- * - `answered` — the newest turn is an answer.
- * Purely a function of the turns, so the UI never invents a resolving spinner. */
+/** Where the conversation stands. Purely a function of the turns, so a pending
+ * state always reflects a question that is genuinely unanswered rather than a
+ * spinner the UI resolves on its own. */
 export type ConversationState = 'empty' | 'waiting' | 'answered'
 
 /** Oldest-first, the order a transcript reads. Ties (same millisecond) break by

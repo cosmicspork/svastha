@@ -10,10 +10,10 @@
 //!   A batch-style API is rejected at config time ([`crate::config`]) — batch
 //!   outputs are retained server-side, which would leak plaintext beyond the
 //!   user's trust boundary.
-//! - **Content-free logs.** The request necessarily carries the decrypted page to
-//!   the configured endpoint — that is the design's trust decision — but *this*
-//!   crate's logs never carry the image, the prompt, or the extracted text: only
-//!   the model id and byte/finding counts.
+//! - **Content-free logs.** The request necessarily carries the decrypted page
+//!   text to the configured endpoint — that is the design's trust decision — but
+//!   *this* crate's logs never carry the prompt or the extracted text: only the
+//!   model id and byte/finding counts.
 //!
 //! This client is transport only: it returns the model's raw assistant-message
 //! text. Turning that text into draft events lives in `svastha_import::extract`, so the
@@ -28,9 +28,10 @@ use ureq::Agent;
 
 use crate::config::{validate_inference_endpoint, InferenceConfig};
 
-/// The maximum time to wait on one inference round-trip. Vision inference is slow
-/// and rate-limited; the OCR loop is serial (below), so a generous ceiling here
-/// only bounds a single wedged request, never the whole node.
+/// The maximum time to wait on one inference round-trip. Deliberately generous:
+/// a self-hosted endpoint on modest hardware can take minutes over a long page,
+/// and the reading loop is serial, so this only ever bounds one wedged request
+/// rather than the whole node.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// A failure talking to the inference endpoint. Every variant is transient from
@@ -74,12 +75,6 @@ impl InferenceClient {
     /// The configured model id (also stamped into each draft's provenance).
     pub fn model(&self) -> &str {
         &self.model
-    }
-
-    /// The resolved chat-completions URL, for a content-free admin `job_status`
-    /// echo (an endpoint URL is configuration, not record content).
-    pub fn url(&self) -> &str {
-        &self.url
     }
 
     /// Run one **text** chat completion (no image): send `system` + `user` and
@@ -139,9 +134,6 @@ impl InferenceClient {
     /// ([`svastha_import::extract::parse_lines`]) — this method makes no claim
     /// the text is well-formed JSON, nor that its findings belong to the lines
     /// they cite.
-    ///
-    /// Replaces the vision pass the node used to make. The page image no longer
-    /// leaves this process; only the text does.
     pub fn code_page(&self, numbered_lines: &str) -> Result<String, InferenceError> {
         let user = format!(
             "{}\n\nThe page, one numbered line per row:\n{}",

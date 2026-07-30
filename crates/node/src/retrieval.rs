@@ -13,22 +13,13 @@
 //! that index alone. There is no code path by which a question routed to owner
 //! A's index can read owner B's events — not because the caller is careful, but
 //! because B's events live in a different `VaultIndex` this function is never
-//! handed. The shared ranker then scores exactly the candidates it is given, so a
-//! citation can only ever be an id from the one index passed in.
+//! handed. This is the node's half of the guarantee [`svastha_retrieval`] says
+//! is the caller's to make.
 //!
-//! ## Curation-aware
-//!
-//! The owner's overlay is applied here, where the index can supply it: the
-//! `name:` display override becomes the candidate's name, and the `status:`
-//! current-vs-past distinction becomes its status — which the ranker both shows
-//! the model (`[current]`/`[past]`) and uses to re-rank.
-//!
-//! ## Scope-aware, before anything is scored
-//!
-//! The owner's opt-in categories ([`crate::answer_scope`]) gate the candidate
-//! list itself. An entry the owner has not opted in never becomes a
-//! [`Candidate`], so it cannot be ranked, rendered, or cited — the exclusion is a
-//! property of what retrieval was given, not of what it chose to return.
+//! The owner's curation overlay and their opt-in answer scope
+//! ([`crate::answer_scope`]) are both applied here, on the way in — see
+//! [`svastha_retrieval`] for why resolution belongs to the caller and why scope
+//! has to be decided before anything is scored.
 
 use svastha_core::event::{Event, EventKind, EventValue};
 use svastha_retrieval::{rank, AnswerScope, Candidate};

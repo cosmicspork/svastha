@@ -44,7 +44,7 @@ mod rank;
 mod scope;
 
 pub use prompt::{build_prompt, ground, CANT_ANSWER, SYSTEM_PROMPT};
-pub use rank::{rank, render_line};
+pub use rank::rank;
 pub use scope::{sensitive_category, AnswerScope, SensitiveCategory};
 
 use serde::{Deserialize, Serialize};

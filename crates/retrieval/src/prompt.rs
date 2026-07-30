@@ -41,7 +41,7 @@ pub fn build_prompt(question: &str, context: &[ContextItem]) -> String {
 }
 
 /// The model's expected reply: a plain answer plus the 1-based context item
-/// numbers it used. Tolerant (defaults, unknown fields ignored).
+/// numbers it used.
 #[derive(Debug, Default, Deserialize)]
 struct ModelAnswer {
     #[serde(default)]

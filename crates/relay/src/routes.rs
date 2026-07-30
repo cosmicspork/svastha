@@ -512,9 +512,8 @@ fn paginate_ids(
     Ok((page, next))
 }
 
-/// Serve one page of `owner`'s blobs as bodies, not just ids: the frames
-/// `id_len u16 BE | id | blob_len u32 BE | blob` concatenated, with the
-/// continuation cursor in the [`NEXT_HEADER`] response header. This exists to
+/// Serve one page of `owner`'s blobs as bodies rather than ids (the frame layout
+/// and continuation header are spec'd under "Batched fetch"). This exists to
 /// collapse round trips — a cold device otherwise pays a signed (so
 /// preflighted) request per blob to restore a vault — and changes nothing about
 /// what the relay can see: it already lists every id and serves every body.

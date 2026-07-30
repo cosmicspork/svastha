@@ -86,8 +86,8 @@ pub struct OcrReport {
 struct OwnerJob {
     owner_hex: String,
     owner_x25519: [u8; 32],
-    /// `(sha256, mime, capture_time)` for each indexed image attachment.
-    sources: Vec<(String, String, Option<String>)>,
+    /// `(sha256, capture_time)` for each indexed image attachment.
+    sources: Vec<(String, Option<String>)>,
 }
 
 /// Run one OCR pass over every enrolled owner that has reading on. Errors on the
@@ -127,16 +127,15 @@ pub fn run(
     let node = client.identity();
     let mut read_this_pass = 0usize;
     'outer: for job in snapshot_jobs(state) {
-        // The gate is per owner because the command that sets it is: pausing
-        // stops the node reading *your* pages, and leaves every other household
-        // it serves reading. Resolutions were folded in above regardless — an
-        // owner's decision on a proposal is theirs whether or not we are reading.
+        // The gate is per owner, not node-wide — see [`crate::ocr_control`].
+        // Resolutions were folded in above regardless: an owner's decision on a
+        // proposal is theirs whether or not we are reading for them.
         if control.paused(&job.owner_hex) {
             report.paused_owners += 1;
             continue;
         }
         let recipient = PublicKey::from(job.owner_x25519);
-        for (sha, _mime, capture) in &job.sources {
+        for (sha, capture) in &job.sources {
             let source_id = format!("att-{sha}");
             if !journal.eligible(&job.owner_hex, &source_id, now_secs) {
                 continue;
@@ -300,13 +299,8 @@ fn snapshot_jobs(state: &Mutex<NodeState>) -> Vec<OwnerJob> {
                 .image_attachment_shas()
                 .into_iter()
                 .map(|sha| {
-                    let mime = os
-                        .index
-                        .attachment(&sha)
-                        .map(|m| m.mime.clone())
-                        .unwrap_or_default();
                     let capture = os.index.attachment_capture_time(&sha);
-                    (sha, mime, capture)
+                    (sha, capture)
                 })
                 .collect();
             Some(OwnerJob {

@@ -4,20 +4,19 @@
 //
 // Three things this module is deliberate about:
 //
-//   1. **The endpoint must be HTTPS.** The PWA is served over HTTPS, so a
-//      browser blocks any `http://` request from it as active mixed content.
-//      `http://localhost` is exempt (a potentially-trustworthy origin) but is
-//      not the shape people actually run — a model on a desktop, reached from a
-//      phone, is a LAN address, and that is precisely the case the browser
-//      refuses. So a self-hosted endpoint has to terminate TLS with a real
-//      certificate, and saying that plainly beats an opaque network error.
+//   1. **The endpoint must be HTTPS.** A browser blocks `http://` from this
+//      HTTPS page as active mixed content. Loopback is exempt but is not the
+//      shape people run — a desktop model reached from a phone is a LAN
+//      address, exactly the case the browser refuses — so a self-hosted
+//      endpoint has to terminate TLS.
 //   2. **Batch paths are rejected**, mirroring `validate_inference_endpoint` in
 //      `crates/node/src/config.rs`: batch APIs retain inputs and outputs
 //      server-side, so pointing at one leaks plaintext beyond the trust
 //      boundary. Duplicated rather than shared because it is twenty lines and
 //      the alternative is a wasm round-trip for a string check.
 //   3. **The API key is sealed, not stored in `prefs`.** `prefs` is plaintext at
-//      rest; a bearer credential is not vault content but it is still a secret.
+//      rest — see {@link saveApiKey} for what it is sealed under, and why not
+//      the obvious key.
 import { get, put, del } from './db'
 import { session } from './session.svelte'
 import { toHex, fromHex } from './hex'

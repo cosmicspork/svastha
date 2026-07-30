@@ -48,17 +48,12 @@ outbound only.
 
 ## OCR → proposals
 
-**Paused until you say otherwise.** A freshly enrolled node reads **nothing**.
-Enrolment points the node at a vault that may already hold hundreds of captured
-pages, and reading them all would deposit a proposal for each — an approval queue
-nobody reviews, which defeats the point of proposing rather than writing. So
-enrolment is quiet: the node syncs, answers questions, and serves its household,
-and reading starts when you send `resume_ocr` and stops on `pause_ocr`. The
-choice persists, so a restart never silently resumes a node you paused. Once
-resumed, a pass reads at most `SVASTHA_NODE_OCR_MAX_PAGES_PER_PASS` pages before
-standing down until the next reconcile, so a backlog arrives in batches you can
-actually review — and you can pause again after the first one if the results are
-not what you expected.
+**Paused until you say otherwise.** A freshly enrolled node reads **nothing**:
+it syncs, answers questions, and serves its household, and reading starts when
+you send `resume_ocr` and stops on `pause_ocr`. The choice persists, so a restart
+never silently resumes a node you paused. Once resumed, a pass reads at most
+`SVASTHA_NODE_OCR_MAX_PAGES_PER_PASS` pages before standing down until the next
+reconcile, so a backlog arrives in batches you can actually review.
 
 **The choice is yours alone.** Pausing stops the node reading *your* pages;
 anyone else it serves is unaffected, and nobody else can pause or resume yours.
@@ -73,6 +68,10 @@ An owner who has never chosen takes the boot default, which is where
 that env default, else paused.** So an existing deployment upgrading into
 pause-by-default keeps reading by setting `SVASTHA_NODE_OCR_PAUSED=false` — no
 owner has a persisted choice yet, and it applies to all of them.
+
+Why the default is pause rather than "catch up on everything", and why the gate
+is per owner rather than node-wide, are argued once in
+`crates/node/src/ocr_control.rs`.
 
 `job_status` reports whether reading is on **for you** (`paused by you` /
 `reading`), the current cap, and the answer scope your questions run under.

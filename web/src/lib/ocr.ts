@@ -2,19 +2,11 @@
 //
 // Splitting "read the page" from "code what it says" is what makes the second
 // half checkable. A single vision pass that both reads and codes a lab panel can
-// assert "Potassium 14.2" with nothing to compare against; once stage A has
-// produced ground truth with coordinates, a coded finding can be verified
-// against the line it claims to come from. That guard lands with the extractor;
-// this module is the ground truth it will check against.
-//
-// One interface, several engines over time:
-//
-//   1. **The PDF text layer** (`pdf.ts`'s `textLayer`) — exact, free, no model
-//      and no download. Most portal-issued lab reports are digital PDFs, so
-//      this covers a large slice on its own.
-//   2. **A recognition engine** for photographed and scanned pages, added later
-//      behind this same shape.
-//   3. **Native OS text recognition** when the app gains a wrapper.
+// assert "Potassium 14.2" with nothing to compare against; because stage A
+// produces ground truth with coordinates, a coded finding can be verified
+// against the line it claims to come from — the source-line guard in
+// `read-page.ts`. Two engines implement this shape: `pdf.ts` for a digital PDF's
+// embedded text layer, and `ocr-engine.ts` for photographed and scanned pages.
 //
 // Coordinates are **top-down** (y grows downward, origin at the page's top-left)
 // for every engine, because that is what image-based recognizers report; the PDF

@@ -41,9 +41,21 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 # Construct the owner's X25519 public key (proposal seal target) from the bytes
 # their key_handoff declared. Same major as core's, so one version in the tree.
 x25519-dalek = "2"
+# In-process page reading: text detection and recognition over the small models
+# baked into the image (Dockerfile.node). Pure Rust on rten's runtime, so the
+# node keeps its no-OpenSSL, no-native-toolchain build — and, more to the point,
+# a page is transcribed here rather than uploaded to a vision endpoint.
 ocrs = "0.12.2"
+# The tensor runtime ocrs runs its models on; named directly because the node
+# loads the `.rten` model files itself (`SVASTHA_NODE_OCR_MODELS_DIR`).
 rten = "0.24.0"
-image = "0.25.10"
+# Decode a captured page into the RGB buffer ocrs reads. Formats are pinned to
+# what actually arrives: the capture path re-encodes every photograph to JPEG
+# (`downscaleToJpeg` in web/src/lib/attachments.ts) and PNG covers imported
+# pages and this crate's own tests. Defaults would add every other format's
+# codec — including the AVIF/EXR encoders and their build chains — to a binary
+# that only ever decodes those two.
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 
 [dev-dependencies]
 # The browser's entry point into the shared ranker, so the context-line parity
