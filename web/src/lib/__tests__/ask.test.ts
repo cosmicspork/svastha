@@ -293,7 +293,7 @@ describe('opt-in entries', () => {
 
   beforeEach(() => {
     vi.mocked(allEvents).mockResolvedValue(VAULT)
-    wasm.rank_context.mockReturnValue('[]')
+    wasm.rank_context.mockReturnValue(ranked([]))
   })
 
   it('keeps cycle and mind out of the candidates by default', async () => {
@@ -367,7 +367,7 @@ describe('indexes built alongside the candidates', () => {
 
   it('never lends an excluded entry’s display to an in-scope one', async () => {
     vi.mocked(allEvents).mockResolvedValue([privateMood, medication])
-    wasm.rank_context.mockReturnValue('[]')
+    wasm.rank_context.mockReturnValue(ranked([]))
 
     await askLocally('what am I taking?')
 
