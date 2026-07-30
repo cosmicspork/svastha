@@ -1,13 +1,12 @@
-// The opt-in switch for on-device page reading, and the integrity check behind
-// it.
-//
+// The default-on preference for on-device page reading, and the integrity check
+// behind it.
 // The recognizer's assets are ~10 MiB, committed under `public/ocr/` and
 // excluded from the install precache (`vite.config.ts`'s `globIgnores`), so a
-// first install stays small and only someone who turns this on pays for them.
-// Enabling fetches each file once and checks it against the manifest's SHA-256
-// before the switch flips — the same posture the offline code dictionary takes,
-// for the same reason: this is executable code and model data that will read
-// medical records, so "it downloaded" is not the same as "it is what we shipped".
+// first install stays small. A reader checks every runtime file against the
+// manifest's SHA-256 before it runs — the same posture the offline code
+// dictionary takes, for the same reason: this is executable code and model data
+// that will read medical records, so "it downloaded" is not the same as "it is
+// what we shipped".
 //
 // Unlike the dictionary, the bytes are not copied into IndexedDB. tesseract
 // fetches its worker, core, and language data *by URL*, so they have to be
@@ -111,9 +110,16 @@ export async function verifyAssets(
   }
 }
 
+/** Page reading is available by default; only an explicit device-local opt-out
+ * turns it off. This does not claim the reader is ready — `assetsEnabled`
+ * separately requires a verified current manifest revision. */
+export async function pageReadingEnabled(): Promise<boolean> {
+  return (await get<boolean>('prefs', ENABLED_PREF)) !== false
+}
+
 /**
- * Whether on-device reading is switched on **and** the currently-shipped
- * assets are the ones this device verified.
+ * Whether on-device reading may run: its preference is enabled and the
+ * currently-shipped assets are the ones this device verified.
  *
  * A device that enabled this before a deploy swapped the underlying files —
  * same manifest `version`, different `revision`, as happened once already —
@@ -125,7 +131,7 @@ export async function verifyAssets(
  * runs `verifyAssets` again against the new revision.
  */
 export async function assetsEnabled(): Promise<boolean> {
-  if ((await get<boolean>('prefs', ENABLED_PREF)) !== true) return false
+  if (!(await pageReadingEnabled())) return false
   try {
     const manifest = await loadManifest()
     return (await verifiedRevision()) === manifest.revision
@@ -141,8 +147,8 @@ export async function verifiedRevision(): Promise<string | null> {
 }
 
 /**
- * Verify the assets and switch the feature on. Throws without enabling if any
- * file fails — a half-verified reader is not switched on.
+ * Verify the assets and make the reader ready. Throws without recording a
+ * revision if any file fails — a half-verified reader is never usable.
  */
 export async function enableAssets(onProgress?: (done: number, total: number) => void): Promise<void> {
   const manifest = await loadManifest()

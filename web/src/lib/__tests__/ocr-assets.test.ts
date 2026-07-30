@@ -12,6 +12,7 @@ import {
   verifyAssets,
   enableAssets,
   disableAssets,
+  pageReadingEnabled,
   assetsEnabled,
   verifiedRevision,
   downloadBytes,
@@ -110,6 +111,21 @@ describe('verifyAssets', () => {
   it('surfaces a failed download as its own error', async () => {
     fetchMock.mockImplementation(async () => ({ ok: false, status: 404 }))
     await expect(verifyAssets(manifest)).rejects.toBeInstanceOf(OcrFetchError)
+  })
+})
+
+describe('page reading preference', () => {
+  it('defaults on without downloading reader assets on a fresh device', async () => {
+    expect(await pageReadingEnabled()).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps an explicit opt-out without checking or downloading assets', async () => {
+    await disableAssets()
+
+    expect(await pageReadingEnabled()).toBe(false)
+    expect(await assetsEnabled()).toBe(false)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
 

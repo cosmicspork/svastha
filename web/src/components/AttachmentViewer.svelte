@@ -120,7 +120,7 @@
   }
 
   /** Run a notice's action with the same busy state the read action uses —
-   * "Continue" and "Turn on reading" both go back to the endpoint or the
+   * "Continue" and "Prepare reading" both go back to the endpoint or the
    * network, and neither should be re-entrant. */
   async function runAction(action: ReadNoticeAction) {
     reading = true

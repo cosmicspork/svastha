@@ -17,7 +17,7 @@ import {
 } from './svastha'
 import { pdfTextEngine } from './pdf'
 import { imageOcrEngine } from './ocr-engine'
-import { assetsEnabled } from './ocr-assets'
+import { assetsEnabled, pageReadingEnabled } from './ocr-assets'
 import { numberedLines, renderColumns } from './ocr-layout'
 import { UnreadablePageError, type OcrLine } from './ocr'
 import { loadConfig, chatComplete, InferenceError } from './inference'
@@ -90,10 +90,13 @@ export async function transcribe(bytes: Uint8Array, mime: string): Promise<OcrLi
   // act on, and saying so once it is already on would be advice to nowhere.
   const needsRecognizer = mime === 'application/pdf' || mime.startsWith('image/')
   if (needsRecognizer && !(await assetsEnabled())) {
+    const enabled = await pageReadingEnabled()
     throw new ReadingOffError(
-      mime === 'application/pdf'
-        ? "This PDF is a scan, and reading scans on this device isn't switched on."
-        : "Reading pages on this device isn't switched on.",
+      enabled
+        ? 'Reading pages needs its one-time download before it can read this page.'
+        : mime === 'application/pdf'
+          ? "This PDF is a scan, and reading scans on this device isn't switched on."
+          : "Reading pages on this device isn't switched on.",
     )
   }
 
