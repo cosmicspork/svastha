@@ -6,6 +6,9 @@
   import { enqueue, drain } from '../../lib/sync'
   import { downscaleToJpeg, storeAttachment, MAX_ATTACHMENT_BYTES } from '../../lib/attachments'
   import { paperRecordDrafts } from '../../lib/drafts'
+  import BulkReadSheet from '../BulkReadSheet.svelte'
+  import Sheet from '../Sheet.svelte'
+  import { unreadAttachmentPages, type BulkPage } from '../../lib/bulk-read'
 
   // One attachment held in memory before save: a photographed page (downscaled
   // JPEG) or a picked PDF, plus an object URL (its thumbnail for a photo, a
@@ -24,6 +27,9 @@
   let processing = $state(false)
   let saving = $state(false)
   let error = $state('')
+  let unreadPages = $state<BulkPage[]>([])
+  let showReadOffer = $state(false)
+  let showBulkRead = $state(false)
 
   // Time control, mirroring LogShell: default to now, offer an "Earlier" picker.
   let earlier = $state(false)
@@ -139,11 +145,23 @@
       void drain()
 
       await logEvent(paperRecordDrafts(captured, caption, effectiveAt()))
-      navigate('#/timeline')
+      unreadPages = await unreadAttachmentPages()
+      if (unreadPages.length > 0) showReadOffer = true
+      else navigate('#/timeline')
     } catch (err) {
       error = err instanceof Error ? err.message : 'Could not save — try again.'
       saving = false
     }
+  }
+
+  function closeBulkRead(): void {
+    showBulkRead = false
+    navigate('#/timeline')
+  }
+
+  function declineReadOffer(): void {
+    showReadOffer = false
+    navigate('#/timeline')
   }
 
   function cancel() {
@@ -273,12 +291,45 @@
   </div>
 </div>
 
+{#if showReadOffer}
+  <Sheet onclose={declineReadOffer}>
+    <div data-testid="bulk-read-import-offer">
+      <h2>Read your unread pages?</h2>
+      <p class="muted">Svastha can work through your unread pages one at a time.</p>
+      <div class="offer-actions">
+        <button
+          type="button"
+          class="primary"
+          onclick={() => {
+            showReadOffer = false
+            showBulkRead = true
+          }}
+          data-testid="bulk-read-import-start"
+        >
+          Read pages
+        </button>
+        <button type="button" onclick={declineReadOffer} data-testid="bulk-read-import-decline">Not now</button>
+      </div>
+    </div>
+  </Sheet>
+{/if}
+
+{#if showBulkRead}
+  <BulkReadSheet pages={unreadPages} onclose={closeBulkRead} />
+{/if}
+
+
 <style>
   .head {
     display: flex;
     align-items: center;
     gap: var(--space-2);
   }
+  .offer-actions {
+    display: flex;
+    gap: var(--space-2);
+  }
+
 
   .head h1 {
     font-size: var(--text-xl);

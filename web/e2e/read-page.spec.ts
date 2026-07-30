@@ -52,6 +52,7 @@ async function openCapturedPdf(page: Page): Promise<void> {
   await page.getByTestId('paper-file-pdf').setInputFiles(PDF)
   await expect(page.getByTestId('paper-thumb-pdf')).toHaveCount(1)
   await page.getByTestId('save').click()
+  await page.getByTestId('bulk-read-import-decline').click()
 
   await page.getByTestId('spine-entry').getByTestId('spine-entry-trigger').click()
   await expect(page.getByTestId('viewer-pdf').locator('canvas')).toBeVisible()
