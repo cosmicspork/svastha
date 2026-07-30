@@ -1,0 +1,23 @@
+{
+  "page": "handwritten-meds.png",
+  "note": "SYNTHETIC HAND-STYLE — a cursive face with per-glyph jitter, not real handwriting.",
+  "hazard": "The same hand-style rendering over medication names and doses, where a mis-read digit is a dosing error rather than a wrong lab value. Scored the same way; the analyte column is the drug and the value column is the dose.",
+  "synthetic": true,
+  "expected": [
+    {
+      "analyte": "Metformin",
+      "value": "500",
+      "unit": "mg"
+    },
+    {
+      "analyte": "Lisinopril",
+      "value": "10",
+      "unit": "mg"
+    },
+    {
+      "analyte": "Atorvastatin",
+      "value": "20",
+      "unit": "mg"
+    }
+  ]
+}

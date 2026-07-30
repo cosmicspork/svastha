@@ -69,6 +69,13 @@ decrypt:
 import-derive *args:
     cargo run -p svastha-devtool -- import {{args}}
 
+# score the page readers against the fixture pages (dev-only, never CI). Needs
+# SVASTHA_DEVTOOL_ENDPOINT — and SVASTHA_NODE_OCR_MODELS_DIR for the node's
+# reader — and refuses with instructions without them. Results belong in the PR
+# that flips any reader default; see crates/devtool/README.md.
+accuracy *args:
+    cargo run -p svastha-devtool -- accuracy {{args}}
+
 # --- aggregate ---
 
 check: fmt-check clippy web-check

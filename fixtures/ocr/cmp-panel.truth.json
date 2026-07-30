@@ -1,0 +1,33 @@
+{
+  "page": "cmp-panel.png",
+  "note": "The existing cmp-panel transcript, typeset as a page.",
+  "hazard": "None deliberately — the control. Same rows as cmp-panel.lines.json, so a reader that scores badly here scores badly on the easiest page there is.",
+  "synthetic": true,
+  "expected": [
+    {
+      "analyte": "Sodium",
+      "value": "139",
+      "unit": "mmol/L"
+    },
+    {
+      "analyte": "Potassium",
+      "value": "4.1",
+      "unit": "mmol/L"
+    },
+    {
+      "analyte": "Chloride",
+      "value": "104",
+      "unit": "mmol/L"
+    },
+    {
+      "analyte": "Glucose",
+      "value": "105",
+      "unit": "mg/dL"
+    },
+    {
+      "analyte": "Creatinine",
+      "value": "0.9",
+      "unit": "mg/dL"
+    }
+  ]
+}

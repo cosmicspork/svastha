@@ -1,0 +1,28 @@
+{
+  "page": "handwritten-vitals.png",
+  "note": "SYNTHETIC HAND-STYLE — a cursive face with per-glyph jitter, not real handwriting.",
+  "hazard": "Cursive glyphs with connected strokes and an irregular baseline. Both shipped readers are trained on typeset text; this page exists to put a number on how they fail, not to be passed.",
+  "synthetic": true,
+  "expected": [
+    {
+      "analyte": "Weight",
+      "value": "172",
+      "unit": "lb"
+    },
+    {
+      "analyte": "Pulse",
+      "value": "68",
+      "unit": "bpm"
+    },
+    {
+      "analyte": "Temperature",
+      "value": "98.4",
+      "unit": "F"
+    },
+    {
+      "analyte": "Respirations",
+      "value": "14",
+      "unit": "/min"
+    }
+  ]
+}
