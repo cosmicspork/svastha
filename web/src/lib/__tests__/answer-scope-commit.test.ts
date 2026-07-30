@@ -21,6 +21,18 @@ vi.mock('../db', () => ({
     if (store.putFails || store.puts++ >= store.allowPuts) throw new Error('QuotaExceededError')
     store.values.set(key, value)
   }),
+  // Models a single IndexedDB readwrite transaction: read, decide, and write
+  // with no suspension in between, so nothing can land in the middle. The
+  // interleaving tests below therefore exercise the generation check itself
+  // rather than a gap the mock happens to leave open.
+  mutate: vi.fn(async (_s: string, key: string, fn: (c: unknown) => unknown) => {
+    const current = store.values.get(key)
+    const next = fn(current)
+    if (next === undefined) return { written: false, value: current }
+    if (store.putFails || store.puts++ >= store.allowPuts) throw new Error('QuotaExceededError')
+    store.values.set(key, next)
+    return { written: true, value: next }
+  }),
   del: vi.fn(async () => {}),
   getAll: vi.fn(async () => []),
 }))
@@ -96,10 +108,39 @@ function client(): MailboxClient {
       return true
     },
     async putMailbox() {
+      // One-shot: only the deposit that finds the gate waits on it, so a test
+      // can park the *first* delivery and let a second commit run past it —
+      // the two-tab race, made deterministic.
+      const gate = relayGate
+      relayGate = null
+      if (gate) {
+        gate.entered()
+        await gate.held
+      }
       if (relayFails) throw new Error('network')
       sent.push({ command: lastBody?.command })
     },
   } as MailboxClient
+}
+
+let relayGate: { held: Promise<void>; entered: () => void } | null = null
+
+/**
+ * Park the next relay deposit. Returns `entered` — which resolves once a deposit
+ * has actually reached the gate — and `release`.
+ *
+ * Awaiting `entered` before interleaving the second commit is what makes the race
+ * deterministic: the caller of `commitAnswerScope` has several awaits to get
+ * through before it deposits, so "start it and assume it is parked" would race
+ * the harness against the code under test and park the wrong deposit.
+ */
+function stallRelay(): { entered: Promise<void>; release: () => void } {
+  let entered!: () => void
+  let release!: () => void
+  const enteredPromise = new Promise<void>((resolve) => (entered = resolve))
+  const held = new Promise<void>((resolve) => (release = resolve))
+  relayGate = { held, entered }
+  return { entered: enteredPromise, release }
 }
 
 beforeEach(() => {
@@ -108,6 +149,7 @@ beforeEach(() => {
   store.allowPuts = Infinity
   store.puts = 0
   relayFails = false
+  relayGate = null
   sealCounter = 0
   sent.length = 0
   lastBody = null
@@ -189,7 +231,7 @@ describe('what this device may claim about the node', () => {
     await commitAnswerScope(set('cycle'))
     const confirmedLog = [{ id: 'cmd-1', reply: { ok: true } }]
     expect(
-      resolveNodeScopeState(await loadAnswerScope(), confirmedLog, true, Date.now()),
+      resolveNodeScopeState(await loadAnswerScope(), confirmedLog, NODE.ed, Date.now()),
     ).toEqual({ state: 'confirmed' })
 
     // Opt out: the scope write succeeds, the relay is down, and the very next
@@ -204,7 +246,7 @@ describe('what this device may claim about the node', () => {
     const state = resolveNodeScopeState(
       await loadAnswerScope(),
       confirmedLog,
-      true,
+      NODE.ed,
       Date.now(),
     )
     expect(state).not.toEqual({ state: 'confirmed' })
@@ -223,7 +265,7 @@ describe('what this device may claim about the node', () => {
 
     store.allowPuts = Infinity
     expect(
-      resolveNodeScopeState(await loadAnswerScope(), [], true, Date.now()),
+      resolveNodeScopeState(await loadAnswerScope(), [], NODE.ed, Date.now()),
     ).toEqual({ state: 'unsent' })
   })
 })
@@ -233,30 +275,32 @@ describe('resolveNodeScopeState', () => {
    * shape, since both are written together. */
   const pending = (over: Partial<AnswerScopeRecord['pending']> = {}): AnswerScopeRecord => ({
     include: ['cycle'],
+    generation: 1,
     pending: {
       id: 'cmd-1',
       include: ['cycle'],
       sentAt: new Date(1_000_000).toISOString(),
+      nodeEd: NODE.ed,
       ...over,
     },
   })
   const now = 1_000_000
 
   it('is no-node when nothing is enrolled', () => {
-    expect(resolveNodeScopeState(pending(), [], false, now)).toEqual({ state: 'no-node' })
+    expect(resolveNodeScopeState(pending(), [], null, now)).toEqual({ state: 'no-node' })
   })
 
   it('is idle before anything has been chosen', () => {
-    expect(resolveNodeScopeState(undefined, [], true, now)).toEqual({ state: 'idle' })
+    expect(resolveNodeScopeState(undefined, [], NODE.ed, now)).toEqual({ state: 'idle' })
   })
 
   it('is unsent when the command never left the device', () => {
-    expect(resolveNodeScopeState(pending({ id: null }), [], true, now)).toEqual({ state: 'unsent' })
+    expect(resolveNodeScopeState(pending({ id: null }), [], NODE.ed, now)).toEqual({ state: 'unsent' })
   })
 
   it('is pending inside the window and unconfirmed after it', () => {
-    expect(resolveNodeScopeState(pending(), [], true, now + 1000)).toEqual({ state: 'pending' })
-    expect(resolveNodeScopeState(pending(), [], true, now + CONFIRM_WINDOW_MS)).toEqual({
+    expect(resolveNodeScopeState(pending(), [], NODE.ed, now + 1000)).toEqual({ state: 'pending' })
+    expect(resolveNodeScopeState(pending(), [], NODE.ed, now + CONFIRM_WINDOW_MS)).toEqual({
       state: 'unconfirmed',
     })
   })
@@ -265,20 +309,20 @@ describe('resolveNodeScopeState', () => {
   // all, so it presents exactly as an offline one — which is the honest reading,
   // since in both cases the node is still on its previous setting.
   it('resolves an old node that cannot parse the command to unconfirmed, never confirmed', () => {
-    const state = resolveNodeScopeState(pending(), [{ id: 'other' }], true, now + CONFIRM_WINDOW_MS)
+    const state = resolveNodeScopeState(pending(), [{ id: 'other' }], NODE.ed, now + CONFIRM_WINDOW_MS)
     expect(state).toEqual({ state: 'unconfirmed' })
   })
 
   it('is confirmed only on an ok reply to this very command', () => {
     expect(
-      resolveNodeScopeState(pending(), [{ id: 'cmd-1', reply: { ok: true } }], true, now),
+      resolveNodeScopeState(pending(), [{ id: 'cmd-1', reply: { ok: true } }], NODE.ed, now),
     ).toEqual({ state: 'confirmed' })
     // A reply to some other command proves nothing about this one.
     expect(
       resolveNodeScopeState(
         pending(),
         [{ id: 'cmd-0', reply: { ok: true } }],
-        true,
+        NODE.ed,
         now + CONFIRM_WINDOW_MS,
       ),
     ).toEqual({ state: 'unconfirmed' })
@@ -290,14 +334,16 @@ describe('resolveNodeScopeState', () => {
   it('will not confirm on a reply to a command carrying a different set', () => {
     const superseded: AnswerScopeRecord = {
       include: [],
+      generation: 2,
       pending: {
         id: 'cmd-1',
         include: ['cycle'],
         sentAt: new Date(1_000_000).toISOString(),
+        nodeEd: NODE.ed,
       },
     }
     expect(
-      resolveNodeScopeState(superseded, [{ id: 'cmd-1', reply: { ok: true } }], true, now),
+      resolveNodeScopeState(superseded, [{ id: 'cmd-1', reply: { ok: true } }], NODE.ed, now),
     ).toEqual({ state: 'unsent' })
   })
 
@@ -306,7 +352,7 @@ describe('resolveNodeScopeState', () => {
       resolveNodeScopeState(
         pending(),
         [{ id: 'cmd-1', reply: { ok: false, detail: 'could not save the answer scope: EIO' } }],
-        true,
+        NODE.ed,
         now,
       ),
     ).toEqual({ state: 'refused', detail: 'could not save the answer scope: EIO' })
@@ -325,13 +371,164 @@ describe('retryAnswerScope', () => {
 
     relayFails = false
     sent.length = 0
-    expect(await retryAnswerScope()).toBe('pending')
+    expect((await retryAnswerScope()).node).toBe('pending')
     expect(sent).toEqual([{ command: { cmd: 'set_answer_scope', include: ['mind'] } }])
     expect(await loadOptIns()).toEqual(set('mind'))
   })
 
   it('is a no-op when there is nothing recorded to retry', async () => {
-    expect(await retryAnswerScope()).toBe('unsent')
+    expect((await retryAnswerScope()).node).toBe('unsent')
     expect(sent).toEqual([])
+  })
+})
+
+// --- 1. the caller must never need a second read -----------------------------
+//
+// The UI used to re-read the record after committing. That read is a separate
+// transaction and can reject on its own, and the old catch treated the rejection
+// as a commit failure: it kept the previous in-memory record — including an
+// older `ok: true` command — and told the owner nothing had changed, while the
+// opt-out had in fact been persisted. "Your node has applied this" beside an off
+// switch, about a node still reading Cycle.
+//
+// So the commit returns exactly what it persisted, and there is nothing left to
+// re-read.
+
+describe('the commit returns what the caller should install', () => {
+  it('hands back the persisted record, so no second read is needed', async () => {
+    node.value = NODE
+    const commit = await commitAnswerScope(set('cycle'))
+    expect(commit.record).toEqual(await loadAnswerScope())
+    expect(commit.record.include).toEqual(['cycle'])
+    expect(commit.record.pending.id).toBe('cmd-1')
+  })
+
+  it('hands back the tracking-free record when delivery failed', async () => {
+    node.value = NODE
+    relayFails = true
+    const commit = await commitAnswerScope(set())
+    expect(commit.record).toEqual(await loadAnswerScope())
+    expect(commit.record.pending.id).toBeNull()
+  })
+
+  it('retry hands its record back too', async () => {
+    node.value = NODE
+    await commitAnswerScope(set('mind'))
+    const retry = await retryAnswerScope()
+    expect(retry.record).toEqual(await loadAnswerScope())
+    expect(retry.node).toBe('pending')
+  })
+})
+
+// --- 2. a stalled delivery must not resurrect its own stale record -----------
+
+describe('a delivery that finishes late', () => {
+  // Tab A commits Cycle-on and stalls mid-deposit. Tab B commits Cycle-off. A
+  // then resumes and records its delivery. Writing its whole pre-network record
+  // would put Cycle back on — silently, with no owner action, and against the
+  // switch B just set.
+  it('cannot overwrite a newer commit’s desired set', async () => {
+    node.value = NODE
+
+    const gate = stallRelay()
+    const tabA = commitAnswerScope(set('cycle'))
+    await gate.entered
+    // A is now parked inside putMailbox, holding its pre-network record.
+    const tabB = await commitAnswerScope(set())
+    expect(tabB.record.include).toEqual([])
+
+    gate.release()
+    await tabA
+
+    // B's choice stands. A's delivery is evidence about a superseded command and
+    // must not restore its `include`.
+    expect(await loadOptIns()).toEqual(set())
+    const stored = await loadAnswerScope()
+    expect(stored?.include).toEqual([])
+    expect(stored?.pending.include).toEqual([])
+  })
+
+  it('reports itself superseded rather than claiming a pending confirmation', async () => {
+    node.value = NODE
+    const gate = stallRelay()
+    const tabA = commitAnswerScope(set('cycle'))
+    await gate.entered
+    await commitAnswerScope(set())
+    gate.release()
+    // A's own delivery landed at the relay, but for a set nobody wants now, so
+    // there is nothing for A to report as in flight.
+    expect((await tabA).node).toBe('unsent')
+  })
+
+  it('retry cannot overwrite a newer commit either', async () => {
+    node.value = NODE
+    await commitAnswerScope(set('cycle'))
+
+    const gate = stallRelay()
+    const retry = retryAnswerScope()
+    await gate.entered
+    await commitAnswerScope(set())
+    gate.release()
+    await retry
+
+    expect(await loadOptIns()).toEqual(set())
+    expect((await loadAnswerScope())?.include).toEqual([])
+  })
+
+  it('stamps a fresh generation on every commit', async () => {
+    node.value = NODE
+    await commitAnswerScope(set('cycle'))
+    const first = (await loadAnswerScope())!.generation
+    await commitAnswerScope(set())
+    expect((await loadAnswerScope())!.generation).toBe(first + 1)
+  })
+})
+
+// --- 3. a confirmation belongs to the node that gave it ----------------------
+
+describe('confirmation is bound to the node that received the command', () => {
+  const NODE_B = { ed: 'b'.repeat(64), x25519: 'c'.repeat(64) }
+
+  // Node A confirmed Cycle-off. The owner then re-enrols a different node. B has
+  // never been sent the scope and may be reading Cycle, but A's durable
+  // `ok: true` is still on disk — and matched by id, which knows nothing about
+  // which node answered.
+  it('stops confirming once a different node is enrolled', async () => {
+    node.value = NODE
+    const commit = await commitAnswerScope(set())
+    const log = [{ id: commit.record.pending.id!, reply: { ok: true } }]
+
+    expect(resolveNodeScopeState(commit.record, log, NODE.ed, Date.now())).toEqual({
+      state: 'confirmed',
+    })
+    // Same record, same reply, different node now enrolled.
+    expect(resolveNodeScopeState(commit.record, log, NODE_B.ed, Date.now())).toEqual({
+      state: 'node-changed',
+    })
+  })
+
+  it('records which node a command was addressed to', async () => {
+    node.value = NODE
+    const commit = await commitAnswerScope(set('cycle'))
+    expect(commit.record.pending.nodeEd).toBe(NODE.ed)
+  })
+
+  it('re-sending after the swap binds the confirmation to the new node', async () => {
+    node.value = NODE
+    await commitAnswerScope(set())
+
+    node.value = NODE_B
+    const retry = await retryAnswerScope()
+    expect(retry.record.pending.nodeEd).toBe(NODE_B.ed)
+    expect(sent.at(-1)).toEqual({ command: { cmd: 'set_answer_scope', include: [] } })
+    // And the new command is what B's reply will be matched against.
+    expect(
+      resolveNodeScopeState(
+        retry.record,
+        [{ id: retry.record.pending.id!, reply: { ok: true } }],
+        NODE_B.ed,
+        Date.now(),
+      ),
+    ).toEqual({ state: 'confirmed' })
   })
 })

@@ -71,12 +71,16 @@
   // state file will not write (`ok: false`) all leave the owner switched off
   // here and still disclosed there. Only its `admin_reply` promotes this to
   // `confirmed`; there is deliberately no "assume it worked" path.
-  let hasNode = $state(false)
+  //
+  // The node's *identity*, not merely whether one exists: a confirmation from a
+  // node the owner has since replaced says nothing about the one enrolled now,
+  // which has never been sent the scope.
+  let nodeEd = $state<string | null>(null)
   let scopeRecord = $state<AnswerScopeRecord | undefined>(undefined)
   // Ticked so an outstanding command ages into `unconfirmed` without a reload.
   let nowMs = $state(Date.now())
   let nodeScope = $derived<NodeScopeState>(
-    resolveNodeScopeState(scopeRecord, $adminLog, hasNode, nowMs),
+    resolveNodeScopeState(scopeRecord, $adminLog, nodeEd, nowMs),
   )
 
   // A command that was sent and has no reply yet. Deliberately independent of
@@ -94,7 +98,7 @@
     consented = await hasConsented()
     optIns = await loadOptIns()
     scopeRecord = await loadAnswerScope()
-    hasNode = !!(await enrolledNode())
+    nodeEd = (await enrolledNode())?.ed ?? null
     await refreshAdminLog()
     ocrOn = await assetsEnabled()
     void loadManifest()
@@ -205,19 +209,30 @@
     const next = new Set(optIns)
     if (next.has(category)) next.delete(category)
     else next.add(category)
+    let commit: Awaited<ReturnType<typeof commitAnswerScope>>
     try {
-      const commit = await commitAnswerScope(next)
-      // Only now do the persisted value and the switch agree.
-      optIns = next
-      scopeRecord = await loadAnswerScope()
-      nowMs = Date.now()
-      if (commit.node !== 'no-node') await refreshAdminLog()
+      commit = await commitAnswerScope(next)
     } catch {
       // Nothing written, nothing sent — leave the switch where it was.
       optInError = "That couldn't be saved on this device, so nothing changed. Try again."
-    } finally {
       optInBusy = false
+      return
     }
+    // Installed from what the commit persisted, not from `next` and not from a
+    // re-read: the record IS the truth, and a second read is a second thing that
+    // can fail. (They differ only if another tab committed underneath us, in
+    // which case the owner's latest choice is the one to show.)
+    optIns = new Set(commit.record.include)
+    scopeRecord = commit.record
+    nowMs = Date.now()
+    // Past the commit. A failure refreshing the log is not a commit failure and
+    // must not be reported as one — the choice is already in force.
+    try {
+      if (commit.node !== 'no-node') await refreshAdminLog()
+    } catch {
+      // The reply, if any, will be folded in by the next pull.
+    }
+    optInBusy = false
   }
 
   /** Re-send the same desired set. A retry, not a reversal — the copy this
@@ -226,16 +241,24 @@
   async function retryScope() {
     optInError = ''
     optInBusy = true
+    let retry: Awaited<ReturnType<typeof retryAnswerScope>>
     try {
-      await retryAnswerScope()
-      scopeRecord = await loadAnswerScope()
-      nowMs = Date.now()
-      await refreshAdminLog()
+      retry = await retryAnswerScope()
     } catch {
       optInError = "That couldn't be saved on this device, so nothing was sent. Try again."
-    } finally {
       optInBusy = false
+      return
     }
+    optIns = new Set(retry.record.include)
+    scopeRecord = retry.record
+    nodeEd = (await enrolledNode().catch(() => null))?.ed ?? nodeEd
+    nowMs = Date.now()
+    try {
+      await refreshAdminLog()
+    } catch {
+      // As above: the send already happened.
+    }
+    optInBusy = false
   }
 
   async function disconnect() {
@@ -366,6 +389,14 @@
       Your node refused this and kept its previous setting{nodeScope.detail
         ? `: ${nodeScope.detail}`
         : '.'}
+    </p>
+    <button type="button" onclick={retryScope} disabled={optInBusy} data-testid="answer-optin-retry">
+      Send again
+    </button>
+  {:else if nodeScope.state === 'node-changed'}
+    <p class="error" data-testid="answer-optin-node-changed">
+      Your node has changed since you last set this, so the node you're using now has never been
+      told. What it reads is unknown until you send this again.
     </p>
     <button type="button" onclick={retryScope} disabled={optInBusy} data-testid="answer-optin-retry">
       Send again

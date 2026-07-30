@@ -50,7 +50,6 @@ import {
 import {
   commitScopeLocally,
   loadAnswerScope,
-  saveAnswerScope,
   trackScopeDelivery,
   type AnswerScopeRecord,
 } from './answerScope'
@@ -602,7 +601,20 @@ export async function sendAdminCommand(
  * application, and only an `admin_reply` can promote it (see
  * `answerScope.ts`'s `resolveNodeScopeState`). */
 export interface AnswerScopeCommit {
-  /** The set now persisted on this device — exactly what `ask.ts` will read. */
+  /**
+   * The record now persisted on this device — the authoritative value, handed
+   * back so the caller never needs a follow-up read.
+   *
+   * That read used to be the caller's job, and it was a separate transaction
+   * that could reject on its own. A UI that treated the rejection as a commit
+   * failure kept its previous in-memory record — including an older confirming
+   * reply — and reported that nothing had changed, while the opt-out had in fact
+   * been persisted. Returning the record removes the read, and with it the
+   * failure mode.
+   */
+  record: AnswerScopeRecord
+  /** The set now persisted — `record.include`, kept for callers that only want
+   * the choice. */
   include: Category[]
   node: 'no-node' | 'pending' | 'unsent'
 }
@@ -630,14 +642,15 @@ export interface AnswerScopeCommit {
 export async function commitAnswerScope(
   optIns: ReadonlySet<Category>,
 ): Promise<AnswerScopeCommit> {
-  // THE commit point, and one write: the new desired scope and the invalidation
-  // of any previous command's confirmation land together or not at all. Not
-  // wrapped — a failure here must reach the caller, and means nothing changed.
+  // THE commit point, and one transaction: the new desired scope, the
+  // invalidation of any previous command's confirmation, and a fresh generation
+  // land together or not at all. Not wrapped — a failure here must reach the
+  // caller, and means nothing changed.
   const record = await commitScopeLocally(optIns)
   const { include } = record
 
   const node = await enrolledNode().catch(() => null)
-  if (!node) return { include, node: 'no-node' }
+  if (!node) return { record, include, node: 'no-node' }
 
   const id = await sendAdminCommand(
     { ed: node.ed, x25519: node.x25519 },
@@ -645,15 +658,25 @@ export async function commitAnswerScope(
   ).catch(() => null)
   // Nothing further to write when it never left: `unsent` is already what is on
   // disk, which is the point of writing it before trying.
-  if (!id) return { include, node: 'unsent' }
+  if (!id) return { record, include, node: 'unsent' }
 
-  // Best-effort, and reported by what actually persisted rather than by what we
-  // just did: if this write is lost, the durable state stays `unsent`, and the
-  // owner is asked to send again for a command the node may in fact have. That
-  // costs a redundant retry, which is the right way round — the command is
-  // idempotent, and the alternative is claiming a confirmation the record cannot
-  // back up after a reload.
-  return { include, node: (await trackScopeDelivery(record, id)) ? 'pending' : 'unsent' }
+  // Compare-and-update against the generation this delivery acted for. Two ways
+  // it declines, and both are reported by what is actually stored rather than by
+  // what this call did:
+  //
+  //   - the write was lost, so the durable state is still `unsent`;
+  //   - a newer commit superseded this one while the deposit was in flight, and
+  //     writing would have restored a set the owner has since changed.
+  //
+  // In the second case the record handed back is the superseding one, so a caller
+  // that installs it shows the owner's current choice rather than this call's
+  // stale idea of it.
+  const tracked = await trackScopeDelivery(record.generation, id, node.ed)
+  if (tracked.applied && tracked.record) {
+    return { record: tracked.record, include: tracked.record.include, node: 'pending' }
+  }
+  const current = tracked.record ?? record
+  return { record: current, include: current.include, node: 'unsent' }
 }
 
 /**
@@ -669,27 +692,41 @@ export async function commitAnswerScope(
  *
  * Returns the fresh node status; a no-op `unsent` when nothing is outstanding.
  */
-export async function retryAnswerScope(): Promise<AnswerScopeCommit['node']> {
+export async function retryAnswerScope(): Promise<AnswerScopeCommit> {
   const existing = await loadAnswerScope()
-  if (!existing) return 'unsent'
-  const node = await enrolledNode().catch(() => null)
-  if (!node) return 'no-node'
-
-  const include = existing.include
-  const record: AnswerScopeRecord = {
-    include,
-    pending: { id: null, include, sentAt: new Date().toISOString() },
+  if (!existing) {
+    // Nothing has been chosen, so there is nothing to re-send. Report the
+    // default rather than inventing a record.
+    const record: AnswerScopeRecord = {
+      include: [],
+      generation: 0,
+      pending: { id: null, include: [], sentAt: new Date(0).toISOString(), nodeEd: null },
+    }
+    return { record, include: [], node: 'unsent' }
   }
-  // Unwrapped, like the commit path: if the invalidation cannot be written, do
-  // not send, because a delivery we cannot track is one we cannot report on.
-  await saveAnswerScope(record)
+
+  // Re-committing the same set is what clears the old tracking and stamps a new
+  // generation — the same single transaction the commit path uses, so a retry
+  // that fails mid-way cannot leave the previous attempt's id eligible, and a
+  // *newer* choice made while this retry is in flight will supersede it.
+  const record = await commitScopeLocally(new Set(existing.include))
+  const { include } = record
+
+  const node = await enrolledNode().catch(() => null)
+  if (!node) return { record, include, node: 'no-node' }
 
   const id = await sendAdminCommand(
     { ed: node.ed, x25519: node.x25519 },
     { cmd: 'set_answer_scope', include },
   ).catch(() => null)
-  if (!id) return 'unsent'
-  return (await trackScopeDelivery(record, id)) ? 'pending' : 'unsent'
+  if (!id) return { record, include, node: 'unsent' }
+
+  const tracked = await trackScopeDelivery(record.generation, id, node.ed)
+  if (tracked.applied && tracked.record) {
+    return { record: tracked.record, include: tracked.record.include, node: 'pending' }
+  }
+  const current = tracked.record ?? record
+  return { record: current, include: current.include, node: 'unsent' }
 }
 
 // --- resolution: echo the decision back to the proposer ---

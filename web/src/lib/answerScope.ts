@@ -18,7 +18,7 @@
 // `admin_cmd` `set_answer_scope` (see `nodeadmin.ts`), and the node applies it to
 // its own retrieval before ranking. What is stored here is the owner's intent;
 // the node holds its own copy of that intent for the vaults it serves.
-import { get, put } from './db'
+import { get, mutate } from './db'
 import { CATEGORIES, CATEGORY_META, categorize, type Category } from './category'
 import type { StoredEvent } from './events'
 
@@ -125,6 +125,17 @@ export interface PendingScopeCommand {
   id: string | null
   include: Category[]
   sentAt: string
+  /**
+   * The node this command was addressed to (Ed25519 hex), or null when none was
+   * enrolled at the time.
+   *
+   * A reply is matched by command id, and an id says nothing about *which* node
+   * answered. So a confirmation from a node the owner has since replaced would
+   * otherwise keep reading as agreement — while the node now enrolled has never
+   * been sent the scope and may be reading Cycle. Confirmation has to name its
+   * source to mean anything.
+   */
+  nodeEd: string | null
 }
 
 /** The whole of this device's answer-scope state, written as one value. See the
@@ -132,6 +143,16 @@ export interface PendingScopeCommand {
 export interface AnswerScopeRecord {
   /** What the owner wants — the set `ask.ts` filters by. */
   include: Category[]
+  /**
+   * Bumped once per commit, inside the commit's own transaction.
+   *
+   * A delivery can outlive the choice that started it: a stalled deposit
+   * resuming after a newer commit used to write its whole pre-network record
+   * back, silently restoring the set the owner had just turned off. The
+   * generation is what lets a late delivery recognise that it is reporting on a
+   * superseded command and decline to write at all.
+   */
+  generation: number
   /** The last command issued about it. Always present once anything has been
    * chosen, so "chosen but never tracked" is not a representable state. */
   pending: PendingScopeCommand
@@ -154,6 +175,10 @@ export type NodeScopeState =
   | { state: 'unconfirmed' }
   /** Never left this device (locked vault, no relay). */
   | { state: 'unsent' }
+  /** A different node is enrolled now than the one this scope was sent to. What
+   * the current node is doing is simply unknown — it was never told — so nothing
+   * about the old node's answer carries over. */
+  | { state: 'node-changed' }
 
 /** The reply-bearing shape {@link resolveNodeScopeState} reads from the admin
  * log. Structurally satisfied by `nodeadmin.ts`'s `AdminLogEntry`, taken as a
@@ -169,20 +194,25 @@ export interface ScopeReplyLookup {
  * record and the admin log's replies. Pure — the caller supplies `now` — so
  * every branch is directly testable.
  *
- * Two things are deliberately absent. There is no "assume it worked" branch: a
- * missing reply resolves to `unconfirmed`, never `confirmed`. And a reply only
- * confirms when the command it answers carried **the set the owner currently
- * wants** — a reply to a superseded command says nothing about the current one,
- * so the tracked `include` must match the record's before any confirmation is
- * honoured.
+ * A reply is evidence about exactly one thing: the command it answers. So three
+ * facts have to line up before it counts as agreement with what the owner wants
+ * *now* — the command must have carried the current set, it must have been
+ * addressed to the node currently enrolled, and it must have been answered `ok`.
+ * Any of them missing is not a confirmation.
+ *
+ * And there is no "assume it worked" branch: a missing reply resolves to
+ * `unconfirmed`, never `confirmed`.
+ *
+ * `enrolledNodeEd` is the Ed25519 hex of the node enrolled right now, or null
+ * when none is.
  */
 export function resolveNodeScopeState(
   record: AnswerScopeRecord | undefined,
   log: ScopeReplyLookup[],
-  hasNode: boolean,
+  enrolledNodeEd: string | null,
   now: number,
 ): NodeScopeState {
-  if (!hasNode) return { state: 'no-node' }
+  if (!enrolledNodeEd) return { state: 'no-node' }
   // Nothing has ever been chosen. Once anything has, `pending` is written with
   // it in the same put, so this cannot be reached by a half-written choice.
   if (!record) return { state: 'idle' }
@@ -192,6 +222,9 @@ export function resolveNodeScopeState(
   // Belt and braces over the atomic write: if the tracked command is for some
   // other set, it is not evidence about this one.
   if (!sameInclude(pending.include, include)) return { state: 'unsent' }
+  // Addressed to a node that is no longer the one enrolled. Whatever it replied
+  // was true of it, and says nothing about the node serving this vault now.
+  if (pending.nodeEd !== enrolledNodeEd) return { state: 'node-changed' }
 
   const reply = log.find((e) => e.id === pending.id)?.reply
   if (reply) return reply.ok ? { state: 'confirmed' } : { state: 'refused', detail: reply.detail }
@@ -218,48 +251,67 @@ export async function loadAnswerScope(): Promise<AnswerScopeRecord | undefined> 
   const legacy = await get<Category[]>('prefs', LEGACY_OPT_INS_KEY)
   if (!Array.isArray(legacy)) return undefined
   const include = legacy.filter((c) => OPT_IN_CATEGORIES.includes(c))
-  return { include, pending: { id: null, include, sentAt: new Date(0).toISOString() } }
-}
-
-/** Write the record — the single put that is the commit point. Never wrapped by
- * callers committing a choice: a failure here means nothing changed. */
-export async function saveAnswerScope(record: AnswerScopeRecord): Promise<void> {
-  await put('prefs', record, SCOPE_KEY)
+  return {
+    include,
+    generation: 0,
+    pending: { id: null, include, sentAt: new Date(0).toISOString(), nodeEd: null },
+  }
 }
 
 /**
- * Commit `optIns` as the desired scope **and** invalidate any previous
- * confirmation, in one write.
+ * Commit `optIns` as the desired scope, invalidate any previous confirmation, and
+ * stamp a fresh generation — in one transaction.
  *
- * This is the commit point in both senses: after it, `ask.ts` filters by the new
- * set, and no earlier command's reply can be mistaken for agreement with it.
- * Returns the record so the caller can fill in the command id after delivery
- * without re-reading.
+ * This is the commit point in every sense: after it, `ask.ts` filters by the new
+ * set, no earlier command's reply can be mistaken for agreement with it, and any
+ * delivery still in flight for the old set can tell that it has been superseded.
+ * Returns the record it wrote, so the caller has the authoritative value without
+ * a second read that could fail on its own.
  */
 export async function commitScopeLocally(
   optIns: ReadonlySet<Category>,
 ): Promise<AnswerScopeRecord> {
   const include = includeList(optIns)
-  const record: AnswerScopeRecord = {
+  const sentAt = new Date().toISOString()
+  const { value } = await mutate<AnswerScopeRecord>('prefs', SCOPE_KEY, (current) => ({
     include,
-    pending: { id: null, include, sentAt: new Date().toISOString() },
-  }
-  await saveAnswerScope(record)
-  return record
+    generation: (current?.generation ?? 0) + 1,
+    pending: { id: null, include, sentAt, nodeEd: null },
+  }))
+  // `mutate` only resolves with `written: false` when the mutator declines, and
+  // this one never does, so the value is always the record just written.
+  return value!
 }
 
-/** Record that `record`'s command reached the relay under `id`. Best-effort by
- * design: the caller treats a failure as `unsent`, which is the state already
- * durably on disk, so a failure here costs the owner a needless retry and never
- * a false confirmation. Returns whether it landed. */
+/**
+ * Record that the command for `generation` reached the relay under `id`, sent to
+ * `nodeEd` — but only if `generation` is still the stored one.
+ *
+ * This is a compare-and-update, not a write. A delivery can finish after a newer
+ * commit has replaced the choice that started it, and writing then would restore
+ * a set the owner has already turned off. So the generation is compared inside
+ * the transaction, and a superseded attempt writes nothing.
+ *
+ * Note what is written on a match: the **stored** record with the id and node
+ * filled in, never the caller's copy. Even where the generations agree, storage
+ * is the authority on `include`.
+ *
+ * Failure is not raised. The caller treats it as `unsent`, which is already what
+ * is durably on disk, so the cost is a redundant retry of an idempotent command
+ * rather than a confirmation nothing can back up.
+ */
 export async function trackScopeDelivery(
-  record: AnswerScopeRecord,
+  generation: number,
   id: string,
-): Promise<boolean> {
+  nodeEd: string,
+): Promise<{ applied: boolean; record: AnswerScopeRecord | undefined }> {
   try {
-    await saveAnswerScope({ ...record, pending: { ...record.pending, id } })
-    return true
+    const { written, value } = await mutate<AnswerScopeRecord>('prefs', SCOPE_KEY, (current) => {
+      if (!current || current.generation !== generation) return undefined
+      return { ...current, pending: { ...current.pending, id, nodeEd } }
+    })
+    return { applied: written, record: value }
   } catch {
-    return false
+    return { applied: false, record: undefined }
   }
 }

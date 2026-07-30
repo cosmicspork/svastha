@@ -548,9 +548,11 @@ describe('commitAnswerScope', () => {
 
     // `pending`, never `sent`: the relay accepted a deposit, which is not the
     // node applying it (see answerScope.ts's resolveNodeScopeState).
-    expect(await commitAnswerScope(new Set(['cycle']))).toEqual({
+    expect(await commitAnswerScope(new Set(['cycle']))).toMatchObject({
       include: ['cycle'],
       node: 'pending',
+      // The persisted record, handed back so the caller needs no second read.
+      record: { include: ['cycle'], pending: { id: 'sent-admin_cmd', nodeEd: NODE } },
     })
 
     expect(await loadOptIns()).toEqual(new Set(['cycle']))
@@ -579,7 +581,7 @@ describe('commitAnswerScope', () => {
     const client = fakeClient([])
     configureMailbox(client, sealingIdentity(), verifyOk)
 
-    expect(await commitAnswerScope(new Set(['mind']))).toEqual({
+    expect(await commitAnswerScope(new Set(['mind']))).toMatchObject({
       include: ['mind'],
       node: 'no-node',
     })
@@ -593,7 +595,7 @@ describe('commitAnswerScope', () => {
     teardownMailbox()
     await putProposer({ ed: NODE, x25519: NODE_X, label: 'Home node', kind: 'node' })
 
-    expect(await commitAnswerScope(new Set(['cycle']))).toEqual({
+    expect(await commitAnswerScope(new Set(['cycle']))).toMatchObject({
       include: ['cycle'],
       node: 'unsent',
     })
