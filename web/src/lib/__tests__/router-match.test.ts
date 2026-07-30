@@ -1,6 +1,23 @@
 import { describe, expect, it } from 'vitest'
 import { matchRoute } from '../router-match'
 
+/** Every literal hash the app navigates to, read from the sources themselves
+ * (`?raw`, so no Svelte compiler and no Node types are needed). Template-literal
+ * targets — a person's key, a share fragment — are skipped; their patterns are
+ * covered by the dynamic-segment tests below. */
+function literalNavTargets(): string[] {
+  const sources = import.meta.glob('../../**/*.{ts,svelte}', {
+    query: '?raw',
+    import: 'default',
+    eager: true,
+  }) as Record<string, string>
+  const found = new Set<string>()
+  for (const source of Object.values(sources)) {
+    for (const [, hash] of source.matchAll(/navigate\('(#[^']*)'\)/g)) found.add(hash)
+  }
+  return [...found].sort()
+}
+
 describe('matchRoute', () => {
   it('matches the home route', () => {
     expect(matchRoute('#/')).toEqual({ path: '/', params: {} })
@@ -39,6 +56,15 @@ describe('matchRoute', () => {
     expect(matchRoute('#/search')).toEqual({ path: '/search', params: {} })
     expect(matchRoute('#/import')).toEqual({ path: '/import', params: {} })
     expect(matchRoute('#/correlate')).toEqual({ path: '/correlate', params: {} })
+  })
+
+  // An unknown hash falls back to `/`, so a screen the app links to but the
+  // pattern list has never heard of does not fail loudly — it silently shows
+  // the dashboard, and the screen is simply unreachable. `#/settings/ai` was
+  // exactly that.
+  it('knows every screen the app navigates to', () => {
+    const unreachable = literalNavTargets().filter((hash) => hash !== '#/' && matchRoute(hash).path === '/')
+    expect(unreachable).toEqual([])
   })
 
   it('captures the person route dynamic segment', () => {

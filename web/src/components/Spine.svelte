@@ -11,7 +11,13 @@
   import type { AttachmentRef, TimelineEntry } from '../lib/timeline'
   import SpineEntry from './SpineEntry.svelte'
   import AttachmentViewer from './AttachmentViewer.svelte'
-  import { readAndPropose } from '../lib/read-page'
+  import {
+    readAndPropose,
+    ReadingOffError,
+    type ReadNotice,
+    type ReadNoticeAction,
+  } from '../lib/read-page'
+  import { enableAssets, loadManifest, downloadBytes } from '../lib/ocr-assets'
   import { navigate } from '../lib/router.svelte'
   import TagChips from './TagChips.svelte'
   import { focusedEventId } from '../lib/spine-focus'
@@ -198,23 +204,160 @@
 
   // Reading a page files drafts into the same review queue a node's proposals
   // land in; nothing enters the record until it is approved and signed there.
-  let readMessage = $state('')
-  async function readPage(sha256: string, bytes: Uint8Array, mime: string): Promise<void> {
-    readMessage = ''
+  //
+  // Every outcome goes back into the viewer (see AttachmentViewer's `notice`):
+  // the viewer is a fixed, full-screen layer, so anything rendered out here sits
+  // behind it — which for a failure means the read simply looked like it did
+  // nothing. Success asks rather than navigating, because leaving the document
+  // is the owner's call, not a side effect of it having worked.
+  let readNotice = $state<ReadNotice | null>(null)
+  let readPages = $state<Set<string>>(new Set())
+
+  const dismiss: ReadNoticeAction = {
+    label: 'Close',
+    kind: 'ghost',
+    onclick: () => {
+      readNotice = null
+    },
+  }
+
+  function count(n: number, one: string, many: string): string {
+    return `${n} ${n === 1 ? one : many}`
+  }
+
+  async function readPage(
+    sha256: string,
+    bytes: Uint8Array,
+    mime: string,
+    fromPage = 1,
+  ): Promise<void> {
+    readNotice = null
     try {
-      const result = await readAndPropose(sha256, bytes, mime)
+      const result = await readAndPropose(sha256, bytes, mime, fromPage)
+      readPages = new Set(readPages).add(sha256)
+
+      const more = result.toPage < result.totalPages
+      const detail = more
+        ? `Read pages ${result.fromPage}–${result.toPage} of ${result.totalPages}.`
+        : undefined
+      const carryOn: ReadNoticeAction[] = more
+        ? [
+            {
+              label: 'Continue',
+              kind: 'tonal',
+              onclick: () => continueReading(sha256, mime, result.toPage + 1),
+            },
+          ]
+        : []
+
       if (result.proposed === 0) {
-        readMessage =
-          result.dropped > 0
-            ? "Nothing on this page could be read reliably enough to propose."
-            : 'Nothing on this page looked like a record entry.'
+        readNotice = {
+          sha256,
+          tone: 'error',
+          detail,
+          text:
+            result.dropped > 0
+              ? 'Nothing on this page could be read reliably enough to propose.'
+              : 'Nothing on this page looked like a record entry.',
+          actions: [...carryOn, dismiss],
+        }
         return
       }
-      viewerEntry = null
-      navigate('#/proposals')
+
+      readNotice = {
+        sha256,
+        tone: 'ok',
+        detail,
+        text: result.updated
+          ? `Updated ${count(result.proposed, 'proposal', 'proposals')}.`
+          : `Proposed ${count(result.proposed, 'entry', 'entries')} from this page.`,
+        actions: [
+          {
+            label: 'Review proposals',
+            kind: 'primary',
+            onclick: () => {
+              viewerEntry = null
+              navigate('#/proposals')
+            },
+          },
+          ...carryOn,
+          {
+            label: 'Keep reading',
+            kind: 'ghost',
+            onclick: () => {
+              readNotice = null
+            },
+          },
+        ],
+      }
     } catch (err) {
-      readMessage = err instanceof Error ? err.message : 'Could not read this page.'
+      readNotice = await failureNotice(sha256, mime, fromPage, err)
     }
+  }
+
+  async function failureNotice(
+    sha256: string,
+    mime: string,
+    fromPage: number,
+    err: unknown,
+  ): Promise<ReadNotice> {
+    const text = err instanceof Error ? err.message : 'Could not read this page.'
+    if (!(err instanceof ReadingOffError)) return { sha256, tone: 'error', text, actions: [dismiss] }
+    return {
+      sha256,
+      tone: 'error',
+      text,
+      actions: [
+        {
+          label: `Turn on reading${await readerSize()}`,
+          kind: 'tonal',
+          onclick: () => turnOnReading(sha256, mime, fromPage),
+        },
+        {
+          label: 'Not now',
+          kind: 'ghost',
+          onclick: () => {
+            readNotice = null
+          },
+        },
+      ],
+    }
+  }
+
+  /** The reader's download size, from the same manifest Settings quotes. Left
+   * off entirely when the manifest can't be reached — no number beats a wrong
+   * one on a button that spends someone's data. */
+  async function readerSize(): Promise<string> {
+    try {
+      return ` (${(downloadBytes(await loadManifest()) / 1024 / 1024).toFixed(0)} MB)`
+    } catch {
+      return ''
+    }
+  }
+
+  /** The same enable flow Settings → AI runs, offered where the owner met the
+   * switch instead of only being told where to find it. */
+  async function turnOnReading(sha256: string, mime: string, fromPage: number): Promise<void> {
+    readNotice = { sha256, tone: 'ok', text: 'Preparing the reader…', actions: [] }
+    try {
+      await enableAssets()
+    } catch (err) {
+      readNotice = {
+        sha256,
+        tone: 'error',
+        text: err instanceof Error ? err.message : 'Could not prepare the reader.',
+        actions: [dismiss],
+      }
+      return
+    }
+    await continueReading(sha256, mime, fromPage)
+  }
+
+  /** Read another pass of the same document. The bytes are fetched again rather
+   * than held, exactly as the viewer's own read action does. */
+  async function continueReading(sha256: string, mime: string, fromPage: number): Promise<void> {
+    const bytes = await attachmentBytes(sha256)
+    if (bytes) await readPage(sha256, bytes, mime, fromPage)
   }
 
 </script>
@@ -308,12 +451,10 @@
       source={viewerEntry.detail.source}
       loadBytes={attachmentBytes}
       onread={readPage}
+      notice={readNotice}
+      {readPages}
       onclose={() => (viewerEntry = null)}
     />
-  {/if}
-
-  {#if readMessage}
-    <p class="read-message" role="status" data-testid="read-message">{readMessage}</p>
   {/if}
 
   {#if sourceDocViewer}
@@ -413,13 +554,4 @@
   .show-older {
     margin-top: var(--space-2);
   }
-  .read-message {
-    margin: var(--space-3) 0;
-    padding: var(--space-3);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--surface);
-    font-size: var(--text-sm);
-  }
-
 </style>

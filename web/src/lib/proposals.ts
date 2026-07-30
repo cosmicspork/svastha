@@ -154,6 +154,35 @@ export function isResolved(record: ProposalRecord): boolean {
   return record.drafts.every((d) => d.status !== 'pending')
 }
 
+/**
+ * Fold a re-received (or re-read) record into the one already stored.
+ *
+ * Every draft the owner has already decided survives; the still-undecided ones
+ * are replaced by the incoming set. A mailbox re-pull carries the same drafts,
+ * so this is a no-op there — the dedupe guarantee — while a second read of the
+ * same page carries a freshly coded set, and that one has to land.
+ *
+ * Ordering follows the incoming drafts, with decided drafts the new pass no
+ * longer proposes kept at the end rather than dropped: a decision is a fact
+ * about an event, not about the pass that suggested it.
+ */
+export function mergeProposal(
+  existing: ProposalRecord,
+  incoming: ProposalRecord,
+): ProposalRecord {
+  const decided = new Map(
+    existing.drafts.filter((d) => d.status !== 'pending').map((d) => [d.event.id, d]),
+  )
+  const proposed = new Set(incoming.drafts.map((d) => d.event.id))
+  const drafts = [
+    ...incoming.drafts.map((d) => decided.get(d.event.id) ?? d),
+    ...[...decided.values()].filter((d) => !proposed.has(d.event.id)),
+  ]
+  const merged = { ...existing, drafts }
+  merged.resolved = isResolved(merged)
+  return merged
+}
+
 /** Total still-pending drafts across records — the badge/notification count. */
 export function pendingDraftCount(records: ProposalRecord[]): number {
   return records.reduce((n, r) => n + r.drafts.filter((d) => d.status === 'pending').length, 0)
@@ -185,16 +214,19 @@ export async function refreshPendingProposals(): Promise<void> {
 }
 
 /**
- * Store a freshly-received proposal, deduped by message id: if a record with
- * this id already exists it is left untouched (its decisions survive a re-pull),
- * and this returns `false`. A genuinely new record is written and returns
- * `true`. This is the "aren't re-processed on re-pull" guarantee.
+ * Store a proposal, deduped by message id.
+ *
+ * A record already filed under this id is **merged** with the incoming one (see
+ * {@link mergeProposal}), not replaced and not ignored: decisions survive, which
+ * is the "aren't re-processed on re-pull" guarantee, while a second pass over
+ * the same source lands its new drafts. Returns `true` only when the record was
+ * new — what a caller that counts arrivals wants to know.
  */
 export async function upsertProposal(record: ProposalRecord): Promise<boolean> {
-  if ((await getProposal(record.id)) !== undefined) return false
-  await put(STORE, record)
+  const existing = await getProposal(record.id)
+  await put(STORE, existing ? mergeProposal(existing, record) : record)
   await refreshPendingProposals()
-  return true
+  return existing === undefined
 }
 
 /** Set one draft's decision (by its event content id, stable across reloads).
