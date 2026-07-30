@@ -17,6 +17,7 @@ test('captures a photo and a PDF in one record and views both', async ({ page })
   await expect(page.getByTestId('paper-thumb-pdf')).toHaveCount(1)
 
   await page.getByTestId('save').click()
+  await page.getByTestId('bulk-read-import-decline').click()
 
   // Back on the spine: a mixed record uses the neutral paperclip hint, hence filtering on '2 items'.
   const entry = page.getByTestId('spine-entry').filter({ hasText: '2 items' })

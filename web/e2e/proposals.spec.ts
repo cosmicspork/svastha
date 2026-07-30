@@ -269,6 +269,7 @@ test('reviews proposed drafts with provenance, approves/edits/rejects, and echoe
   await page.getByTestId('paper-file').setInputFiles(PNG)
   await expect(page.getByTestId('paper-thumbs').locator('img')).toHaveCount(1)
   await page.getByTestId('save').click()
+  await page.getByTestId('bulk-read-import-decline').click()
   await expect(page.getByTestId('spine-entry')).toHaveCount(1)
 
   const sourceBlob = await page.evaluate(async () => {
