@@ -132,4 +132,64 @@ test('with no node enrolled, search stays local and offers no AI toggle', async 
   await expect(page.getByTestId('search-mode')).toHaveText('On-device')
   // No processing node → no AI switch at all.
   await expect(page.getByTestId('search-ai-toggle')).toHaveCount(0)
+
+  // Which is exactly why the hint card is here: with no toggle to notice, it is
+  // the only evidence on this screen that answering exists at all.
+  const hint = page.getByTestId('search-ai-hint')
+  await expect(hint).toContainText('Ask AI')
+  await expect(hint).toContainText('cites your own entries')
+  await page.getByTestId('search-ai-setup').click()
+  await expect(page).toHaveURL(/#\/settings\/ai$/)
+})
+
+/** Point this device at an endpoint that will not answer. Written straight to
+ * `prefs`, the way Settings → AI stores it. */
+async function configureEndpoint(page: Page, endpoint: string): Promise<void> {
+  await page.evaluate(async (url) => {
+    const { put } = await import('/src/lib/db.ts')
+    await put('prefs', url, 'inferenceUrl')
+    await put('prefs', 'test-model', 'inferenceModel')
+  }, endpoint)
+}
+
+test('a failed local answer keeps the question and leaves nothing pending behind', async ({
+  page,
+}) => {
+  await onboardViaUI(page)
+  await logFood(page, 'oatmeal')
+  await configureEndpoint(page, 'https://llama.home.arpa/v1')
+  // Refusing the request makes the failure immediate and independent of DNS.
+  await page.route('https://llama.home.arpa/**', (route) => route.abort())
+
+  await page.getByTestId('nav-search').click()
+  // Configured, so the front-door card has nothing left to say.
+  await expect(page.getByTestId('search-ai-hint')).toHaveCount(0)
+
+  await page.getByTestId('search-ai-toggle').click()
+  // The pill names where the question is going. "This device" was a lie the
+  // moment the endpoint lived anywhere else.
+  await expect(page.getByTestId('search-mode')).toHaveText('llama.home.arpa')
+  await expect(page.getByTestId('search-ai-expectations')).toContainText('lipid panel')
+
+  const question = 'when did I eat oatmeal?'
+  await page.getByTestId('search-input').fill(question)
+  await page.getByTestId('search-send').click()
+
+  await expect(page.getByTestId('search-ask-error')).toBeVisible()
+  await expect(page.getByTestId('search-ask-retry')).toBeVisible()
+  // Nothing enrolled to fall back to.
+  await expect(page.getByTestId('search-ask-node-instead')).toHaveCount(0)
+  // The question is back where it can be re-sent, and nothing claims to be
+  // working on it.
+  await expect(page.getByTestId('search-input')).toHaveValue(question)
+  await expect(page.getByTestId('search-waiting')).toHaveCount(0)
+
+  // The defect this fixes: the question used to persist as a `user` turn, so
+  // every later mount read as waiting for an answer that was never coming.
+  await page.evaluate(() => (window.location.hash = '#/'))
+  await page.evaluate(() => (window.location.hash = '#/search'))
+  await page.getByTestId('search-ai-toggle').click()
+  await expect(page.getByTestId('search-ai-empty')).toBeVisible()
+  await expect(page.getByTestId('search-turn')).toHaveCount(0)
+  await expect(page.getByTestId('search-waiting')).toHaveCount(0)
 })

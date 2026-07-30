@@ -36,7 +36,14 @@ import { allStatuses, allNames, type ConceptStatus } from './curation'
 import { buildCodeNameIndex, resolveDisplay } from './code-names'
 import { loadDictionaryIndex } from './dictionary'
 import { conceptKey } from './summary'
-import { loadConfig, chatComplete, InferenceError } from './inference'
+import {
+  loadConfig,
+  chatComplete,
+  endpointHost,
+  InferenceError,
+  type InferenceConfig,
+} from './inference'
+import { appendLocalTurn, dropTurn } from './chat'
 import { filterSensitive, loadOptIns } from './answerScope'
 import type { Code } from './codes'
 
@@ -175,10 +182,22 @@ async function gatherCandidates(): Promise<Candidate[]> {
   return buildCandidates(inScope, statuses, names, buildCodeNameIndex(inScope), dictionary)
 }
 
+/**
+ * Whether this device can answer without a node, together with the host for the
+ * current mode label. Returning the two from one config snapshot keeps a ready
+ * mode from displaying a host read from a different configuration.
+ */
+export async function localAnswerer(): Promise<{ ready: boolean; host: string }> {
+  const config = await loadConfig()
+  return {
+    ready: !!config?.endpoint && !!config.model,
+    host: endpointHost(config?.endpoint ?? ''),
+  }
+}
+
 /** Whether this device can answer without a node. */
 export async function canAnswerLocally(): Promise<boolean> {
-  const config = await loadConfig()
-  return !!config?.endpoint && !!config.model
+  return (await localAnswerer()).ready
 }
 
 /**
@@ -193,7 +212,13 @@ export async function canAnswerLocally(): Promise<boolean> {
  * say".
  */
 export async function askLocally(question: string): Promise<GroundedAnswer> {
-  const config = await loadConfig()
+  return askWithConfig(question, await loadConfig())
+}
+
+async function askWithConfig(
+  question: string,
+  config: InferenceConfig | null,
+): Promise<GroundedAnswer> {
   if (!config?.endpoint || !config.model) {
     throw new InferenceError('No inference endpoint is configured on this device.')
   }
@@ -231,4 +256,33 @@ export async function askLocally(question: string): Promise<GroundedAnswer> {
     return { text: cant_answer_text(), citations: [], ...caveat }
   }
   return { text: grounded.answer, citations: grounded.citations, ...caveat }
+}
+
+/**
+ * Answer on this device and record both halves of the exchange.
+ *
+ * The question is written before the model is called so the transcript shows it
+ * while the endpoint works. A failure takes it back out again, and that is the
+ * whole point of doing this here: `conversationState` reads a trailing `user`
+ * turn as `waiting`, so a question left behind by a failed answer greets every
+ * later mount with "Reading your record…" for a reply that is never coming, and
+ * the error that explains it is long gone. The caller re-offers the question in
+ * the composer instead, where "Try again" can reach it.
+ *
+ * Rethrows whatever {@link askLocally} threw, so the caller still shows why.
+ */
+export async function askAndRecord(question: string): Promise<void> {
+  const asked = await appendLocalTurn('user', question)
+  try {
+    const config = await loadConfig()
+    const answer = await askWithConfig(question, config)
+    // The caveat goes into the turn itself, not a transient banner: the
+    // transcript is what gets re-read later, and an answer recorded without the
+    // note that records were missing from it reads as complete forever.
+    const body = answer.caveat ? `${answer.text}\n\n${answer.caveat}` : answer.text
+    await appendLocalTurn('node', body, answer.citations, endpointHost(config?.endpoint ?? ''))
+  } catch (err) {
+    await dropTurn(asked.id)
+    throw err
+  }
 }
