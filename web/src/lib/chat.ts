@@ -7,7 +7,7 @@
 // incoming answer) lives in mailbox.ts, which owns the configured client and
 // identity.
 import { writable } from 'svelte/store'
-import { getAll, get, put, clear } from './db'
+import { getAll, get, put, del, clear } from './db'
 
 const STORE = 'chat'
 
@@ -91,6 +91,19 @@ export async function appendLocalTurn(
   }
   await appendTurn(turn)
   return turn
+}
+
+/**
+ * Forget one turn.
+ *
+ * For a question whose answer failed outright: the transcript is a record of
+ * exchanges, and a question with no reply and no reply coming is not one — it is
+ * what `conversationState` would read as `waiting` forever. Not an undo, and not
+ * offered to the owner: nothing deletes an answered turn.
+ */
+export async function dropTurn(id: string): Promise<void> {
+  await del(STORE, id)
+  await refreshChat()
 }
 
 /** Forget the whole conversation (store + IndexedDB). Used by lock/teardown and
