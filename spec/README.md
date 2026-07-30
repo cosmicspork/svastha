@@ -519,9 +519,19 @@ envelope — it is opaque sealed bytes to the crypto above.
 - `admin_cmd` — `{ command }`, a tagged owner→node command
   (`set_inference_endpoint`, `job_status`, `log_tail`, `pause_ocr`, `resume_ocr`).
   The node accepts commands only from an identity holding a live grant *it itself*
-  issued; node-global administration stays with the host operator. The set is
-  additive: a reader that does not know a command answers `ok: false` rather than
-  acting on a guess.
+  issued. **Scope differs per command, and the difference is not cosmetic:**
+  `pause_ocr`/`resume_ocr` act on the **sender's own vault only** — they stop and
+  start the node's reading of that owner's pages, never another owner's, and the
+  choice is persisted per owner. `set_inference_endpoint` is **node-wide**: it
+  reconfigures the endpoint the node uses for *every* enrolled owner, so on a
+  node serving several owners any one of them can change it for all of them.
+  `log_tail` returns the node's own (content-free) log, and `job_status` mixes
+  the sender's own index sizes and reading state with node-wide OCR counters. A
+  deployment that cannot accept those shared surfaces should enrol one owner per
+  node. Node-*process* administration — restart, upgrade, whether the node runs
+  at all — is the host operator's and has deliberately no command here. The set
+  is additive: a reader that does not know a command answers `ok: false` rather
+  than acting on a guess.
 - `admin_reply` — `{ in_reply_to, ok, detail? }`.
 - `chat_msg` — `{ role, text, citations: [event_id…] }`: a retrieval-augmented Q&A
   turn; an answer carries the event ids it cited.

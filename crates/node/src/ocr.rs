@@ -9,9 +9,10 @@
 //! per owner. Inference endpoints are rate-limited, and a medical record is not a
 //! throughput problem — keeping it serial keeps it simple and polite, and a
 //! failure backs off (below) rather than fanning out retries. On top of that,
-//! [`crate::ocr_control`] gates the whole pass: a node reads nothing until it is
-//! resumed, and once resumed reads at most a capped number of pages per pass, so
-//! a backlog arrives as reviewable batches instead of a flood.
+//! [`crate::ocr_control`] gates each owner independently: the node reads nothing
+//! for an owner until that owner resumes, and once resumed reads at most a capped
+//! number of pages per pass, so a backlog arrives as reviewable batches instead
+//! of a flood.
 //!
 //! **Idempotence** lives in the [`crate::journal`] (the durable, content-free
 //! record of what has been proposed/resolved/failed) — see that module for the
@@ -71,9 +72,9 @@ pub struct OcrReport {
     pub not_ready: usize,
     /// Findings dropped as unmappable across all sources this pass.
     pub dropped_findings: usize,
-    /// The pass stood down without reading: the node is paused. Resolutions are
-    /// still folded in, so `resolved` may be non-zero.
-    pub paused: bool,
+    /// Owners whose pages were skipped because that owner has reading paused.
+    /// Their resolutions are still folded in, so `resolved` may be non-zero.
+    pub paused_owners: usize,
     /// Set when the per-pass cap stopped the pass with work still eligible — the
     /// next reconcile continues. Not a count of what is left, just the fact that
     /// something is.
@@ -89,9 +90,23 @@ struct OwnerJob {
     sources: Vec<(String, String, Option<String>)>,
 }
 
-/// Run one OCR pass over every enrolled owner. Errors on the *listing* round-trips
-/// propagate (the caller logs and reconciles next tick); per-source failures never
-/// propagate — they back off in the journal so one bad page cannot wedge the rest.
+/// Run one OCR pass over every enrolled owner that has reading on. Errors on the
+/// *listing* round-trips propagate (the caller logs and reconciles next tick);
+/// per-source failures never propagate — they back off in the journal so one bad
+/// page cannot wedge the rest.
+///
+/// **Not a scheduler, and it can starve.** Every pass starts from the same
+/// snapshot of enrolled owners, in owner-hex order, and breaks the outer loop
+/// when the per-pass cap is spent; no cursor or rotation persists between passes. An owner
+/// early in that order with at least [`OcrControl::max_pages_per_pass`] newly
+/// eligible pages per reconcile therefore consumes every pass, and the owners
+/// after them never run — indefinitely, under sustained capture, not merely
+/// late. A finite backlog drains and the next owner then runs, which is why this
+/// has not bitten yet; it is a real hazard on a shared node, not a theoretical
+/// one. Fixing it means round-robin continuation or a per-owner cap, which is a
+/// deliberate follow-up: the cap exists to keep an approval queue reviewable,
+/// and scheduling deserves its own change rather than being smuggled into a
+/// trust fix.
 pub fn run(
     client: &RelayClient,
     cache: &Cache,
@@ -108,22 +123,18 @@ pub fn run(
         ..Default::default()
     };
 
-    // Resolutions are always folded in — an owner's decision is theirs and has
-    // nothing to do with whether we are reading. Only the reading stops.
-    if control.paused() {
-        report.paused = true;
-        // `queued` is a gauge, not a record of this pass. Skipping the record
-        // while paused freezes it at whatever it was the moment the owner
-        // paused, so an owner who pauses and then asks what is outstanding is
-        // answered with a stale number.
-        record_run(state, journal, &report);
-        return Ok(report);
-    }
-
     let now_secs = now_secs();
     let node = client.identity();
     let mut read_this_pass = 0usize;
     'outer: for job in snapshot_jobs(state) {
+        // The gate is per owner because the command that sets it is: pausing
+        // stops the node reading *your* pages, and leaves every other household
+        // it serves reading. Resolutions were folded in above regardless — an
+        // owner's decision on a proposal is theirs whether or not we are reading.
+        if control.paused(&job.owner_hex) {
+            report.paused_owners += 1;
+            continue;
+        }
         let recipient = PublicKey::from(job.owner_x25519);
         for (sha, _mime, capture) in &job.sources {
             let source_id = format!("att-{sha}");
@@ -264,8 +275,10 @@ pub fn run(
 
 /// Fold one pass's outcome into the job-status counters: refresh the `queued`
 /// gauge from the journal and add this pass's work to the cumulative totals.
-/// Called on every path out of [`run`], including the paused one, where the
-/// work is zero but the gauge still has to be current.
+/// Called on every path out of [`run`], including a pass where every owner is
+/// paused and the work is zero — the gauge still has to be current, so an owner
+/// who pauses and then asks what is outstanding is not answered with whatever
+/// the number happened to be the moment they paused.
 fn record_run(state: &Mutex<NodeState>, journal: &Journal, report: &OcrReport) {
     state.lock().expect("node state mutex").record_ocr_run(
         journal.awaiting_retry(),

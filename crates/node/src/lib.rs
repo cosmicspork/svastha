@@ -105,13 +105,13 @@ pub fn run(config: Config, logs: LogBuffer) -> Result<()> {
         &config.data_dir,
     );
     let mut journal = Journal::load(&config.data_dir);
-    // Reading is off until the owner asks for it (see ocr_control.rs): enrolling
+    // Reading is off until each owner asks for it (see ocr_control.rs): enrolling
     // a node against an existing vault must not silently work through a backlog.
-    let mut ocr_control = ocr_control::OcrControl::load(&config.data_dir);
+    let mut ocr_control = ocr_control::OcrControl::load(&config.data_dir, config.ocr);
     tracing::info!(
-        paused = ocr_control.paused(),
+        default_paused = config.ocr.default_paused,
         max_pages_per_pass = ocr_control.max_pages_per_pass(),
-        "page reading gate"
+        "page reading gate (per owner; the default applies until an owner chooses)"
     );
     tracing::info!(
         ocr = inference.ocr_client().is_some(),
@@ -304,6 +304,7 @@ fn reconcile(
                     not_ready = r.not_ready,
                     dropped_findings = r.dropped_findings,
                     deferred = r.deferred_to_next_pass,
+                    paused_owners = r.paused_owners,
                     "ocr pass"
                 );
             }

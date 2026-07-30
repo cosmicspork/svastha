@@ -8,10 +8,30 @@
 //! Commands are accepted only from an identity the node is **enrolled with** — an
 //! owner who granted the node and handed off keys — verified exactly like a chat
 //! question (envelope verify + relay attestation + enrolled-owner check). You
-//! administer the node's processing of *your* vault, not the node itself. **Node-
-//! global operations** (restart, upgrade, choosing whether the node runs at all)
+//! administer the node's processing of your vault, not the node itself: **node-
+//! process operations** (restart, upgrade, choosing whether the node runs at all)
 //! are the **host operator's**, not commands — there is deliberately no envelope
-//! that can restart or reconfigure the process globally.
+//! that can restart the process.
+//!
+//! ### What is per-owner and what is not
+//!
+//! Authorization is per owner; *effect* is only where the code says so, and
+//! saying otherwise in a trust document would be a lie a reader could not check:
+//!
+//! - `pause_ocr` / `resume_ocr` — **per owner.** The choice is keyed by the
+//!   sender and persisted per owner (see [`crate::ocr_control`]); pausing stops
+//!   the node reading your pages and nobody else's.
+//! - `set_inference_endpoint` — **node-wide.** One [`InferenceRuntime`] serves
+//!   every enrolled owner, so on a multi-owner node any owner can repoint it for
+//!   all of them. It carries a config URL, never record content, and the boot
+//!   validation still applies — but it is a shared control, not a private one.
+//! - `log_tail` — **node-wide**, and `job_status` is mixed: this owner's index
+//!   sizes and reading state alongside the node's OCR counters.
+//!
+//! A deployment that cannot accept those shared surfaces enrols one owner per
+//! node. Making inference per-owner is a real design change (per-owner runtimes,
+//! per-owner persistence), not a wording fix, and is deliberately not smuggled in
+//! behind one.
 //!
 //! ## Content-free throughout
 //!
@@ -160,12 +180,14 @@ fn execute(
             (true, log_tail_detail(logs, want))
         }
         // Reading is the one node behaviour an owner can start and stop, because
-        // it is the one that writes into their approval queue.
-        AdminCommand::PauseOcr => match control.set_paused(true) {
+        // it is the one that writes into their approval queue — and it stops for
+        // the sender's vault alone (unlike the endpoint below, which is shared;
+        // see the module doc).
+        AdminCommand::PauseOcr => match control.set_paused(owner_hex, true) {
             Ok(detail) => (true, detail),
             Err(msg) => (false, msg),
         },
-        AdminCommand::ResumeOcr => match control.set_paused(false) {
+        AdminCommand::ResumeOcr => match control.set_paused(owner_hex, false) {
             Ok(detail) => (true, detail),
             Err(msg) => (false, msg),
         },
@@ -178,9 +200,9 @@ fn execute(
     }
 }
 
-/// A content-free job-status line: this owner's index sizes (per-owner), the
-/// global OCR counters, whether inference is configured, and the last reconcile
-/// time (Unix seconds). Counts and a timestamp only.
+/// A content-free job-status line: this owner's index sizes and *their own*
+/// reading state, the node's OCR counters, whether inference is configured, and
+/// the last reconcile time (Unix seconds). Counts and a timestamp only.
 fn job_status_detail(
     state: &Mutex<NodeState>,
     inference: &InferenceRuntime,
@@ -216,8 +238,10 @@ fn job_status_detail(
         jobs.processed,
         jobs.failed,
         control.max_pages_per_pass(),
-        reading = if control.paused() {
-            "paused"
+        // Whose pause this is, because the answer is only ever about the asker:
+        // a paused status the owner cannot account for reads like a node fault.
+        reading = if control.paused(owner_hex) {
+            "paused by you"
         } else {
             "reading"
         }
