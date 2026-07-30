@@ -53,12 +53,17 @@ harvest a PR's "## Deferred" notes into the list.
 
 - Measure the node's in-process page reader against real pages before trusting
   it unattended — it replaced a working vision path and has not been run against
-  a real backlog yet; the same zero-cross-row-mis-association gate applies
+  a real backlog yet; the same zero-cross-row-mis-association gate applies. Run
+  `just accuracy` (`crates/devtool`) and put the result in the PR. Its first run
+  against the synthetic fixtures did not clear the gate: on a tabular panel the
+  reader produced one cell per line rather than one row, so no finding could
+  verify against its cited line and the page proposed nothing at all
 - Move the node's own inference-endpoint field alongside the device one, so the
   two are configured in one place rather than two screens
 - Measure on-device OCR accuracy against the tabular fixtures before it can be
-  switched on by default — the ship gate is zero cross-row mis-associations, and
-  it needs a harness that runs real pages through a configured endpoint
+  switched on by default — the ship gate is zero cross-row mis-associations.
+  Run `just accuracy` (`crates/devtool`) and put the result in the PR; the
+  fixtures still need a run against real pages, not only the synthetic ones
 - Runtime-cache the OCR assets in the service worker, so a device that has
   switched on on-device reading can still read a page offline (they are excluded
   from the install precache, so today it depends on the browser's HTTP cache)

@@ -1,0 +1,33 @@
+{
+  "page": "skewed-panel.png",
+  "note": "The same panel, photographed crooked (~2 degrees).",
+  "hazard": "Two degrees of rotation across a wide panel droops a row by more than its own height from the first cell to the last, so a grouper that fixes a row band from its first member shreds each row into separate lines — and a numbered transcript of shredded rows no longer has the analyte and its value on one line.",
+  "synthetic": true,
+  "expected": [
+    {
+      "analyte": "Sodium",
+      "value": "139",
+      "unit": "mmol/L"
+    },
+    {
+      "analyte": "Potassium",
+      "value": "4.1",
+      "unit": "mmol/L"
+    },
+    {
+      "analyte": "Chloride",
+      "value": "104",
+      "unit": "mmol/L"
+    },
+    {
+      "analyte": "Glucose",
+      "value": "105",
+      "unit": "mg/dL"
+    },
+    {
+      "analyte": "Creatinine",
+      "value": "0.9",
+      "unit": "mg/dL"
+    }
+  ]
+}

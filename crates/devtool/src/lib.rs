@@ -9,6 +9,8 @@
 //! mismatch is a hard error naming the blob id — ids are content hashes, not
 //! PHI, so they're safe to print.
 
+pub mod accuracy;
+
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::PathBuf;

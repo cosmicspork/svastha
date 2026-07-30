@@ -1,0 +1,53 @@
+{
+  "page": "tight-rows-panel.png",
+  "note": "Tight rows under tall section headers.",
+  "hazard": "Rows set solid (no leading) beneath a section header several times their height. A line-grouper that anchors a row band to its tallest member stretches that header over the rows below and merges them, which is how a value from one row ends up beside the analyte from another.",
+  "synthetic": true,
+  "expected": [
+    {
+      "analyte": "Sodium",
+      "value": "139",
+      "unit": "mmol/L"
+    },
+    {
+      "analyte": "Potassium",
+      "value": "4.1",
+      "unit": "mmol/L"
+    },
+    {
+      "analyte": "Chloride",
+      "value": "104",
+      "unit": "mmol/L"
+    },
+    {
+      "analyte": "Glucose",
+      "value": "105",
+      "unit": "mg/dL"
+    },
+    {
+      "analyte": "Creatinine",
+      "value": "0.9",
+      "unit": "mg/dL"
+    },
+    {
+      "analyte": "Hemoglobin",
+      "value": "13.8",
+      "unit": "g/dL"
+    },
+    {
+      "analyte": "Hematocrit",
+      "value": "41",
+      "unit": "%"
+    },
+    {
+      "analyte": "Platelets",
+      "value": "244",
+      "unit": "K/uL"
+    },
+    {
+      "analyte": "Leukocytes",
+      "value": "6.2",
+      "unit": "K/uL"
+    }
+  ]
+}
