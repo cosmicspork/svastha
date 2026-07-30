@@ -523,14 +523,15 @@ envelope — it is opaque sealed bytes to the crypto above.
   issued. **Scope differs per command, and the difference is not cosmetic:**
   `pause_ocr`/`resume_ocr` act on the **sender's own vault only** — they stop and
   start the node's reading of that owner's pages, never another owner's, and the
-  choice is persisted per owner — and `set_answer_scope` narrows that owner's
-  answers alone, likewise persisted per owner. `set_inference_endpoint` is
-  **node-wide**: it reconfigures the endpoint the node uses for *every* enrolled
-  owner, so on a node serving several owners any one of them can change it for
-  all of them. `log_tail` returns the node's own (content-free) log, and
-  `job_status` mixes the sender's own index sizes and reading state with
-  node-wide OCR counters. A deployment that cannot accept those shared surfaces
-  should enrol one owner per node. Node-*process* administration — restart,
+  choice is persisted per owner; `set_answer_scope` narrows that owner's answers
+  alone, likewise persisted per owner; and `set_inference_endpoint` sets the
+  endpoint the node runs **that owner's** pages and questions against, persisted
+  per owner, so it can never repoint anyone else's. An owner who has set none
+  uses the operator's env-configured default; an owner with neither has their
+  inference skipped and `job_status` says so, rather than borrowing another
+  owner's endpoint. `log_tail` returns the node's own (content-free) log, and
+  `job_status` mixes the sender's own index sizes, reading state, and effective
+  endpoint with node-wide OCR counters. Node-*process* administration — restart,
   upgrade, whether the node runs at all — is the host operator's and has
   deliberately no command here. The set is additive: a reader that does not know
   a command parses it into a catch-all and answers `ok: false` rather than
@@ -555,8 +556,11 @@ envelope — it is opaque sealed bytes to the crypto above.
   owner's switch and the node's behaviour disagree until a reply says otherwise.
   A mailbox is a set, not a queue, so two of these from one owner can be handed
   over in either order. Within a pass a node therefore applies only the **latest**
-  of an owner's `set_answer_scope` commands, ordered by the signed `sent_at` and
-  tie-broken on the envelope id. This is a within-pass rule only — it is not a
+  of an owner's `set_answer_scope` commands — and, independently, only the latest
+  of their `set_inference_endpoint` commands — ordered by the signed `sent_at` and
+  tie-broken on the envelope id. The two are ordered separately: an endpoint
+  command is not a later instruction about a scope. This is a within-pass rule
+  only — it is not a
   general ordering guarantee for the mailbox, and no ordering token exists.
 
   A superseded command is answered **`ok: false`**: on this wire `ok` means
@@ -574,6 +578,23 @@ envelope — it is opaque sealed bytes to the crypto above.
   agreement. `ok` alone is not sufficient, by design — with several devices the
   question "was my command applied" and the question "what is in force now" have
   different answers, and only the second one is worth acting on.
+
+  `set_inference_endpoint { endpoint, api_key? }` follows every one of those
+  rules — per-owner persistence, within-pass ordering, `ok: false` for a
+  superseded command — with its own marker: every reply ends its `detail` with
+  `[endpoint: host]` (the host only) or `[endpoint: none]`, and a client
+  confirms on the stated host rather than on `ok`. **`api_key` is a secret on
+  the wire, and that is sound only because of where this wire runs:** the body is
+  sealed to the node's X25519 key before the envelope is signed, so the relay
+  stores ciphertext it cannot open and only the node the owner enrolled can read
+  it. It is not a new disclosure — that node already reads the owner's whole
+  decrypted vault — and it is stored on the node beside its identity seed, the
+  same trust position the operator's env-configured key already occupies. Absent
+  means **no key**, never "unchanged", so an owner can take a credential away.
+  A node never sends one owner's key to another owner's endpoint, and never
+  substitutes the operator's key for an owner-chosen endpoint: an endpoint an
+  owner set carries that owner's key or none. No reply ever echoes a key, and no
+  reply names an endpoint but the asker's own.
 - `admin_reply` — `{ in_reply_to, ok, detail? }`.
 - `chat_msg` — `{ role, text, citations: [event_id…] }`: a retrieval-augmented Q&A
   turn; an answer carries the event ids it cited.

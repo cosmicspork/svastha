@@ -102,6 +102,31 @@ export async function saveConfig(endpoint: string, model: string): Promise<void>
   ])
 }
 
+/**
+ * Save the whole configuration, **key first**.
+ *
+ * The order is the point. Sealing the key is the only step that can fail on a
+ * locked vault ({@link saveApiKey} needs the vault key), and it used to run
+ * *after* the endpoint and model were written. A save attempted while locked
+ * therefore left the app configured — `loadConfig` returns an endpoint and a
+ * model — with no credential, so the next question or page read went to the
+ * endpoint unauthenticated and came back 401. Failing before anything is
+ * written leaves the previous configuration intact, which is the state the owner
+ * can actually reason about.
+ *
+ * An empty `apiKey` means "leave whatever is stored alone", which is what the
+ * form's blank field means when a key is already saved. Clearing one is
+ * {@link forgetConfig}'s job.
+ */
+export async function saveInferenceConfig(
+  endpoint: string,
+  model: string,
+  apiKey?: string,
+): Promise<void> {
+  if (apiKey?.trim()) await saveApiKey(apiKey)
+  await saveConfig(endpoint, model)
+}
+
 export async function forgetConfig(): Promise<void> {
   await Promise.all([
     del('prefs', PREF_URL),
@@ -160,13 +185,57 @@ export async function hasStoredApiKey(): Promise<boolean> {
 }
 
 // --- consent --------------------------------------------------------------
+//
+// Consent is to **an origin**, not to the feature. The three things the sheet
+// says are all about a specific recipient — this endpoint will receive your
+// record decrypted, your key is stored for it, the relay never sees it — so a
+// yes to one host is not a yes to the next one. Repointing at a different origin
+// therefore asks again; changing the path or the model on the same host does
+// not, because the recipient has not changed.
 
-export async function hasConsented(): Promise<boolean> {
-  return (await get<string>('prefs', PREF_CONSENT)) !== undefined
+/** What is stored: when, and for whom. */
+interface ConsentRecord {
+  at: string
+  origin: string
 }
 
-export async function recordConsent(): Promise<void> {
-  await put('prefs', new Date().toISOString(), PREF_CONSENT)
+/** The origin an endpoint URL names, or '' when it will not parse. */
+export function endpointOrigin(endpoint: string): string {
+  try {
+    return new URL(endpoint.trim()).origin
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Whether the owner has consented to send their record to `endpoint`'s origin.
+ *
+ * A record from before consent named an origin is read as consent for the
+ * endpoint that was configured at the time — which is exactly what it was: the
+ * owner agreed while that endpoint was the one saved. Reading it as consent for
+ * *any* endpoint would carry an old yes onto a host they never saw.
+ */
+export async function hasConsented(endpoint: string): Promise<boolean> {
+  const origin = endpointOrigin(endpoint)
+  if (!origin) return false
+  const stored = await get<ConsentRecord | string>('prefs', PREF_CONSENT)
+  if (stored === undefined) return false
+  if (typeof stored === 'string') {
+    // Legacy: an ISO timestamp with no origin. It was given for whatever was
+    // saved then, so it counts for that endpoint and nothing else.
+    const saved = await get<string>('prefs', PREF_URL)
+    return !!saved && endpointOrigin(saved) === origin
+  }
+  return stored.origin === origin
+}
+
+export async function recordConsent(endpoint: string): Promise<void> {
+  await put(
+    'prefs',
+    { at: new Date().toISOString(), origin: endpointOrigin(endpoint) } satisfies ConsentRecord,
+    PREF_CONSENT,
+  )
 }
 
 // --- reachability ---------------------------------------------------------
@@ -177,6 +246,15 @@ export class InferenceError extends Error {}
  * Probe the endpoint with `GET {base}/models` — the OpenAI-compatible discovery
  * call, cheap and side-effect free, so "Test connection" costs no inference.
  *
+ * **It sends the headers the real call sends.** Not a cosmetic detail: a bare
+ * GET with no `Authorization` and no `Content-Type` is a CORS *simple* request,
+ * which the browser sends without a preflight. The real call is a JSON POST,
+ * which is not — it preflights, and an endpoint whose CORS config allows the
+ * origin but not the `authorization`/`content-type` headers fails there. A test
+ * that omitted them therefore passed against endpoints that could never answer a
+ * question, which is the one outcome a connection test must not produce. So the
+ * probe carries the same headers and gets the same preflight.
+ *
  * A CORS rejection reaches JS as an indistinguishable `TypeError`, so the failure
  * message names it as a possibility rather than blaming the network: the endpoint
  * has to send `Access-Control-Allow-Origin` for a browser to call it at all, and
@@ -184,7 +262,7 @@ export class InferenceError extends Error {}
  */
 export async function testConnection(endpoint: string, apiKey?: string): Promise<string[]> {
   const base = normalizeEndpoint(endpoint)
-  const headers: Record<string, string> = {}
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`
 
   let response: Response
@@ -204,6 +282,28 @@ export async function testConnection(endpoint: string, apiKey?: string): Promise
   }
 
   return parseModelIds(await response.json().catch(() => null))
+}
+
+/**
+ * What "Test connection" should actually probe: the values **in the form**, with
+ * the key being typed if one is and the stored key otherwise.
+ *
+ * A function rather than three lines in a click handler, because the wrong
+ * answer here is silent and this pins it. The handler used to probe the *saved*
+ * configuration, so an owner who edited the endpoint and pressed Test was told
+ * their old endpoint was reachable — a green tick for a host they were in the
+ * middle of replacing. Testing the form and saving the form have to be the same
+ * values or the test certifies nothing.
+ *
+ * A blank key field means "keep the stored one", matching what Save does with
+ * it, so the probe uses the credential the real call would use.
+ */
+export function probeTarget(
+  form: { endpoint: string; apiKey: string },
+  stored: InferenceConfig | null,
+): { endpoint: string; apiKey?: string } {
+  const typed = form.apiKey.trim()
+  return { endpoint: form.endpoint, apiKey: typed || stored?.apiKey }
 }
 
 /** Model ids out of an OpenAI-compatible `/models` body, tolerant of shape. */

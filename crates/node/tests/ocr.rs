@@ -24,7 +24,7 @@ use svastha_core::mailbox::{
 use svastha_node::cache::Cache;
 use svastha_node::client::RelayClient;
 use svastha_node::config::InferenceConfig;
-use svastha_node::inference::InferenceClient;
+use svastha_node::inference::InferenceRuntime;
 use svastha_node::journal::Journal;
 use svastha_node::ocr_control::{OcrControl, OcrSettings, DEFAULT_MAX_PAGES_PER_PASS};
 use svastha_node::state::NodeState;
@@ -147,12 +147,20 @@ fn spawn_inference(mode: Mode) -> (String, Arc<AtomicUsize>) {
     (format!("http://{addr}/v1"), calls)
 }
 
-fn inference_client(base: &str) -> InferenceClient {
-    InferenceClient::new(&InferenceConfig {
+/// A runtime with `base` as the operator's boot default for both roles — the
+/// shape an owner who has set no endpoint of their own resolves to. Loaded from
+/// a fresh temp dir so no owner has a persisted choice.
+fn inference_client(base: &str) -> InferenceRuntime {
+    let boot = InferenceConfig {
         endpoint: base.to_string(),
         api_key: None,
         model: "coding-test".to_string(),
-    })
+    };
+    InferenceRuntime::load(
+        Some(boot.clone()),
+        Some(boot),
+        tempfile::tempdir().unwrap().path(),
+    )
 }
 
 /// A findings answer the mock returns as the model's content.

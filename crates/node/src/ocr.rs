@@ -33,7 +33,7 @@ use x25519_dalek::PublicKey;
 
 use crate::cache::Cache;
 use crate::client::RelayClient;
-use crate::inference::InferenceClient;
+use crate::inference::InferenceRuntime;
 use crate::journal::Journal;
 use crate::state::NodeState;
 use svastha_import::extract;
@@ -75,6 +75,9 @@ pub struct OcrReport {
     /// Owners whose pages were skipped because that owner has reading paused.
     /// Their resolutions are still folded in, so `resolved` may be non-zero.
     pub paused_owners: usize,
+    /// Owners whose pages were skipped because they have no inference endpoint —
+    /// none of their own, and no operator default to fall back on.
+    pub no_endpoint_owners: usize,
     /// Set when the per-pass cap stopped the pass with work still eligible — the
     /// next reconcile continues. Not a count of what is left, just the fact that
     /// something is.
@@ -111,7 +114,7 @@ pub fn run(
     client: &RelayClient,
     cache: &Cache,
     state: &Mutex<NodeState>,
-    inference: &InferenceClient,
+    inference: &InferenceRuntime,
     transcriber: &dyn PageReader,
     control: &OcrControl,
     journal: &mut Journal,
@@ -134,6 +137,14 @@ pub fn run(
             report.paused_owners += 1;
             continue;
         }
+        // And so is the endpoint the coding request goes to: this owner's own if
+        // they set one, else the operator's default (see [`crate::inference`]).
+        // An owner with neither has their pages left alone — waiting is the
+        // honest outcome, and `job_status` says why.
+        let Some(inference) = inference.ocr_client(&job.owner_hex) else {
+            report.no_endpoint_owners += 1;
+            continue;
+        };
         let recipient = PublicKey::from(job.owner_x25519);
         for (sha, capture) in &job.sources {
             let source_id = format!("att-{sha}");

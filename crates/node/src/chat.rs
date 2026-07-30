@@ -43,7 +43,7 @@ use x25519_dalek::PublicKey;
 
 use crate::answer_scope::AnswerScopeControl;
 use crate::client::RelayClient;
-use crate::inference::InferenceClient;
+use crate::inference::{InferenceClient, InferenceRuntime};
 use crate::journal::Journal;
 use crate::retrieval::{self, ContextItem};
 use crate::state::NodeState;
@@ -71,16 +71,22 @@ pub struct ChatReport {
     /// A verified chat turn that is not an owner question (e.g. an answer echoed
     /// back): tolerated and left alone.
     pub ignored: u64,
+    /// Questions from owners with no usable inference endpoint of their own and
+    /// no operator default to fall back on. Left in the mailbox, like a deferred
+    /// one — the endpoint may yet be set (see [`crate::inference`]).
+    pub no_endpoint: u64,
 }
 
 /// Run one chat pass: drain the node's mailbox for `chat_msg` questions and answer
-/// each. Called only when an inference client exists — a question the node cannot
-/// yet answer (no endpoint) waits in the mailbox rather than getting a fake reply,
-/// mirroring the web's honest waiting state.
+/// each, **each against the asker's own endpoint** (their own if they set one,
+/// else the operator's default — see [`crate::inference`]). A question the node
+/// cannot yet answer, because that owner has no endpoint at all, waits in the
+/// mailbox rather than getting a fake reply, mirroring the web's honest waiting
+/// state.
 pub fn run(
     client: &RelayClient,
     state: &Mutex<NodeState>,
-    inference: &InferenceClient,
+    inference: &InferenceRuntime,
     scopes: &AnswerScopeControl,
     journal: &mut Journal,
 ) -> Result<ChatReport> {
@@ -147,6 +153,17 @@ pub fn run(
         let Some((owner_x25519, context)) = prepared else {
             // Validly signed, but not an owner the node serves: drop and count.
             report.dropped += 1;
+            continue;
+        };
+
+        // The asker's own endpoint, resolved from the same identity the gate just
+        // checked — never another owner's, and never a node-wide setting.
+        let Some(inference) = inference.chat_client(&owner_hex) else {
+            report.no_endpoint += 1;
+            tracing::info!(
+                owner = short(&owner_hex),
+                "no inference endpoint for this owner; leaving the question unanswered"
+            );
             continue;
         };
 

@@ -54,8 +54,6 @@ harvest a PR's "## Deferred" notes into the list.
 - Measure the node's in-process page reader against real pages before trusting
   it unattended — it replaced a working vision path and has not been run against
   a real backlog yet; the same zero-cross-row-mis-association gate applies
-- Move the node's own inference-endpoint field alongside the device one, so the
-  two are configured in one place rather than two screens
 - Measure on-device OCR accuracy against the tabular fixtures before it can be
   switched on by default — the ship gate is zero cross-row mis-associations, and
   it needs a harness that runs real pages through a configured endpoint
@@ -84,8 +82,6 @@ harvest a PR's "## Deferred" notes into the list.
   retries on backoff indefinitely)
 - Within-pass `sent_at` ordering for `pause_ocr`/`resume_ocr` like
   `set_answer_scope` (a reversed pair leaves reading on)
-- Decide: node inference endpoint as owner command vs. host-operator config
-  (any enrolled owner can currently repoint it for all)
 
 ## Intentionally not doing
 
