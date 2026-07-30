@@ -21,7 +21,7 @@
   } from '../../lib/ocr-assets'
   import {
     OPT_IN_CATEGORIES,
-    loadOptIns,
+    optInsFrom,
     loadAnswerScope,
     resolveNodeScopeState,
     type NodeScopeState,
@@ -96,8 +96,13 @@
 
   onMount(async () => {
     consented = await hasConsented()
-    optIns = await loadOptIns()
-    scopeRecord = await loadAnswerScope()
+    // ONE read of the scope record, with both the switches and the confirmation
+    // banner derived from it. Reading it twice is two transactions, and a commit
+    // landing between them would leave the switches showing one set while the
+    // banner reasons about another.
+    const record = await loadAnswerScope()
+    scopeRecord = record
+    optIns = optInsFrom(record)
     nodeEd = (await enrolledNode())?.ed ?? null
     await refreshAdminLog()
     ocrOn = await assetsEnabled()
@@ -222,7 +227,7 @@
     // re-read: the record IS the truth, and a second read is a second thing that
     // can fail. (They differ only if another tab committed underneath us, in
     // which case the owner's latest choice is the one to show.)
-    optIns = new Set(commit.record.include)
+    optIns = optInsFrom(commit.record)
     scopeRecord = commit.record
     nowMs = Date.now()
     // Past the commit. A failure refreshing the log is not a commit failure and
@@ -249,9 +254,12 @@
       optInBusy = false
       return
     }
-    optIns = new Set(retry.record.include)
+    optIns = optInsFrom(retry.record)
     scopeRecord = retry.record
-    nodeEd = (await enrolledNode().catch(() => null))?.ed ?? nodeEd
+    // From the record the retry just wrote, not a fresh lookup: the retry
+    // already resolved the node and stamped it, and a second read is a second
+    // answer that can differ from the one the command was actually sent to.
+    if (retry.record.pending.nodeEd) nodeEd = retry.record.pending.nodeEd
     nowMs = Date.now()
     try {
       await refreshAdminLog()

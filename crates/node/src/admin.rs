@@ -41,6 +41,7 @@
 //! carries a config URL and `set_answer_scope` carries category *names*, never
 //! record content. Nothing here logs or returns PHI.
 
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -61,6 +62,24 @@ use crate::state::NodeState;
 
 /// Default number of log lines a `log_tail` returns when the command names none.
 const DEFAULT_LOG_LINES: usize = 40;
+
+/// How one `set_answer_scope` is ordered against another from the same owner:
+/// the sender's signed `sent_at`, with the envelope id breaking a tie so the
+/// order is total and identical on every node that sees the same two commands.
+///
+/// The id tiebreak is arbitrary but deterministic — two commands stamped the
+/// same millisecond have no real order, and picking one consistently is better
+/// than letting mailbox iteration decide.
+type ScopeStamp = (i64, String);
+
+/// Whether `candidate` is a later instruction than the one already applied in
+/// this pass (if any). See [`ScopeStamp`].
+fn supersedes(candidate: &ScopeStamp, applied: Option<&ScopeStamp>) -> bool {
+    match applied {
+        None => true,
+        Some(applied) => candidate > applied,
+    }
+}
 
 /// Byte budget for a reply `detail` so the sealed `admin_reply` stays under the
 /// relay's 4 KiB mailbox-item cap (the envelope hex-encodes the sealed body, ≈ 2×,
@@ -94,6 +113,16 @@ pub fn run(
 ) -> Result<AdminReport> {
     let mut report = AdminReport::default();
     let node = client.identity();
+
+    // The newest `set_answer_scope` applied so far this pass, per owner. The
+    // mailbox hands items over in no particular order (the relay lists from a
+    // map), so two instructions sent seconds apart can arrive reversed — and the
+    // node would then settle on the stale one, having answered `ok` to both. A
+    // scope command that is older than one already applied is therefore answered
+    // but not applied, which leaves the pass ending on the owner's last word
+    // whichever way round they turn up. Only this command is ordered: it is the
+    // one whose stale application silently keeps disclosing.
+    let mut applied_scopes: BTreeMap<String, ScopeStamp> = BTreeMap::new();
 
     for entry in client.list_mailbox()? {
         let Some((bytes, from_relay)) = client.get_mailbox(&entry.id)? else {
@@ -147,6 +176,8 @@ pub fn run(
             scopes,
             logs,
             &owner_hex,
+            (msg.sent_at, msg_id.clone()),
+            &mut applied_scopes,
         );
         let reply = AdminReplyBody {
             in_reply_to: msg_id.clone(),
@@ -180,6 +211,8 @@ fn execute(
     scopes: &mut AnswerScopeControl,
     logs: &LogBuffer,
     owner_hex: &str,
+    stamp: ScopeStamp,
+    applied_scopes: &mut BTreeMap<String, ScopeStamp>,
 ) -> (bool, String) {
     match command {
         AdminCommand::JobStatus => (
@@ -208,10 +241,26 @@ fn execute(
         // The one command that changes what leaves the node. It is owner-scoped
         // for the same reason pausing is, and for one more: an opt-in to your own
         // cycle or mind entries is not a choice anyone else can make for you.
-        AdminCommand::SetAnswerScope { include } => match scopes.set_scope(owner_hex, include) {
-            Ok(detail) => (true, detail),
-            Err(msg) => (false, msg),
-        },
+        AdminCommand::SetAnswerScope { include } => {
+            if !supersedes(&stamp, applied_scopes.get(owner_hex)) {
+                // Understood and accepted — it simply is not the owner's latest
+                // word, and applying it would undo one they sent afterwards.
+                return (
+                    true,
+                    format!(
+                        "a later instruction of yours is in force, so this one was not applied; {}",
+                        scopes.scope(owner_hex).describe()
+                    ),
+                );
+            }
+            match scopes.set_scope(owner_hex, include) {
+                Ok(detail) => {
+                    applied_scopes.insert(owner_hex.to_string(), stamp);
+                    (true, detail)
+                }
+                Err(msg) => (false, msg),
+            }
+        }
         // A command from a newer app than this node. Answered, not ignored: the
         // owner needs to be able to tell "this node will not do that" from "this
         // node never heard me", and only a reply can do that. Nothing is guessed
@@ -357,6 +406,33 @@ mod tests {
         // The very last line is the newest and must be present.
         assert!(detail.contains("number 999"), "newest line kept");
         assert!(!detail.contains("number 0 "), "oldest dropped to fit");
+    }
+
+    #[test]
+    fn a_scope_command_is_ordered_by_sent_at_then_id() {
+        let first = (100i64, "aaa".to_string());
+        let later = (200i64, "bbb".to_string());
+
+        // Nothing applied yet: the first one through is applied.
+        assert!(supersedes(&first, None));
+        // A later instruction replaces an earlier one...
+        assert!(supersedes(&later, Some(&first)));
+        // ...and an earlier one arriving afterwards does not undo it. This is the
+        // whole point: mailbox order is not send order.
+        assert!(!supersedes(&first, Some(&later)));
+        // Re-applying the same command is not a later instruction.
+        assert!(!supersedes(&first, Some(&first)));
+    }
+
+    #[test]
+    fn commands_stamped_the_same_millisecond_still_have_one_order() {
+        // No real order exists between them, so any consistent rule will do —
+        // what matters is that it is the same rule every time, rather than
+        // whichever the mailbox happened to yield first.
+        let a = (100i64, "aaa".to_string());
+        let b = (100i64, "bbb".to_string());
+        assert!(supersedes(&b, Some(&a)));
+        assert!(!supersedes(&a, Some(&b)));
     }
 
     #[test]

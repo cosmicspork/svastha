@@ -252,12 +252,24 @@ fn command(
     node: &Identity,
     cmd: AdminCommand,
 ) -> String {
+    command_at(owner, owner_client, node, cmd, 1_753_000_200_000)
+}
+
+/// Deposit a command with an explicit signed `sent_at` — the owner's own clock,
+/// which is what orders two instructions sent close together.
+fn command_at(
+    owner: &Identity,
+    owner_client: &RelayClient,
+    node: &Identity,
+    cmd: AdminCommand,
+    sent_at: i64,
+) -> String {
     let body = AdminCmdBody { command: cmd };
     let envelope = MailboxMessage::seal(
         owner,
         &node.x25519_public(),
         MessageKind::AdminCmd,
-        1_753_000_200_000,
+        sent_at,
         &serde_json::to_vec(&body).unwrap(),
     );
     let id = envelope.id_hex();
@@ -1199,4 +1211,90 @@ fn a_command_this_node_does_not_know_is_answered_rather_than_dropped() {
         "and the reason says the node is the old half, got: {:?}",
         reply.detail
     );
+}
+
+/// Two scope instructions from one owner in a single pass must end on the
+/// **later** one, whichever order the mailbox happens to hand them over.
+///
+/// The relay's mailbox lists items from a `HashMap`, so arrival order is not
+/// stable between passes — which is exactly how this defect hides: the node ends
+/// on the stale instruction only sometimes, and both commands answer `ok: true`
+/// either way, so nothing looks wrong. For a switch that governs disclosure,
+/// "usually applies your last instruction" is not a property worth having.
+///
+/// Twenty rounds, alternating which set is the newer one, so a stale-wins bug
+/// cannot hide behind a starting state that already matches.
+#[test]
+fn the_later_scope_instruction_wins_whatever_order_it_arrives_in() {
+    let h = Harness::new(b"scope order node");
+    let owner = h.add_owner(b"scope order owner");
+    h.enroll_and_sync();
+
+    let logs = LogBuffer::new();
+    let mut rt = runtime(h.dir.path(), "https://inference.internal/v1");
+    let mut journal = h.journal();
+    let mut sc = scopes(&h);
+    let mood = app_local_entry(&owner.id, "mood", "Mood", "2026-01-05");
+    let cycle = app_local_entry(&owner.id, "cycle-start", "Period start", "2026-01-05");
+
+    for round in 0..20i64 {
+        // Alternate, so each round's expected end state differs from the last.
+        let (older, newer): (Vec<String>, Vec<String>) = if round % 2 == 0 {
+            (vec!["cycle".into()], vec!["mind".into()])
+        } else {
+            (vec!["mind".into()], vec!["cycle".into()])
+        };
+
+        command_at(
+            &owner.id,
+            &owner.client,
+            &h.node,
+            AdminCommand::SetAnswerScope {
+                include: older.clone(),
+            },
+            1_753_000_000_000 + round * 10,
+        );
+        command_at(
+            &owner.id,
+            &owner.client,
+            &h.node,
+            AdminCommand::SetAnswerScope {
+                include: newer.clone(),
+            },
+            1_753_000_000_005 + round * 10,
+        );
+
+        let report = admin::run(
+            &h.node_client,
+            &h.state,
+            &mut rt,
+            &mut control(&h),
+            &mut sc,
+            &logs,
+            &mut journal,
+        )
+        .unwrap();
+        assert_eq!(report.replied, 2, "both are answered (round {round})");
+
+        // Both instructions were understood, so both answer ok — the owner is
+        // not told anything failed, which is why the end state has to be right.
+        for reply in read_admin_replies(&owner.client, &owner.id) {
+            assert!(reply.ok, "round {round}: {:?}", reply.detail);
+        }
+
+        let scope = sc.scope(&hex_ed(&owner.id));
+        let ends_on_mind = scope.allows(&mood.event);
+        let ends_on_cycle = scope.allows(&cycle.event);
+        if newer == vec!["mind".to_string()] {
+            assert!(
+                ends_on_mind && !ends_on_cycle,
+                "round {round}: ended on the stale instruction"
+            );
+        } else {
+            assert!(
+                ends_on_cycle && !ends_on_mind,
+                "round {round}: ended on the stale instruction"
+            );
+        }
+    }
 }

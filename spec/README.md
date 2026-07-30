@@ -553,6 +553,12 @@ envelope — it is opaque sealed bytes to the crypto above.
   with `ok: true`: a deposit is not an application, and an older node, an offline
   node, and a node that could not persist the change are all cases where the
   owner's switch and the node's behaviour disagree until a reply says otherwise.
+  A mailbox is a set, not a queue, so two of these from one owner can be handed
+  over in either order. Within a pass a node therefore applies only the **latest**
+  of an owner's `set_answer_scope` commands, ordered by the signed `sent_at` and
+  tie-broken on the envelope id; a superseded one is still answered `ok: true`,
+  saying a later instruction is in force. This is a within-pass rule only — it is
+  not a general ordering guarantee for the mailbox, and no ordering token exists.
 - `admin_reply` — `{ in_reply_to, ok, detail? }`.
 - `chat_msg` — `{ role, text, citations: [event_id…] }`: a retrieval-augmented Q&A
   turn; an answer carries the event ids it cited.

@@ -37,12 +37,25 @@ vi.mock('../db', () => ({
   getAll: vi.fn(async () => []),
 }))
 
-const node = vi.hoisted(() => ({ value: null as null | { ed: string; x25519: string } }))
+const node = vi.hoisted(() => ({
+  value: null as null | { ed: string; x25519: string },
+  /** Parks the node lookup, so a test can interleave a commit with a caller
+   * that is between reading the scope and writing it. */
+  gate: null as null | { held: Promise<void>; entered: () => void },
+}))
 vi.mock('../nodeadmin', async () => {
   const actual = await vi.importActual<typeof import('../nodeadmin')>('../nodeadmin')
   return {
     ...actual,
-    enrolledNode: vi.fn(async () => node.value),
+    enrolledNode: vi.fn(async () => {
+      const gate = node.gate
+      node.gate = null
+      if (gate) {
+        gate.entered()
+        await gate.held
+      }
+      return node.value
+    }),
     recordCommand: vi.fn(async () => {}),
     refreshAdminLog: vi.fn(async () => {}),
   }
@@ -134,6 +147,17 @@ let relayGate: { held: Promise<void>; entered: () => void } | null = null
  * through before it deposits, so "start it and assume it is parked" would race
  * the harness against the code under test and park the wrong deposit.
  */
+/** Park the next node lookup — the await a caller sits on between reading the
+ * stored scope and writing it back. */
+function stallNodeLookup(): { entered: Promise<void>; release: () => void } {
+  let entered!: () => void
+  let release!: () => void
+  const enteredPromise = new Promise<void>((resolve) => (entered = resolve))
+  const held = new Promise<void>((resolve) => (release = resolve))
+  node.gate = { held, entered }
+  return { entered: enteredPromise, release }
+}
+
 function stallRelay(): { entered: Promise<void>; release: () => void } {
   let entered!: () => void
   let release!: () => void
@@ -150,6 +174,7 @@ beforeEach(() => {
   store.puts = 0
   relayFails = false
   relayGate = null
+  node.gate = null
   sealCounter = 0
   sent.length = 0
   lastBody = null
@@ -530,5 +555,62 @@ describe('confirmation is bound to the node that received the command', () => {
         Date.now(),
       ),
     ).toEqual({ state: 'confirmed' })
+  })
+})
+
+// --- the retry's own read-then-write ----------------------------------------
+//
+// The fifth instance of one defect: a value read in one transaction, restated as
+// a write in a later one. `retryAnswerScope` read the stored record, awaited the
+// node lookup, and *then* committed `existing.include` — so an opt-out landing in
+// that gap was overwritten by the set the retry had read before it, and Cycle was
+// re-sent to the node. The owner's last instruction lost to a button press that
+// started earlier.
+//
+// The rule the fix follows is the one db.ts already states: if a write depends on
+// stored state, the read that decides it belongs in the same transaction.
+
+describe('a retry that started before a newer choice', () => {
+  it('takes its set from storage at write time, not from what it read first', async () => {
+    node.value = NODE
+    await commitAnswerScope(set('cycle'))
+    expect((await loadAnswerScope())?.include).toEqual(['cycle'])
+
+    // The retry reads {cycle}, then parks on the node lookup.
+    const gate = stallNodeLookup()
+    const retry = retryAnswerScope()
+    await gate.entered
+
+    // The owner opts out in another tab while the retry is parked.
+    await commitAnswerScope(set())
+    expect((await loadAnswerScope())?.include).toEqual([])
+
+    gate.release()
+    await retry
+
+    // The opt-out stands, and Cycle was never RE-sent: the only `['cycle']` on
+    // the wire is the original commit's, not a second one from the retry.
+    expect(await loadOptIns()).toEqual(set())
+    expect((await loadAnswerScope())?.include).toEqual([])
+    expect(sent.at(-1)).toEqual({ command: { cmd: 'set_answer_scope', include: [] } })
+    const cycleSends = sent.filter(
+      (s) => JSON.stringify(s) === JSON.stringify({ command: { cmd: 'set_answer_scope', include: ['cycle'] } }),
+    )
+    expect(cycleSends).toHaveLength(1)
+  })
+
+  it('does not roll the generation backwards past the commit it lost to', async () => {
+    node.value = NODE
+    await commitAnswerScope(set('cycle'))
+    const gate = stallNodeLookup()
+    const retry = retryAnswerScope()
+    await gate.entered
+    await commitAnswerScope(set())
+    const opted_out = (await loadAnswerScope())!.generation
+    gate.release()
+    await retry
+
+    // Whatever the retry wrote, it cannot predate the choice it must not undo.
+    expect((await loadAnswerScope())!.generation).toBeGreaterThanOrEqual(opted_out)
   })
 })

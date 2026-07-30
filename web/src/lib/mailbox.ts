@@ -50,6 +50,7 @@ import {
 import {
   commitScopeLocally,
   loadAnswerScope,
+  restampScopeForRetry,
   trackScopeDelivery,
   type AnswerScopeRecord,
 } from './answerScope'
@@ -693,26 +694,32 @@ export async function commitAnswerScope(
  * Returns the fresh node status; a no-op `unsent` when nothing is outstanding.
  */
 export async function retryAnswerScope(): Promise<AnswerScopeCommit> {
-  const existing = await loadAnswerScope()
-  if (!existing) {
-    // Nothing has been chosen, so there is nothing to re-send. Report the
+  // Resolve the node FIRST. Everything from the atomic re-stamp to the seal is
+  // then free of suspension, so the set that goes on the wire is the set that
+  // was stored when the decision to send it was made. Reading the scope first
+  // and awaiting the node lookup afterwards is what put a superseded scope on
+  // the wire: the re-stamp was atomic, but `include` had already been captured
+  // before the gap, and it was that captured value that got sent.
+  const node = await enrolledNode().catch(() => null)
+
+  // The set is taken from storage *inside* the re-stamping transaction, never
+  // read here and passed in. `loadAnswerScope` is consulted only to seed a
+  // device that has nothing under the current key yet (the legacy migration);
+  // if a record exists, `restampScopeForRetry` ignores this value entirely, so
+  // it cannot carry a stale choice over a newer one.
+  const legacy = await loadAnswerScope()
+  const record = await restampScopeForRetry(legacy?.include)
+  if (!record) {
+    // Nothing has ever been chosen, so there is nothing to re-send. Report the
     // default rather than inventing a record.
-    const record: AnswerScopeRecord = {
+    const empty: AnswerScopeRecord = {
       include: [],
       generation: 0,
       pending: { id: null, include: [], sentAt: new Date(0).toISOString(), nodeEd: null },
     }
-    return { record, include: [], node: 'unsent' }
+    return { record: empty, include: [], node: 'unsent' }
   }
-
-  // Re-committing the same set is what clears the old tracking and stamps a new
-  // generation — the same single transaction the commit path uses, so a retry
-  // that fails mid-way cannot leave the previous attempt's id eligible, and a
-  // *newer* choice made while this retry is in flight will supersede it.
-  const record = await commitScopeLocally(new Set(existing.include))
   const { include } = record
-
-  const node = await enrolledNode().catch(() => null)
   if (!node) return { record, include, node: 'no-node' }
 
   const id = await sendAdminCommand(

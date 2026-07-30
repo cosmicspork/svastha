@@ -59,9 +59,7 @@ export function filterSensitive(
  * turned on. A stored category that is no longer sensitive is dropped, so the
  * stored value can never re-open something the taxonomy has moved. */
 export async function loadOptIns(): Promise<Set<Category>> {
-  const record = await loadAnswerScope()
-  if (!record) return new Set()
-  return new Set(record.include.filter((c) => OPT_IN_CATEGORIES.includes(c)))
+  return optInsFrom(await loadAnswerScope())
 }
 
 /** The `include` array for an `admin_cmd` `set_answer_scope`: the whole set of
@@ -281,6 +279,49 @@ export async function commitScopeLocally(
   // `mutate` only resolves with `written: false` when the mutator declines, and
   // this one never does, so the value is always the record just written.
   return value!
+}
+
+/**
+ * Re-stamp the stored scope for a fresh send attempt: clear the old tracking and
+ * bump the generation, keeping the set **read from storage inside the same
+ * transaction that writes it**.
+ *
+ * There is deliberately no `include` parameter for the ordinary case. A caller
+ * that read the record, awaited something, and then passed back what it read
+ * would reintroduce the defect this exists to prevent: an opt-out landing in that
+ * gap gets overwritten by the older set, and the node is re-sent a scope the
+ * owner has already turned off. The only sound source for "what the owner wants"
+ * is the record being written, read in the same breath.
+ *
+ * `fallbackInclude` is used **only** when nothing is stored under the current key
+ * — the one-time migration of a device that has only the legacy value. If a
+ * record exists it is ignored entirely, so it cannot overwrite a live choice.
+ *
+ * Returns the re-stamped record, or undefined when there is nothing to retry.
+ */
+export async function restampScopeForRetry(
+  fallbackInclude?: Category[],
+): Promise<AnswerScopeRecord | undefined> {
+  const sentAt = new Date().toISOString()
+  const { value } = await mutate<AnswerScopeRecord>('prefs', SCOPE_KEY, (current) => {
+    const include = current?.include ?? fallbackInclude
+    if (!include) return undefined
+    return {
+      include,
+      generation: (current?.generation ?? 0) + 1,
+      pending: { id: null, include, sentAt, nodeEd: null },
+    }
+  })
+  return value
+}
+
+/** The opt-in set a record represents, filtered to the categories that are
+ * opt-in in this build. Pure, so a caller that already holds a record derives the
+ * switches from it rather than reading the store a second time — two reads of one
+ * record are two transactions, and can disagree. */
+export function optInsFrom(record: AnswerScopeRecord | undefined): Set<Category> {
+  if (!record) return new Set()
+  return new Set(record.include.filter((c) => OPT_IN_CATEGORIES.includes(c)))
 }
 
 /**
