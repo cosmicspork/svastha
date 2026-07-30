@@ -344,13 +344,14 @@ pub fn validate_inference_endpoint(endpoint: &str) -> Result<(), String> {
         return Err("endpoint is empty".to_string());
     }
     if !is_http_url(endpoint) {
-        return Err(format!("must be an http(s) URL, got: {endpoint}"));
+        return Err("must be an http(s) URL".to_string());
     }
     if endpoint.to_ascii_lowercase().contains("/batch") {
-        return Err(format!(
-            "looks like a Batch API path ({endpoint}); the node requires a synchronous, \
+        return Err(
+            "looks like a Batch API path; the node requires a synchronous, \
              zero-retention endpoint — batch outputs are retained server-side"
-        ));
+                .to_string(),
+        );
     }
     Ok(())
 }
@@ -370,6 +371,20 @@ mod tests {
         // The design §8 hard constraint: batch APIs retain files server-side.
         assert!(validate_inference_endpoint("https://api.example/v1/batches").is_err());
         assert!(validate_inference_endpoint("https://api.example/v1/batch").is_err());
+    }
+
+    #[test]
+    fn endpoint_validation_errors_never_echo_url_credentials() {
+        for endpoint in [
+            "ftp://inference.internal/v1?api_key=sk-secret",
+            "https://inference.internal/v1/batch?api_key=sk-secret",
+        ] {
+            let error = validate_inference_endpoint(endpoint).unwrap_err();
+            assert!(
+                !error.contains("sk-secret"),
+                "admin replies and logs must not expose endpoint credentials: {error}"
+            );
+        }
     }
 
     #[test]

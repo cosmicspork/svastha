@@ -21,6 +21,7 @@ import { assetsEnabled } from './ocr-assets'
 import { numberedLines, renderColumns } from './ocr-layout'
 import { UnreadablePageError, type OcrLine } from './ocr'
 import { loadConfig, chatComplete, InferenceError } from './inference'
+import { answersHere, loadAnswerWhere } from './answerWhere'
 import { buildProposalRecord, getProposal, upsertProposal, type DraftEvent } from './proposals'
 import { session } from './session.svelte'
 import type { EventKind, EventValue } from './drafts'
@@ -200,6 +201,14 @@ export async function readAndPropose(
   fromPage = 1,
 ): Promise<ReadResult> {
   const config = await loadConfig()
+  // Reading a page is inference over the same record, so it follows the same
+  // choice answering does (Settings → AI): an owner who sent their AI work to
+  // the node did not exempt this one path from that.
+  if (!answersHere(await loadAnswerWhere(), !!config?.endpoint && !!config.model)) {
+    throw new InferenceError(
+      'Your Answers setting sends AI work to your node, so this page is not read here (Settings → AI).',
+    )
+  }
   if (!config?.endpoint || !config.model) {
     throw new InferenceError(
       'No inference endpoint is configured on this device (Settings → AI).',

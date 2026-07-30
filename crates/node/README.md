@@ -59,12 +59,11 @@ reconcile, so a backlog arrives in batches you can actually review.
 
 **The choice is yours alone.** Pausing stops the node reading *your* pages;
 anyone else it serves is unaffected, and nobody else can pause or resume yours.
-A node serving several households therefore reads for each independently. This
-is true of `pause_ocr`/`resume_ocr` specifically — not of the admin surface as a
-whole: `set_inference_endpoint` repoints inference for **every** enrolled owner,
-and `log_tail` and `job_status`'s OCR counters are node-wide views. Those are
-shared controls any enrolled owner can use; a deployment that cannot accept that
-enrols one owner per node.
+A node serving several households therefore reads for each independently. The
+same is true of `set_answer_scope` and `set_inference_endpoint` — what leaves the
+node about you, and where it goes, are both yours. `log_tail` and `job_status`'s
+OCR counters remain node-wide views: any enrolled owner can read the node's own
+content-free log and its aggregate page counters.
 An owner who has never chosen takes the boot default, which is where
 `SVASTHA_NODE_OCR_PAUSED` applies: **an owner's own persisted choice wins, else
 that env default, else paused.** So an existing deployment upgrading into
@@ -89,8 +88,9 @@ scheduler exists (round-robin continuation, or a per-owner cap), a deployment
 that cannot risk it raises `SVASTHA_NODE_OCR_MAX_PAGES_PER_PASS` above the
 combined arrival rate, or runs one node per owner.
 
-Enabled when an inference endpoint is configured (see the config table) and the
-owner in question has reading resumed (above). On each
+Enabled when an inference endpoint resolves for that owner — their own, else the
+operator's boot default (see the config table) — and that owner has reading
+resumed (above). On each
 reconcile the node OCRs newly-synced captured pages and deposits the results as
 `proposal` envelopes into the owner's mailbox, for review in the PWA's proposal
 inbox. It never signs anything as the owner — it proposes; the owner signs.
@@ -164,14 +164,21 @@ mirroring the web's posture.
   assembled without them.
 - **Admin commands.** An `admin_cmd` from an enrolled owner administers the node's
   work on *their* vault (design §2): `job_status` (this owner's index sizes, the
-  global OCR counters, the resolved OCR and chat model ids, and the last
-  reconcile time — all content-free; model ids are config, already stamped into
-  proposal provenance),
+  global OCR counters, that owner's own effective model ids and endpoint **host**,
+  and the last reconcile time — all content-free; model ids are config, already
+  stamped into proposal provenance, and a key or another owner's endpoint is
+  never echoed),
   `log_tail` (recent lines of the node's own content-free logs),
-  `set_inference_endpoint` (updates the runtime endpoint, persisted so it survives
-  a restart — the override takes precedence over the env boot default; still
+  `set_inference_endpoint` (the endpoint — and optional API key — the node runs
+  **that owner's** pages and questions against, persisted per owner so it
+  survives a restart and takes precedence over the env boot default; still
   subject to the boot-time validation, so a Batch-API path answers `ok: false`
-  with the reason), `pause_ocr`/`resume_ocr`, and `set_answer_scope` (the whole
+  with the reason. An owner who sets none uses the operator's default; an owner
+  with neither has their inference skipped and is told so. The key rides inside
+  the sealed body and is stored beside the node identity — the same trust
+  position the env-configured key already has — and an owner-set endpoint is sent
+  that owner's key or none, never the operator's and never another owner's),
+  `pause_ocr`/`resume_ocr`, and `set_answer_scope` (the whole
   set of opt-in categories that owner's answers may read; a category name this
   build does not know is answered `ok: false` with nothing changed, rather than
   silently dropped). Node-global operations (restart, upgrade) are the host
@@ -217,7 +224,7 @@ image tags.
 | `SVASTHA_RELAY_URL` | **yes** | Relay base URL. Never assumed — the node reaches it outbound. |
 | `SVASTHA_NODE_DATA_DIR` | no | Durable dir for the node identity (default `svastha-node/data`). |
 | `SVASTHA_NODE_CACHE_DIR` | no | Ephemeral decrypted-plaintext dir (default `svastha-node/cache`). |
-| `SVASTHA_NODE_INFERENCE_ENDPOINT` | no | Shared OpenAI-compatible chat-completions endpoint — the base both roles fall back to (the **boot default** — a `set_inference_endpoint` admin command overrides it at runtime, persisted). Setting it **enables OCR and cited Q&A**. Must be synchronous — a Batch-API path is rejected (batch outputs are retained server-side). |
+| `SVASTHA_NODE_INFERENCE_ENDPOINT` | no | Shared OpenAI-compatible chat-completions endpoint — the base both roles fall back to (the **boot default**, used for every owner who has not set their own with `set_inference_endpoint`, which is persisted per owner and wins for that owner). Setting it **enables OCR and cited Q&A** for owners with no endpoint of their own. Must be synchronous — a Batch-API path is rejected (batch outputs are retained server-side). |
 | `SVASTHA_NODE_INFERENCE_MODEL` | when an endpoint resolves | Shared model id sent in every request, unless a role overrides it below. |
 | `SVASTHA_NODE_INFERENCE_API_KEY` | no | Shared inference API key; sent as a bearer token, never logged. |
 | `SVASTHA_NODE_OCR_INFERENCE_ENDPOINT` / `_MODEL` / `_API_KEY` | no | Per-role override for **OCR** (coding a page the node transcribed — a **text** model; no vision model is needed or used). Each falls back to the shared `SVASTHA_NODE_INFERENCE_*` value, so overriding just `_MODEL` is the common case. A role runs only when an endpoint resolves for it (its own or the shared base). |

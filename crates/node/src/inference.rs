@@ -19,6 +19,8 @@
 //! text. Turning that text into draft events lives in `svastha_import::extract`, so the
 //! two concerns test independently.
 
+use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -144,181 +146,360 @@ impl InferenceClient {
     }
 }
 
-/// The runtime inference target for both roles, mutable by the
+/// The runtime inference target for both roles, **per owner**, settable with the
 /// `set_inference_endpoint` admin command (design §9). It owns the live
-/// [`InferenceClient`]s the OCR (coding) and chat (RAG) passes use — each with
-/// its own model and API key from the boot config — and resolves the effective
-/// endpoint per role.
+/// [`InferenceClient`]s the OCR (coding) and chat (RAG) passes use and resolves
+/// them for the owner whose work is being done.
 ///
-/// **Precedence: a persisted runtime override wins over the env boot default.**
-/// The env is only the *boot* default; once an owner sets an endpoint over the
-/// mailbox it is written to the data dir and re-read at boot, so the override
-/// survives a restart and takes precedence. The `admin_cmd` carries only a single
-/// endpoint, so the override is **node-wide**: it retargets both roles' endpoints
-/// at once, while each role keeps its own boot model and API key. An override
-/// needs at least one boot role config to borrow a model from — setting an
-/// endpoint on a node with no inference model configured is rejected. (Splitting
-/// the two roles across *different* endpoints is a boot-env choice; a per-role
-/// live override would need a wider admin command.)
+/// # Your endpoint, your vault
+///
+/// The third of the per-owner controls, for the reason the first two are (see
+/// [`crate::ocr_control`] and [`crate::answer_scope`]): the command is scoped to
+/// its sender, so a node serving two households sends each household's pages and
+/// questions where *that* household said to. It used to be node-wide, which meant
+/// any one enrolled owner could silently repoint everyone else's plaintext at a
+/// host of their choosing — the one shared control with real teeth, and the
+/// reason enrolling a second owner needed a caveat.
+///
+/// **Precedence, per owner and per role: that owner's persisted endpoint, else
+/// the operator's env boot default for the role, else nothing** — and "nothing"
+/// means that owner's inference simply does not run, reported honestly by
+/// `job_status` rather than papered over with someone else's endpoint.
+///
+/// # An owner's endpoint uses an owner's key
+///
+/// An owner override carries its own optional API key and **never borrows one**:
+/// not the operator's env key, and certainly not another owner's. Borrowing the
+/// env key would hand any enrolled owner a way to spend — and to exfiltrate — the
+/// operator's credential by pointing their endpoint at a host they control. So an
+/// override sends the owner's key or no key at all.
+///
+/// The *model* is borrowed from the role's boot config, because the command
+/// carries no model id and a model id is not a secret. An override therefore
+/// still needs one boot role config to name a model; setting an endpoint on a
+/// node with no inference model configured at all is rejected.
 pub struct InferenceRuntime {
     /// OCR-role boot config (text model + key + endpoint), or `None`.
     ocr_boot: Option<InferenceConfig>,
     /// Chat-role boot config (text model + key + endpoint), or `None`.
     chat_boot: Option<InferenceConfig>,
-    /// Where the node-wide endpoint override persists (data dir).
-    override_path: PathBuf,
-    /// Live OCR client for the effective endpoint, or `None` when OCR inference
-    /// is not usable (no OCR boot config to supply a model).
-    ocr_current: Option<InferenceClient>,
-    /// Live chat client for the effective endpoint, or `None` when chat inference
-    /// is not usable (no chat boot config to supply a model).
-    chat_current: Option<InferenceClient>,
-    /// The effective endpoint each live client targets (for status echoes).
-    ocr_endpoint: Option<String>,
-    chat_endpoint: Option<String>,
+    /// Where the per-owner endpoints persist (data dir).
+    state_path: PathBuf,
+    /// Each owner's persisted choice, by Ed25519 hex.
+    owners: BTreeMap<String, OwnerEndpoint>,
+    /// The operator default's live clients, used for owners with no choice.
+    default_clients: RoleClients,
+    /// Live clients for owners who have chosen, by Ed25519 hex.
+    owner_clients: BTreeMap<String, RoleClients>,
+    /// False when a present endpoint state file could not be read or parsed.
+    /// Falling back to the operator endpoint in that condition could disclose an
+    /// owner's record to a recipient they had explicitly replaced, so all
+    /// inference remains stopped until the state is repaired.
+    state_readable: bool,
 }
 
-/// The persisted endpoint override — a single URL. Config, not record content, so
-/// it is safe in the durable data dir (unlike plaintext, which stays ephemeral).
-#[derive(Serialize, Deserialize)]
-struct EndpointOverride {
+/// One owner's endpoint choice.
+#[derive(Clone, Serialize, Deserialize)]
+struct OwnerEndpoint {
     endpoint: String,
+    /// The credential for *that* endpoint, if it needs one. Persisted beside the
+    /// node identity seed, which is the same trust position the operator's env
+    /// key already has: a host that can read this dir can already read the node's
+    /// identity and its decrypted cache.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    api_key: Option<String>,
 }
 
-const OVERRIDE_FILE: &str = "inference-endpoint.json";
+/// The persisted half: every owner's endpoint choice. Config, not record content,
+/// so it is safe in the durable data dir (unlike plaintext, which stays ephemeral)
+/// — with the caveat above about the key it may carry.
+#[derive(Default, Serialize, Deserialize)]
+struct PersistedState {
+    #[serde(default)]
+    owners: BTreeMap<String, OwnerEndpoint>,
+}
+
+/// The live clients for one resolution target, one per role. A role is `None`
+/// when it has no boot config to name a model with.
+#[derive(Default)]
+struct RoleClients {
+    ocr: Option<InferenceClient>,
+    chat: Option<InferenceClient>,
+}
+
+const STATE_FILE: &str = "inference-endpoints.json";
 
 impl InferenceRuntime {
-    /// Build the runtime from the two role boot configs and the data dir. Reads
-    /// any persisted override and resolves each role's effective endpoint.
+    /// Build the runtime from the two role boot configs and the data dir, reading
+    /// every owner's persisted endpoint.
     pub fn load(
         ocr_boot: Option<InferenceConfig>,
         chat_boot: Option<InferenceConfig>,
         data_dir: &Path,
     ) -> Self {
-        let override_path = data_dir.join(OVERRIDE_FILE);
-        let overridden = read_override(&override_path);
+        let state_path = data_dir.join(STATE_FILE);
+        let (persisted, state_readable) = match fs::read(&state_path) {
+            Ok(bytes) => match serde_json::from_slice::<PersistedState>(&bytes) {
+                Ok(state) => (state, true),
+                Err(e) => {
+                    tracing::error!(error = %e, "inference endpoint state could not be parsed; inference is disabled");
+                    (PersistedState::default(), false)
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (PersistedState::default(), true),
+            Err(e) => {
+                tracing::error!(error = %e, "inference endpoint state could not be read; inference is disabled");
+                (PersistedState::default(), false)
+            }
+        };
         let mut rt = Self {
             ocr_boot,
             chat_boot,
-            override_path,
-            ocr_current: None,
-            chat_current: None,
-            ocr_endpoint: None,
-            chat_endpoint: None,
+            state_path,
+            owners: persisted.owners,
+            default_clients: RoleClients::default(),
+            owner_clients: BTreeMap::new(),
+            state_readable,
         };
-        rt.rebuild(overridden);
+        rt.default_clients = rt.build_default();
+        let owners: Vec<String> = rt.owners.keys().cloned().collect();
+        for owner in owners {
+            rt.rebuild_owner(&owner);
+        }
         rt
     }
 
-    /// The live OCR (coding) client, if OCR inference is usable. `None` means the
-    /// OCR pass does not run (a page waits rather than getting a fake extraction).
-    pub fn ocr_client(&self) -> Option<&InferenceClient> {
-        self.ocr_current.as_ref()
+    /// The OCR (coding) client for `owner_hex`, if that owner's pages can be
+    /// coded at all. `None` means the pass does not run for them (a page waits
+    /// rather than getting a fake extraction).
+    pub fn ocr_client(&self, owner_hex: &str) -> Option<&InferenceClient> {
+        self.clients_for(owner_hex)
+            .and_then(|clients| clients.ocr.as_ref())
     }
 
-    /// The live chat (RAG) client, if chat inference is usable. `None` means the
-    /// chat pass does not run (a question waits rather than getting a fake answer,
-    /// mirroring the web's honest waiting state).
-    pub fn chat_client(&self) -> Option<&InferenceClient> {
-        self.chat_current.as_ref()
+    /// The chat (RAG) client for `owner_hex`, if their questions can be answered
+    /// at all. `None` means the question waits in the mailbox rather than getting
+    /// a fake answer, mirroring the web's honest waiting state.
+    pub fn chat_client(&self, owner_hex: &str) -> Option<&InferenceClient> {
+        self.clients_for(owner_hex)
+            .and_then(|clients| clients.chat.as_ref())
     }
 
-    /// The effective OCR endpoint URL, for the `job_status` echo. `None` when unset.
-    pub fn ocr_endpoint(&self) -> Option<&str> {
-        self.ocr_endpoint.as_deref()
+    /// Whether any role has an operator default. Only for the boot log — an owner
+    /// with their own endpoint runs regardless of what this says.
+    pub fn has_operator_default(&self) -> bool {
+        self.ocr_boot.is_some() || self.chat_boot.is_some()
     }
 
-    /// The effective chat endpoint URL, for the `job_status` echo. `None` when unset.
-    pub fn chat_endpoint(&self) -> Option<&str> {
-        self.chat_endpoint.as_deref()
+    /// The `job_status` line about **this owner's** inference: their effective
+    /// model and endpoint **host** per role, and where that endpoint came from.
+    ///
+    /// The host, never the URL's path or query, and never the API key — a
+    /// `job_status` reply is the one place a credential could ride back out to
+    /// anything that reads the admin log. And only ever the asker's own: another
+    /// owner's endpoint is not the asker's business.
+    pub fn describe_for(&self, owner_hex: &str) -> String {
+        if !self.state_readable {
+            return "not configured — this node's endpoint state could not be read, \
+                    so nothing of yours is sent anywhere"
+                .to_string();
+        }
+        let clients = self
+            .clients_for(owner_hex)
+            .expect("readable endpoint state always resolves clients");
+        let source = if self.owners.contains_key(owner_hex) {
+            "your endpoint"
+        } else if self.has_operator_default() {
+            "this node's default"
+        } else {
+            return "not configured — this node has no default endpoint and you have not set one, \
+                    so nothing of yours is sent anywhere"
+                .to_string();
+        };
+        format!(
+            "ocr={} chat={} ({source})",
+            describe_role(clients.ocr.as_ref()),
+            describe_role(clients.chat.as_ref()),
+        )
     }
 
-    /// Apply a `set_inference_endpoint` command: validate the endpoint against the
-    /// same design-§8 hard constraints boot uses (synchronous, non-batch), then
-    /// swap **both** live clients (node-wide) and persist the override. Returns a
-    /// human-readable detail on success, or the validation/precondition message to
-    /// send back as `ok: false` — never a panic, so a bad value just fails the
-    /// command.
-    pub fn set_endpoint(&mut self, endpoint: &str) -> Result<String, String> {
+    /// Apply a `set_inference_endpoint` command for `owner_hex`: validate the
+    /// endpoint against the same design-§8 hard constraints boot uses
+    /// (synchronous, non-batch), persist it with its optional key, and swap that
+    /// owner's live clients. Nobody else's resolution changes.
+    ///
+    /// Returns the owner-facing detail for the `admin_reply`, or the
+    /// validation/precondition message to send back as `ok: false` — never a
+    /// panic, so a bad value just fails the command.
+    pub fn set_endpoint(
+        &mut self,
+        owner_hex: &str,
+        endpoint: &str,
+        api_key: Option<&str>,
+    ) -> Result<String, String> {
+        if !self.state_readable {
+            return Err(
+                "the saved endpoint state could not be read; repair it before changing an endpoint"
+                    .to_string(),
+            );
+        }
         let endpoint = endpoint.trim().to_string();
         validate_inference_endpoint(&endpoint)?;
-        // The command carries only an endpoint; each role's model/API key come
-        // from its boot config, so without any role there is nothing to run.
-        if self.ocr_boot.is_none() && self.chat_boot.is_none() {
+        // The command carries no model; each role borrows one from its boot
+        // config, so without any role there is nothing to run.
+        if !self.has_operator_default() {
             return Err(
                 "no inference model configured at boot (SVASTHA_NODE_INFERENCE_MODEL); \
                  an endpoint alone cannot run"
                     .to_string(),
             );
         }
-        self.persist_override(&endpoint)
-            .map_err(|e| format!("could not persist the endpoint override: {e}"))?;
-        self.rebuild(Some(endpoint.clone()));
-        Ok(format!("inference endpoint updated to {endpoint}"))
-    }
-
-    /// Rebuild both live clients for the given node-wide override (or each role's
-    /// boot endpoint when `None`). The model and key always come from the role's
-    /// own boot config.
-    fn rebuild(&mut self, overridden: Option<String>) {
-        let (ocr_current, ocr_endpoint) = build_client(&self.ocr_boot, overridden.as_deref());
-        let (chat_current, chat_endpoint) = build_client(&self.chat_boot, overridden.as_deref());
-        self.ocr_current = ocr_current;
-        self.ocr_endpoint = ocr_endpoint;
-        self.chat_current = chat_current;
-        self.chat_endpoint = chat_endpoint;
-    }
-
-    fn persist_override(&self, endpoint: &str) -> std::io::Result<()> {
-        if let Some(parent) = self.override_path.parent() {
-            std::fs::create_dir_all(parent)?;
+        let choice = OwnerEndpoint {
+            endpoint: endpoint.clone(),
+            api_key: api_key
+                .map(str::trim)
+                .filter(|k| !k.is_empty())
+                .map(String::from),
+        };
+        let previous = self.owners.insert(owner_hex.to_string(), choice);
+        if let Err(e) = self.persist() {
+            match previous {
+                Some(p) => self.owners.insert(owner_hex.to_string(), p),
+                None => self.owners.remove(owner_hex),
+            };
+            return Err(format!("could not save the endpoint: {e}"));
         }
-        let bytes = serde_json::to_vec_pretty(&EndpointOverride {
-            endpoint: endpoint.to_string(),
+        self.rebuild_owner(owner_hex);
+        Ok(format!(
+            "your inference endpoint is now {host}; anyone else this node serves is unaffected {marker}",
+            host = host_of(&endpoint),
+            marker = endpoint_marker(Some(&endpoint)),
+        ))
+    }
+
+    /// The `[endpoint: …]` marker for `owner_hex`'s effective endpoint — what a
+    /// client compares against to confirm what is actually in force, rather than
+    /// taking `ok` at its word (the same rule `set_answer_scope` follows).
+    pub fn marker_for(&self, owner_hex: &str) -> String {
+        endpoint_marker(self.effective_endpoint(owner_hex))
+    }
+
+    /// This owner's endpoint if they set one, else the role-independent operator
+    /// default when both roles share one. `None` when nothing is configured.
+    fn effective_endpoint(&self, owner_hex: &str) -> Option<&str> {
+        if !self.state_readable {
+            return None;
+        }
+        if let Some(own) = self.owners.get(owner_hex) {
+            return Some(&own.endpoint);
+        }
+        // The env can point the two roles at different hosts, in which case there
+        // is no single "the endpoint" to state; the marker then says so rather
+        // than picking one of them.
+        match (&self.ocr_boot, &self.chat_boot) {
+            (Some(o), Some(c)) if o.endpoint != c.endpoint => None,
+            (Some(o), _) => Some(&o.endpoint),
+            (None, Some(c)) => Some(&c.endpoint),
+            (None, None) => None,
+        }
+    }
+
+    fn clients_for(&self, owner_hex: &str) -> Option<&RoleClients> {
+        if !self.state_readable {
+            return None;
+        }
+        Some(
+            self.owner_clients
+                .get(owner_hex)
+                .unwrap_or(&self.default_clients),
+        )
+    }
+
+    /// The operator default's clients: each role entirely from its own boot
+    /// config (endpoint, model, and key together).
+    fn build_default(&self) -> RoleClients {
+        RoleClients {
+            ocr: self.ocr_boot.as_ref().map(InferenceClient::new),
+            chat: self.chat_boot.as_ref().map(InferenceClient::new),
+        }
+    }
+
+    /// Rebuild one owner's clients from their persisted choice: their endpoint and
+    /// their key (or none), with each role's model borrowed from its boot config.
+    fn rebuild_owner(&mut self, owner_hex: &str) {
+        let Some(choice) = self.owners.get(owner_hex).cloned() else {
+            self.owner_clients.remove(owner_hex);
+            return;
+        };
+        let for_role = |boot: &Option<InferenceConfig>| {
+            boot.as_ref().map(|boot| {
+                InferenceClient::new(&InferenceConfig {
+                    endpoint: choice.endpoint.clone(),
+                    // The owner's key or none — never the boot key, which belongs
+                    // to the operator's endpoint and not to this one.
+                    api_key: choice.api_key.clone(),
+                    model: boot.model.clone(),
+                })
+            })
+        };
+        let clients = RoleClients {
+            ocr: for_role(&self.ocr_boot),
+            chat: for_role(&self.chat_boot),
+        };
+        self.owner_clients.insert(owner_hex.to_string(), clients);
+    }
+
+    fn persist(&self) -> std::io::Result<()> {
+        if let Some(parent) = self.state_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let bytes = serde_json::to_vec_pretty(&PersistedState {
+            owners: self.owners.clone(),
         })
         .map_err(std::io::Error::other)?;
         // Atomic write-temp-then-rename, like the journal, so a crash never leaves
-        // a half-written override that would fail to parse.
-        let tmp = self.override_path.with_extension("json.tmp");
-        std::fs::write(&tmp, &bytes)?;
-        std::fs::rename(&tmp, &self.override_path)
+        // a half-written state file that would fail to parse.
+        let tmp = self.state_path.with_extension("json.tmp");
+        fs::write(&tmp, &bytes)?;
+        fs::rename(&tmp, &self.state_path)
     }
 }
 
-/// Read a persisted endpoint override, if present and readable. A missing or
-/// unreadable file simply means "no override" — fall back to the env boot default.
-fn read_override(path: &Path) -> Option<String> {
-    let bytes = std::fs::read(path).ok()?;
-    let parsed: EndpointOverride = serde_json::from_slice(&bytes).ok()?;
-    let endpoint = parsed.endpoint.trim().to_string();
-    // A persisted value that no longer validates (e.g. constraints tightened) is
-    // ignored rather than trusted, so a stale override cannot weaken the boot guard.
-    if validate_inference_endpoint(&endpoint).is_ok() {
-        Some(endpoint)
-    } else {
-        None
+/// `model@host`, or `none` for a role that cannot run.
+fn describe_role(client: Option<&InferenceClient>) -> String {
+    match client {
+        Some(c) => format!("{}@{}", c.model(), host_of(&c.url)),
+        None => "none".to_string(),
     }
 }
 
-/// Build a role's live client: the effective endpoint is the node-wide override
-/// when set, else the role's own boot endpoint; the model and API key always come
-/// from the boot config. Returns `(None, None)` for a role with no boot config.
-fn build_client(
-    boot: &Option<InferenceConfig>,
-    overridden: Option<&str>,
-) -> (Option<InferenceClient>, Option<String>) {
-    let Some(boot) = boot else {
-        return (None, None);
-    };
-    let endpoint = overridden
-        .map(str::to_string)
-        .unwrap_or_else(|| boot.endpoint.clone());
-    let config = InferenceConfig {
-        endpoint: endpoint.clone(),
-        api_key: boot.api_key.clone(),
-        model: boot.model.clone(),
-    };
-    (Some(InferenceClient::new(&config)), Some(endpoint))
+/// The confirmable statement of what is in force, mirroring
+/// [`svastha_retrieval::AnswerScope::marker`]: a client checks this rather than
+/// trusting `ok`, because a command can be understood, answered, and still not be
+/// the one the node settled on.
+fn endpoint_marker(endpoint: Option<&str>) -> String {
+    match endpoint {
+        Some(e) => format!("[endpoint: {}]", host_of(e)),
+        None => "[endpoint: none]".to_string(),
+    }
+}
+
+/// The host (with port) of a URL, for status lines.
+///
+/// Path and query are dropped because they are where a credential hides — an
+/// endpoint of the `https://host/v1?api-key=…` shape is common enough that
+/// echoing whole URLs into a reply is a real leak, not a hypothetical one. Any
+/// `user:pass@` userinfo is dropped for the same reason.
+fn host_of(url: &str) -> &str {
+    let after_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
+    let authority = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(after_scheme);
+    match authority.rsplit_once('@') {
+        Some((_, host)) => host,
+        None => authority,
+    }
 }
 
 /// Resolve the configured base (e.g. `https://host/v1`) to the chat-completions
@@ -389,6 +570,9 @@ mod tests {
         assert!(parsed.choices.is_empty());
     }
 
+    const A: &str = "aaaa";
+    const B: &str = "bbbb";
+
     fn boot(endpoint: &str) -> InferenceConfig {
         InferenceConfig {
             endpoint: endpoint.to_string(),
@@ -406,18 +590,35 @@ mod tests {
         }
     }
 
+    /// A boot config with the operator's own credential on it.
+    fn boot_keyed(endpoint: &str, key: &str) -> InferenceConfig {
+        InferenceConfig {
+            endpoint: endpoint.to_string(),
+            api_key: Some(key.to_string()),
+            model: "m".to_string(),
+        }
+    }
+
     #[test]
-    fn each_role_uses_its_own_boot_endpoint_and_model() {
+    fn host_of_keeps_the_host_and_drops_everything_that_could_carry_a_secret() {
+        assert_eq!(host_of("https://host/v1"), "host");
+        assert_eq!(host_of("http://127.0.0.1:11434/v1"), "127.0.0.1:11434");
+        assert_eq!(host_of("https://host/v1?api-key=sk-secret"), "host");
+        assert_eq!(host_of("https://user:pw@host/v1"), "host");
+        assert_eq!(host_of("host"), "host");
+    }
+
+    #[test]
+    fn an_owner_with_no_choice_uses_the_operators_default() {
         let dir = tempfile::tempdir().unwrap();
         let rt = InferenceRuntime::load(
             Some(boot_model("https://coding/v1", "coding-model")),
             Some(boot_model("https://chat/v1", "chat-model")),
             dir.path(),
         );
-        assert_eq!(rt.ocr_endpoint(), Some("https://coding/v1"));
-        assert_eq!(rt.chat_endpoint(), Some("https://chat/v1"));
-        assert_eq!(rt.ocr_client().map(|c| c.model()), Some("coding-model"));
-        assert_eq!(rt.chat_client().map(|c| c.model()), Some("chat-model"));
+        assert_eq!(rt.ocr_client(A).map(|c| c.model()), Some("coding-model"));
+        assert_eq!(rt.chat_client(A).map(|c| c.model()), Some("chat-model"));
+        assert!(rt.describe_for(A).contains("this node's default"));
     }
 
     #[test]
@@ -425,34 +626,118 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // Chat-only: OCR has no boot config, so its pass never runs.
         let rt = InferenceRuntime::load(None, Some(boot("https://chat/v1")), dir.path());
-        assert!(rt.ocr_client().is_none());
-        assert!(rt.chat_client().is_some());
+        assert!(rt.ocr_client(A).is_none());
+        assert!(rt.chat_client(A).is_some());
     }
 
     #[test]
-    fn set_endpoint_retargets_both_roles_but_keeps_per_role_models() {
+    fn an_owners_endpoint_is_theirs_alone() {
         let dir = tempfile::tempdir().unwrap();
         let mut rt = InferenceRuntime::load(
-            Some(boot_model("https://coding/v1", "coding-model")),
-            Some(boot_model("https://chat/v1", "chat-model")),
+            Some(boot("https://default/v1")),
+            Some(boot("https://default/v1")),
             dir.path(),
         );
-        rt.set_endpoint("https://override/v1").unwrap();
-        // The node-wide override retargets both endpoints…
-        assert_eq!(rt.ocr_endpoint(), Some("https://override/v1"));
-        assert_eq!(rt.chat_endpoint(), Some("https://override/v1"));
-        // …while each role keeps its own model and API key.
-        assert_eq!(rt.ocr_client().map(|c| c.model()), Some("coding-model"));
-        assert_eq!(rt.chat_client().map(|c| c.model()), Some("chat-model"));
+        rt.set_endpoint(A, "https://a-host/v1", None).unwrap();
 
-        // A restart (fresh load from the same dir) keeps the override.
-        let rt2 = InferenceRuntime::load(
-            Some(boot("https://coding/v1")),
-            Some(boot("https://chat/v1")),
+        assert_eq!(
+            rt.chat_client(A).map(|c| c.url.as_str()),
+            Some("https://a-host/v1/chat/completions")
+        );
+        assert_eq!(
+            rt.ocr_client(A).map(|c| c.url.as_str()),
+            Some("https://a-host/v1/chat/completions")
+        );
+        // B never chose, so B's work still goes to the operator's endpoint. This
+        // is the whole point of the change: one owner cannot repoint another's
+        // plaintext.
+        assert_eq!(
+            rt.chat_client(B).map(|c| c.url.as_str()),
+            Some("https://default/v1/chat/completions")
+        );
+    }
+
+    #[test]
+    fn an_owner_endpoint_never_borrows_another_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut rt = InferenceRuntime::load(
+            Some(boot_keyed("https://default/v1", "operator-key")),
+            Some(boot_keyed("https://default/v1", "operator-key")),
             dir.path(),
         );
-        assert_eq!(rt2.ocr_endpoint(), Some("https://override/v1"));
-        assert_eq!(rt2.chat_endpoint(), Some("https://override/v1"));
+        // B sets an endpoint *with* a key, so there is a second owner's
+        // credential in the runtime for A's resolution to go wrong towards.
+        rt.set_endpoint(B, "https://b-host/v1", Some("b-key"))
+            .unwrap();
+        rt.set_endpoint(A, "https://a-host/v1", None).unwrap();
+
+        // A supplied no key, so A's endpoint gets none. Not the operator's —
+        // which an owner-chosen host would otherwise be handed, spending and
+        // exposing a credential that is not theirs — and not B's.
+        for client in [rt.ocr_client(A).unwrap(), rt.chat_client(A).unwrap()] {
+            assert_eq!(client.api_key, None, "A's endpoint gets A's key or none");
+        }
+        // B's own key does reach B's own endpoint.
+        assert_eq!(rt.chat_client(B).unwrap().api_key.as_deref(), Some("b-key"));
+        // And an owner with no choice still gets the operator's key on the
+        // operator's endpoint, which is where it belongs.
+        assert_eq!(
+            rt.chat_client("cccc").unwrap().api_key.as_deref(),
+            Some("operator-key")
+        );
+    }
+
+    #[test]
+    fn an_owner_endpoint_borrows_the_role_model_and_survives_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut rt = InferenceRuntime::load(
+            Some(boot_model("https://default/v1", "coding-model")),
+            Some(boot_model("https://default/v1", "chat-model")),
+            dir.path(),
+        );
+        rt.set_endpoint(A, "https://a-host/v1", Some("a-key"))
+            .unwrap();
+        assert_eq!(rt.ocr_client(A).map(|c| c.model()), Some("coding-model"));
+        assert_eq!(rt.chat_client(A).map(|c| c.model()), Some("chat-model"));
+
+        let reloaded = InferenceRuntime::load(
+            Some(boot_model("https://default/v1", "coding-model")),
+            Some(boot_model("https://default/v1", "chat-model")),
+            dir.path(),
+        );
+        let client = reloaded.chat_client(A).unwrap();
+        assert_eq!(client.url, "https://a-host/v1/chat/completions");
+        assert_eq!(
+            client.api_key.as_deref(),
+            Some("a-key"),
+            "the key persists too"
+        );
+        assert_eq!(
+            reloaded.chat_client(B).unwrap().url,
+            "https://default/v1/chat/completions",
+            "and nobody else was moved"
+        );
+    }
+
+    #[test]
+    fn a_later_endpoint_replaces_the_key_rather_than_keeping_the_old_one() {
+        // "No key" has to be expressible. A node that kept the previous key when
+        // a command omitted one would go on sending an old credential to a host
+        // the owner has since repointed away from.
+        let dir = tempfile::tempdir().unwrap();
+        let mut rt = InferenceRuntime::load(
+            Some(boot("https://default/v1")),
+            Some(boot("https://default/v1")),
+            dir.path(),
+        );
+        rt.set_endpoint(A, "https://a-host/v1", Some("a-key"))
+            .unwrap();
+        rt.set_endpoint(A, "https://elsewhere/v1", None).unwrap();
+        assert_eq!(rt.chat_client(A).unwrap().api_key, None);
+        // An all-whitespace key is "none" too, not a credential of spaces.
+        rt.set_endpoint(A, "https://elsewhere/v1", Some("   "))
+            .unwrap();
+        assert_eq!(rt.chat_client(A).unwrap().api_key, None);
     }
 
     #[test]
@@ -463,23 +748,106 @@ mod tests {
             Some(boot("https://boot/v1")),
             dir.path(),
         );
-        let err = rt.set_endpoint("https://api/v1/batch").unwrap_err();
+        let err = rt
+            .set_endpoint(A, "https://api/v1/batch", None)
+            .unwrap_err();
         assert!(err.contains("Batch"), "batch rejection message surfaced");
         // Rejected value never becomes live.
-        assert_eq!(rt.ocr_endpoint(), Some("https://boot/v1"));
-        assert_eq!(rt.chat_endpoint(), Some("https://boot/v1"));
+        assert_eq!(
+            rt.chat_client(A).unwrap().url,
+            "https://boot/v1/chat/completions"
+        );
     }
 
     #[test]
     fn set_endpoint_without_any_boot_model_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         let mut rt = InferenceRuntime::load(None, None, dir.path());
-        assert!(rt.ocr_client().is_none() && rt.chat_client().is_none());
-        let err = rt.set_endpoint("https://override/v1").unwrap_err();
+        assert!(rt.ocr_client(A).is_none() && rt.chat_client(A).is_none());
+        let err = rt.set_endpoint(A, "https://override/v1", None).unwrap_err();
         assert!(err.contains("model"), "explains the missing boot model");
         assert!(
-            rt.ocr_client().is_none() && rt.chat_client().is_none(),
+            rt.ocr_client(A).is_none() && rt.chat_client(A).is_none(),
             "still unusable"
         );
+    }
+
+    #[test]
+    fn an_owner_with_nothing_configured_is_told_so_rather_than_sent_elsewhere() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = InferenceRuntime::load(None, None, dir.path());
+        let detail = rt.describe_for(A);
+        assert!(detail.contains("not configured"));
+        assert!(detail.contains("nothing of yours is sent anywhere"));
+        assert_eq!(rt.marker_for(A), "[endpoint: none]");
+    }
+
+    #[test]
+    fn the_status_line_names_the_askers_host_and_never_a_key_or_anyone_elses() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut rt = InferenceRuntime::load(
+            Some(boot_keyed("https://default/v1", "operator-key")),
+            Some(boot_keyed("https://default/v1", "operator-key")),
+            dir.path(),
+        );
+        rt.set_endpoint(A, "https://a-host/v1?api-key=a-secret", Some("a-key"))
+            .unwrap();
+        rt.set_endpoint(B, "https://b-host/v1", Some("b-key"))
+            .unwrap();
+
+        let detail = rt.describe_for(A);
+        assert!(detail.contains("a-host"), "the asker's own host");
+        assert!(detail.contains("your endpoint"), "and where it came from");
+        assert!(!detail.contains("b-host"), "never another owner's endpoint");
+        for secret in ["a-key", "b-key", "operator-key", "a-secret"] {
+            assert!(!detail.contains(secret), "never a credential: {secret}");
+        }
+        assert_eq!(rt.marker_for(A), "[endpoint: a-host]");
+    }
+
+    #[test]
+    fn a_node_wide_override_from_before_per_owner_endpoints_is_ignored() {
+        // The old file held one URL with nobody's name on it. An unattributable
+        // value is not any owner's choice, so it is not applied as one — the
+        // operator's env default is the remedy, exactly as for the reading gate.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("inference-endpoint.json"),
+            br#"{"endpoint":"https://legacy/v1"}"#,
+        )
+        .unwrap();
+        let rt = InferenceRuntime::load(
+            Some(boot("https://default/v1")),
+            Some(boot("https://default/v1")),
+            dir.path(),
+        );
+        assert_eq!(
+            rt.chat_client(A).unwrap().url,
+            "https://default/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn an_unreadable_state_file_fails_closed_instead_of_falling_back_to_the_operator() {
+        // A readable state file can contain an owner's endpoint that deliberately
+        // keeps their record away from the operator default. If it cannot be
+        // parsed, treating it as no choice silently changes that disclosure
+        // decision. Keep every owner's inference stopped until the state is
+        // repaired; do not overwrite the unreadable file from another command.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(STATE_FILE), b"not json").unwrap();
+        let mut rt = InferenceRuntime::load(
+            Some(boot("https://default/v1")),
+            Some(boot("https://default/v1")),
+            dir.path(),
+        );
+        assert!(rt.ocr_client(A).is_none());
+        assert!(rt.chat_client(A).is_none());
+        assert!(rt.describe_for(A).contains("could not be read"));
+        assert_eq!(rt.marker_for(A), "[endpoint: none]");
+        assert!(rt
+            .set_endpoint(A, "https://replacement/v1", None)
+            .unwrap_err()
+            .contains("could not be read"));
     }
 }

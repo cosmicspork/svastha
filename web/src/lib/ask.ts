@@ -45,6 +45,7 @@ import {
 } from './inference'
 import { appendLocalTurn, dropTurn } from './chat'
 import { filterSensitive, loadOptIns } from './answerScope'
+import { answersHere, loadAnswerWhere } from './answerWhere'
 import type { Code } from './codes'
 
 /** How many ranked items reach the model. Matches the node's `MAX_CONTEXT` so
@@ -183,21 +184,35 @@ async function gatherCandidates(): Promise<Candidate[]> {
 }
 
 /**
- * Whether this device can answer without a node, together with the host for the
- * current mode label. Returning the two from one config snapshot keeps a ready
- * mode from displaying a host read from a different configuration.
+ * The local endpoint capability, its honest host label, and whether the owner's
+ * Answers preference routes the next question here. One config snapshot keeps
+ * all three consistent if Settings changes while the Ask screen mounts.
  */
-export async function localAnswerer(): Promise<{ ready: boolean; host: string }> {
+export async function localAnswerer(): Promise<{
+  ready: boolean
+  host: string
+  answerHere: boolean
+}> {
   const config = await loadConfig()
+  const ready = !!config?.endpoint && !!config.model
   return {
-    ready: !!config?.endpoint && !!config.model,
+    ready,
     host: endpointHost(config?.endpoint ?? ''),
+    answerHere: answersHere(await loadAnswerWhere(), ready),
   }
 }
 
-/** Whether this device can answer without a node. */
+/**
+ * Whether the next question is answered here rather than sent to the node.
+ *
+ * This is the **routing decision**, not a capability check, and the difference
+ * shows in one branch: an owner who set Answers to "This device" gets `true`
+ * even with nothing configured, so {@link askLocally} raises its honest "no
+ * endpoint" error instead of the question quietly going to the node they
+ * excluded. See `answerWhere.ts`.
+ */
 export async function canAnswerLocally(): Promise<boolean> {
-  return (await localAnswerer()).ready
+  return (await localAnswerer()).answerHere
 }
 
 /**

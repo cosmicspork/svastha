@@ -26,10 +26,7 @@
     type OutgoingGrant,
   } from '../../lib/grants'
   import { revokeAndRotate } from '../../lib/keyring'
-  import { enrolledNode } from '../../lib/nodeadmin'
-  import type { ProposerRecord } from '../../lib/proposals'
   import QrScanner from '../../components/QrScanner.svelte'
-  import NodeAdmin from '../../components/NodeAdmin.svelte'
 
   let relayUrl = $state('')
   let relay = $state<RelayClient | null>(null)
@@ -40,14 +37,12 @@
   let incoming = $state<Share[]>([])
   const nodes = $derived(outgoing.filter((g) => g.kind === 'node'))
   const people = $derived(outgoing.filter((g) => g.kind !== 'node'))
-  let adminNode = $state<ProposerRecord | null>(null)
 
   async function refresh(): Promise<void> {
     if (!relay) return
     const [grantees, meta] = await Promise.all([relay.listGrants(), getGrantMeta()])
     outgoing = buildOutgoing(grantees, meta)
     incoming = await listShares()
-    adminNode = await enrolledNode()
   }
 
   const myCode = $derived(
@@ -295,9 +290,6 @@
           </li>
         {/each}
       </ul>
-      {#if adminNode}
-        <NodeAdmin node={adminNode} />
-      {/if}
     </section>
   {/if}
 

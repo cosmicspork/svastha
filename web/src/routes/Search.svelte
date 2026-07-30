@@ -43,10 +43,11 @@
   let aiOn = $state(false)
   let sending = $state(false)
   let ready = $state(false)
-  // This device can answer on its own once an inference endpoint is configured
-  // (Settings -> AI). It is preferred over the node when both are available: no
-  // mailbox round-trip, and it works while the node is asleep.
+  // The owner's Answers preference decides whether the next question stays
+  // here. Keep endpoint capability separately: "Device" deliberately routes
+  // here without one so the attempt fails honestly instead of using the node.
   let localReady = $state(false)
+  let localConfigured = $state(false)
   // The current endpoint host. It labels the mode pill; each completed local
   // answer keeps its own host in the transcript so Settings changes do not
   // rewrite where an earlier answer came from.
@@ -80,7 +81,9 @@
   const nodeLabel = $derived(node?.label || 'Node')
   // "On-device" is true only with AI off, where nothing leaves at all. With AI
   // on, the label is the place the question goes.
-  const modeLabel = $derived(!aiOn ? 'On-device' : localReady ? localHost : `${nodeLabel} Node`)
+  const modeLabel = $derived(
+    !aiOn ? 'On-device' : localReady ? localHost || 'This device' : `${nodeLabel} Node`,
+  )
   const waitingOnNode = $derived(answering ? answering === 'node' : !localReady)
 
   onMount(async () => {
@@ -99,7 +102,8 @@
       node = await enrolledNode()
       nodeSeenAt = (await getNodeLastSeen()) ?? null
       const local = await localAnswerer()
-      localReady = local.ready
+      localReady = local.answerHere
+      localConfigured = local.ready
       localHost = local.host
     }
     ready = true
@@ -312,11 +316,11 @@
     {/if}
   {/if}
 
-  <!-- With neither a node nor an endpoint there is no toggle to notice, so this
-       card is the only place the feature exists at all. Not while searching
-       someone else's record, for the same reason the toggle is withheld there:
-       answering only ever runs against your own. -->
-  {#if ready && !person && !node && !localReady}
+  <!-- Keep the setup card tied to actual capability, not routing preference:
+       "Device" may expose the Ask flow without an endpoint so it can fail
+       honestly, but the owner still needs a visible route to configure one.
+       Never show it while searching someone else's record. -->
+  {#if ready && !person && !node && !localConfigured}
     <div class="hintcard" data-testid="search-ai-hint">
       <h2>Ask AI</h2>
       <p class="muted">

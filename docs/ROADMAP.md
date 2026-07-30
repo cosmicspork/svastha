@@ -58,8 +58,6 @@ harvest a PR's "## Deferred" notes into the list.
   against the synthetic fixtures did not clear the gate: on a tabular panel the
   reader produced one cell per line rather than one row, so no finding could
   verify against its cited line and the page proposed nothing at all
-- Move the node's own inference-endpoint field alongside the device one, so the
-  two are configured in one place rather than two screens
 - Measure on-device OCR accuracy against the tabular fixtures before it can be
   switched on by default — the ship gate is zero cross-row mis-associations.
   Run `just accuracy` (`crates/devtool`) and put the result in the PR; the
@@ -89,8 +87,6 @@ harvest a PR's "## Deferred" notes into the list.
   retries on backoff indefinitely)
 - Within-pass `sent_at` ordering for `pause_ocr`/`resume_ocr` like
   `set_answer_scope` (a reversed pair leaves reading on)
-- Decide: node inference endpoint as owner command vs. host-operator config
-  (any enrolled owner can currently repoint it for all)
 
 ## Intentionally not doing
 

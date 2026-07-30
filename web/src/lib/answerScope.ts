@@ -21,6 +21,12 @@
 import { get, mutate } from './db'
 import { CATEGORIES, CATEGORY_META, categorize, type Category } from './category'
 import type { StoredEvent } from './events'
+import {
+  CONFIRM_WINDOW_MS,
+  resolveTrackedState,
+  type NodeCommandState,
+  type TrackedReplyLookup,
+} from './trackedCommand'
 
 /** The opt-in categories, in `CATEGORIES` display order. Derived from the
  * `sensitive` flag rather than listed, so marking a new category sensitive
@@ -104,10 +110,11 @@ export function includeList(optIns: ReadonlySet<Category>): Category[] {
 // fails, what stays durable is `unsent`, which under-claims. Every partial
 // failure has to land on the side of "your node may not have this yet".
 
-/** How long to wait for a node's `admin_reply` before calling it unconfirmed.
- * Generous next to the node's reconcile cadence: the point is to stop waiting
- * silently, not to time the node. */
-export const CONFIRM_WINDOW_MS = 90_000
+// The resolution itself — which of "pending / confirmed / refused / superseded /
+// node-changed / unconfirmed" this device may honestly claim — is shared with the
+// node-endpoint command (`trackedCommand.ts`), because the gap it reasons about
+// is the same gap. Only the vocabulary differs.
+export { CONFIRM_WINDOW_MS }
 
 /** The last scope command this device issued, kept so a reload can still tell
  * the owner whether the node ever confirmed it. `id` is the `admin_cmd`
@@ -156,40 +163,14 @@ export interface AnswerScopeRecord {
   pending: PendingScopeCommand
 }
 
-/** What this device knows about the node's agreement with the local choice. */
-export type NodeScopeState =
-  /** No node is enrolled — the local choice is the whole story. */
-  | { state: 'no-node' }
-  /** Nothing has been sent, because nothing has been chosen since enrolment. */
-  | { state: 'idle' }
-  /** Deposited; no reply yet, still inside {@link CONFIRM_WINDOW_MS}. */
-  | { state: 'pending' }
-  /** The node replied `ok` — this is the only state that claims agreement. */
-  | { state: 'confirmed' }
-  /** The node replied, and refused. */
-  | { state: 'refused'; detail?: string }
-  /** Deposited, but no reply came in time: offline, or a node too old to know
-   * the command (it cannot parse it, so it never replies). */
-  | { state: 'unconfirmed' }
-  /** Never left this device (locked vault, no relay). */
-  | { state: 'unsent' }
-  /** A different node is enrolled now than the one this scope was sent to. What
-   * the current node is doing is simply unknown — it was never told — so nothing
-   * about the old node's answer carries over. */
-  | { state: 'node-changed' }
-  /** The node answered, and stated a scope that is not the one this device
-   * asked for — another device set it more recently. `applied` is what the node
-   * says is in force. */
-  | { state: 'superseded'; applied: Category[] }
+/** What this device knows about the node's agreement with the local choice. The
+ * states are the shared ones (see `trackedCommand.ts`); `superseded` carries the
+ * categories the node says it is reading. */
+export type NodeScopeState = NodeCommandState<Category[]>
 
 /** The reply-bearing shape {@link resolveNodeScopeState} reads from the admin
- * log. Structurally satisfied by `nodeadmin.ts`'s `AdminLogEntry`, taken as a
- * parameter rather than imported so this module stays free of that dependency
- * and unit-tests as a pure function. */
-export interface ScopeReplyLookup {
-  id: string
-  reply?: { ok: boolean; detail?: string }
-}
+ * log. Structurally satisfied by `nodeadmin.ts`'s `AdminLogEntry`. */
+export type ScopeReplyLookup = TrackedReplyLookup
 
 /**
  * Resolve what this device can honestly say about the node, from its own scope
@@ -199,11 +180,9 @@ export interface ScopeReplyLookup {
  * A reply is evidence about exactly one thing: the command it answers. So three
  * facts have to line up before it counts as agreement with what the owner wants
  * *now* — the command must have carried the current set, it must have been
- * addressed to the node currently enrolled, and it must have been answered `ok`.
- * Any of them missing is not a confirmation.
- *
- * And there is no "assume it worked" branch: a missing reply resolves to
- * `unconfirmed`, never `confirmed`.
+ * addressed to the node currently enrolled, and it must have been answered `ok`
+ * *stating that set*. Any of them missing is not a confirmation. That reasoning
+ * is shared with the endpoint command; only the vocabulary below is ours.
  *
  * `enrolledNodeEd` is the Ed25519 hex of the node enrolled right now, or null
  * when none is.
@@ -214,39 +193,16 @@ export function resolveNodeScopeState(
   enrolledNodeEd: string | null,
   now: number,
 ): NodeScopeState {
-  if (!enrolledNodeEd) return { state: 'no-node' }
-  // Nothing has ever been chosen. Once anything has, `pending` is written with
-  // it in the same put, so this cannot be reached by a half-written choice.
-  if (!record) return { state: 'idle' }
-
-  const { include, pending } = record
-  if (pending.id === null) return { state: 'unsent' }
-  // Belt and braces over the atomic write: if the tracked command is for some
-  // other set, it is not evidence about this one.
-  if (!sameInclude(pending.include, include)) return { state: 'unsent' }
-  // Addressed to a node that is no longer the one enrolled. Whatever it replied
-  // was true of it, and says nothing about the node serving this vault now.
-  if (pending.nodeEd !== enrolledNodeEd) return { state: 'node-changed' }
-
-  const reply = log.find((e) => e.id === pending.id)?.reply
-  if (reply) {
-    // Verify, do not trust. `ok` is the node's claim that *this command* was
-    // applied; the marker is what it says is in force now. With more than one
-    // device, those come apart — an instruction can be understood, answered, and
-    // still not be the one the node settled on. So a confirmation needs the
-    // stated scope to be the scope this device asked for.
-    const applied = parseScopeMarker(reply.detail)
-    if (applied && !sameInclude(applied, include)) return { state: 'superseded', applied }
-    if (!reply.ok) return { state: 'refused', detail: reply.detail }
-    // Answered ok, but stated nothing: an older node build that applies the
-    // command without saying what it applied. Nothing to check it against, so it
-    // gets the same treatment as a node that never answered — and the same
-    // re-send offer.
-    if (!applied) return { state: 'unconfirmed' }
-    return { state: 'confirmed' }
-  }
-  const age = now - new Date(pending.sentAt).getTime()
-  return age < CONFIRM_WINDOW_MS ? { state: 'pending' } : { state: 'unconfirmed' }
+  return resolveTrackedState(
+    record && {
+      payload: record.include,
+      pending: { ...record.pending, payload: record.pending.include },
+    },
+    log,
+    enrolledNodeEd,
+    now,
+    { same: sameInclude, sameDesire: sameInclude, parseMarker: parseScopeMarker },
+  )
 }
 
 /**

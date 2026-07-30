@@ -22,24 +22,22 @@
 //! - `pause_ocr` / `resume_ocr` — **per owner.** The choice is keyed by the
 //!   sender and persisted per owner (see [`crate::ocr_control`]); pausing stops
 //!   the node reading your pages and nobody else's.
-//! - `set_inference_endpoint` — **node-wide.** One [`InferenceRuntime`] serves
-//!   every enrolled owner, so on a multi-owner node any owner can repoint it for
-//!   all of them. It carries a config URL, never record content, and the boot
-//!   validation still applies — but it is a shared control, not a private one.
+//! - `set_inference_endpoint` — **per owner** (see [`crate::inference`]). The
+//!   endpoint and its optional key are keyed by the sender, so it decides where
+//!   *your* pages and questions go and nobody else's; an owner who has set none
+//!   uses the operator's env-configured default, and an owner with neither has
+//!   their inference skipped and is told so.
 //! - `log_tail` — **node-wide**, and `job_status` is mixed: this owner's index
-//!   sizes and reading state alongside the node's OCR counters.
-//!
-//! A deployment that cannot accept those shared surfaces enrols one owner per
-//! node. Making inference per-owner is a real design change (per-owner runtimes,
-//! per-owner persistence), not a wording fix, and is deliberately not smuggled in
-//! behind one.
+//!   sizes, reading state, and effective endpoint alongside the node's OCR
+//!   counters.
 //!
 //! ## Content-free throughout
 //!
 //! `job_status` and `log_tail` return only counts, ids, timestamps, and the node's
 //! own already-content-free log lines (see [`crate::logtail`]). `set_inference_endpoint`
 //! carries a config URL and `set_answer_scope` carries category *names*, never
-//! record content. Nothing here logs or returns PHI.
+//! record content. Nothing here logs or returns PHI — and no reply ever echoes an
+//! API key or another owner's endpoint (see [`InferenceRuntime::describe_for`]).
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -63,19 +61,45 @@ use crate::state::NodeState;
 /// Default number of log lines a `log_tail` returns when the command names none.
 const DEFAULT_LOG_LINES: usize = 40;
 
-/// How one `set_answer_scope` is ordered against another from the same owner:
-/// the sender's signed `sent_at`, with the envelope id breaking a tie so the
-/// order is total and identical on every node that sees the same two commands.
+/// How one settings command is ordered against another of the same kind from the
+/// same owner: the sender's signed `sent_at`, with the envelope id breaking a tie
+/// so the order is total and identical on every node that sees the same two
+/// commands.
 ///
 /// The id tiebreak is arbitrary but deterministic — two commands stamped the
 /// same millisecond have no real order, and picking one consistently is better
 /// than letting mailbox iteration decide.
-type ScopeStamp = (i64, String);
+type Stamp = (i64, String);
+
+/// The commands whose *stale* application is silently harmful, and which are
+/// therefore ordered within a pass rather than applied as they arrive.
+///
+/// Both are settings an owner sets from more than one device, and in both the
+/// stale value keeps disclosing without saying so: an out-of-date answer scope
+/// re-includes entries the owner turned off, and an out-of-date endpoint keeps
+/// sending their record to a host they have moved away from. The two are ordered
+/// independently — an endpoint command is not a later instruction about a scope.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum Ordered {
+    AnswerScope,
+    InferenceEndpoint,
+}
+
+/// Which ordering class a command belongs to, if any. Everything else
+/// (`job_status`, `log_tail`, pause/resume) is a request or an idempotent flip,
+/// where arrival order costs nothing.
+fn ordered_class(command: &AdminCommand) -> Option<Ordered> {
+    match command {
+        AdminCommand::SetAnswerScope { .. } => Some(Ordered::AnswerScope),
+        AdminCommand::SetInferenceEndpoint { .. } => Some(Ordered::InferenceEndpoint),
+        _ => None,
+    }
+}
 
 /// Whether `candidate` is a later instruction than `best` (if any) — the rule
-/// [`run`] folds over an owner's scope commands to pick the pass's winner. See
-/// [`ScopeStamp`].
-fn supersedes(candidate: &ScopeStamp, best: Option<&ScopeStamp>) -> bool {
+/// [`run`] folds over an owner's commands of one class to pick the pass's winner.
+/// See [`Stamp`].
+fn supersedes(candidate: &Stamp, best: Option<&Stamp>) -> bool {
     match best {
         None => true,
         Some(best) => candidate > best,
@@ -130,11 +154,11 @@ pub fn run(
     // every reply in the pass to be true is to decide the winner **before**
     // answering anyone.
     //
-    // So: phase one gathers and vets, phase two applies and replies. Only
-    // `set_answer_scope` is ordered this way — it is the one whose stale
+    // So: phase one gathers and vets, phase two applies and replies. The
+    // [`Ordered`] commands are the ones treated this way — the ones whose stale
     // application keeps disclosing silently.
     let mut gathered: Vec<Gathered> = Vec::new();
-    let mut winners: BTreeMap<String, ScopeStamp> = BTreeMap::new();
+    let mut winners: BTreeMap<(String, Ordered), Stamp> = BTreeMap::new();
 
     for entry in client.list_mailbox()? {
         let Some((bytes, from_relay)) = client.get_mailbox(&entry.id)? else {
@@ -180,11 +204,12 @@ pub fn run(
             continue;
         };
 
-        let stamp: ScopeStamp = (msg.sent_at, msg_id.clone());
-        if matches!(body.command, AdminCommand::SetAnswerScope { .. })
-            && supersedes(&stamp, winners.get(&owner_hex))
-        {
-            winners.insert(owner_hex.clone(), stamp.clone());
+        let stamp: Stamp = (msg.sent_at, msg_id.clone());
+        if let Some(class) = ordered_class(&body.command) {
+            let key = (owner_hex.clone(), class);
+            if supersedes(&stamp, winners.get(&key)) {
+                winners.insert(key, stamp.clone());
+            }
         }
 
         gathered.push(Gathered {
@@ -204,8 +229,9 @@ pub fn run(
     // order would let a reply quote a scope that was true only mid-pass.
     let mut settled: BTreeMap<String, (bool, String)> = BTreeMap::new();
     for item in &gathered {
-        let is_winner = matches!(item.command, AdminCommand::SetAnswerScope { .. })
-            && winners.get(&item.owner_hex) == Some(&item.stamp);
+        let is_winner = ordered_class(&item.command).is_some_and(|class| {
+            winners.get(&(item.owner_hex.clone(), class)) == Some(&item.stamp)
+        });
         if !is_winner {
             continue;
         }
@@ -227,7 +253,7 @@ pub fn run(
         let (ok, detail) = match settled.remove(&item.msg_id) {
             Some(outcome) => outcome,
             None => {
-                let superseded = matches!(item.command, AdminCommand::SetAnswerScope { .. });
+                let superseded = ordered_class(&item.command).is_some();
                 execute(
                     &item.command,
                     state,
@@ -268,7 +294,7 @@ struct Gathered {
     msg_id: String,
     owner_hex: String,
     owner_x25519: [u8; 32],
-    stamp: ScopeStamp,
+    stamp: Stamp,
     command: AdminCommand,
 }
 
@@ -302,8 +328,7 @@ fn execute(
         }
         // Reading is the one node behaviour an owner can start and stop, because
         // it is the one that writes into their approval queue — and it stops for
-        // the sender's vault alone (unlike the endpoint below, which is shared;
-        // see the module doc).
+        // the sender's vault alone (see the module doc).
         AdminCommand::PauseOcr => match control.set_paused(owner_hex, true) {
             Ok(detail) => (true, detail),
             Err(msg) => (false, msg),
@@ -312,9 +337,10 @@ fn execute(
             Ok(detail) => (true, detail),
             Err(msg) => (false, msg),
         },
-        // The one command that changes what leaves the node. It is owner-scoped
-        // for the same reason pausing is, and for one more: an opt-in to your own
-        // cycle or mind entries is not a choice anyone else can make for you.
+        // What leaves the node about you — which entries, and to where. Both are
+        // owner-scoped for the same reason pausing is, and for one more: neither
+        // an opt-in to your own cycle or mind entries nor the choice of who reads
+        // your record is a choice anyone else can make for you.
         AdminCommand::SetAnswerScope { include } => {
             if superseded {
                 // Understood, and deliberately **not applied** — a later
@@ -361,12 +387,30 @@ fn execute(
              than the app that sent it — update the node"
                 .to_string(),
         ),
-        AdminCommand::SetInferenceEndpoint { endpoint } => match inference.set_endpoint(endpoint) {
+        AdminCommand::SetInferenceEndpoint { endpoint, api_key } => {
+            if superseded {
+                // Same rule as the scope above, and the same reason: a later
+                // instruction of this owner's is in force, and applying this one
+                // would send their record back to the host they moved away from.
+                // `ok: false`, because on this wire `ok` means applied — and the
+                // marker states what is in force so a second device can see the
+                // difference rather than take the boolean's word for it.
+                return (
+                    false,
+                    format!(
+                        "a later instruction of yours is in force, so this one was not applied; \
+                         your inference endpoint is unchanged {}",
+                        inference.marker_for(owner_hex)
+                    ),
+                );
+            }
             // Still subject to the boot-time config validation (synchronous,
             // non-batch); a rejected value answers ok:false with the message.
-            Ok(detail) => (true, detail),
-            Err(msg) => (false, msg),
-        },
+            match inference.set_endpoint(owner_hex, endpoint, api_key.as_deref()) {
+                Ok(detail) => (true, detail),
+                Err(msg) => (false, msg),
+            }
+        }
     }
 }
 
@@ -397,14 +441,15 @@ fn job_status_detail(
         .last_reconcile()
         .map(|s| s.to_string())
         .unwrap_or_else(|| "never".to_string());
-    // Per-role model id (config, not record content — already stamped into
-    // provenance and shown in the PWA), or "none" when that role has no endpoint.
-    let ocr = inference.ocr_client().map(|c| c.model()).unwrap_or("none");
-    let chat = inference.chat_client().map(|c| c.model()).unwrap_or("none");
+    // The asker's own effective inference: per-role model and endpoint host, and
+    // whether it is theirs or the node's default. Config, not record content
+    // (model ids are already stamped into provenance and shown in the PWA) — and
+    // never a key, never another owner's endpoint. See `describe_for`.
+    let inference = inference.describe_for(owner_hex);
     format!(
         "vault: events={events} attachments={attachments} docs={docs} curation={curation} | \
          ocr: {reading} queued={} processed={} failed={} max-per-pass={} | \
-         inference: ocr-model={ocr} chat-model={chat} | answers: {scope} | \
+         inference: {inference} | answers: {scope} | \
          last_reconcile={last}",
         jobs.queued,
         jobs.processed,
@@ -496,6 +541,36 @@ mod tests {
         // The very last line is the newest and must be present.
         assert!(detail.contains("number 999"), "newest line kept");
         assert!(!detail.contains("number 0 "), "oldest dropped to fit");
+    }
+
+    #[test]
+    fn only_the_settings_commands_are_ordered_within_a_pass() {
+        // A request or an idempotent flip costs nothing when it arrives out of
+        // order; a settings command that keeps disclosing does.
+        assert_eq!(
+            ordered_class(&AdminCommand::SetAnswerScope { include: vec![] }),
+            Some(Ordered::AnswerScope)
+        );
+        assert_eq!(
+            ordered_class(&AdminCommand::SetInferenceEndpoint {
+                endpoint: "https://h/v1".into(),
+                api_key: None
+            }),
+            Some(Ordered::InferenceEndpoint)
+        );
+        for command in [
+            AdminCommand::JobStatus,
+            AdminCommand::LogTail { lines: None },
+            AdminCommand::PauseOcr,
+            AdminCommand::ResumeOcr,
+            AdminCommand::Unknown,
+        ] {
+            assert_eq!(ordered_class(&command), None);
+        }
+        // And the two classes are ordered independently: a scope command sent
+        // later must not supersede an endpoint command, which is a different
+        // instruction about a different thing.
+        assert_ne!(Ordered::AnswerScope, Ordered::InferenceEndpoint);
     }
 
     #[test]

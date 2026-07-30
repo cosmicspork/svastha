@@ -54,6 +54,11 @@ import {
   trackScopeDelivery,
   type AnswerScopeRecord,
 } from './answerScope'
+import {
+  commitEndpointLocally,
+  trackEndpointDelivery,
+  type NodeEndpointRecord,
+} from './nodeEndpoint'
 import type { Category } from './category'
 
 /** The mailbox surface this layer needs. `RelayClient` satisfies it
@@ -574,6 +579,27 @@ export async function sendChatMessage(node: NodeTarget, text: string): Promise<C
   return turn
 }
 
+/** The only endpoint representation allowed in device-local command history.
+ * URL paths, query strings, and userinfo can carry credentials; the host is the
+ * recipient the owner needs to identify. */
+function endpointForAdminLog(endpoint: string): string {
+  try {
+    return new URL(endpoint).host
+  } catch {
+    return '(invalid endpoint)'
+  }
+}
+
+/** Remove credentials before a command becomes device-local history. The sealed
+ * envelope carries an endpoint key only to the node; the admin log is plaintext
+ * IndexedDB and must retain enough to match the reply without retaining a secret. */
+function commandForAdminLog(command: AdminCommand): AdminCommand {
+  if (command.cmd === 'set_inference_endpoint') {
+    return { cmd: command.cmd, endpoint: endpointForAdminLog(command.endpoint) }
+  }
+  return command
+}
+
 /**
  * Seal an `admin_cmd` to the node and deposit it, then record the local command
  * keyed by the envelope message id (so the node's `admin_reply`, which carries
@@ -593,7 +619,7 @@ export async function sendAdminCommand(
   const envelope = identity.seal_message(fromHex(node.x25519), 'admin_cmd', Date.now(), body)
   const id = messageIdOf(envelope)
   await client.putMailbox(node.ed, `admin-${id}`, new TextEncoder().encode(envelope))
-  await recordCommand({ id, command, sentAt: new Date().toISOString() })
+  await recordCommand({ id, command: commandForAdminLog(command), sentAt: new Date().toISOString() })
   return id
 }
 
@@ -734,6 +760,55 @@ export async function retryAnswerScope(): Promise<AnswerScopeCommit> {
   }
   const current = tracked.record ?? record
   return { record: current, include: current.include, node: 'unsent' }
+}
+
+/** The result of {@link commitNodeEndpoint}, mirroring {@link AnswerScopeCommit}:
+ * what is now persisted here, and how far the node half got. `node` is never
+ * `confirmed` — only an `admin_reply` stating the endpoint can promote it (see
+ * `nodeEndpoint.ts`'s `resolveNodeEndpointState`). */
+export interface NodeEndpointCommit {
+  record: NodeEndpointRecord
+  endpoint: string
+  node: 'no-node' | 'pending' | 'unsent'
+}
+
+/**
+ * Tell the node which endpoint to run this owner's work against.
+ *
+ * The same shape as {@link commitAnswerScope}, for the same reasons: the local
+ * write is the commit point and the only step allowed to fail loudly, the node
+ * half is best-effort and reported rather than raised, and the delivery is
+ * tracked by a compare-and-update against the generation it acted for so a
+ * stalled deposit cannot restore an endpoint the owner has since moved away
+ * from.
+ *
+ * `apiKey` is sent and **not stored**: it goes into the sealed body, which only
+ * the node can open, and this device has no further use for it. An empty one
+ * means the endpoint needs none — the node reads an absent key as "no key",
+ * never as "keep the last one", so an owner can take a credential away.
+ */
+export async function commitNodeEndpoint(
+  endpoint: string,
+  apiKey?: string,
+): Promise<NodeEndpointCommit> {
+  const record = await commitEndpointLocally(endpoint)
+
+  const node = await enrolledNode().catch(() => null)
+  if (!node) return { record, endpoint: record.endpoint, node: 'no-node' }
+
+  const key = apiKey?.trim()
+  const id = await sendAdminCommand(
+    { ed: node.ed, x25519: node.x25519 },
+    { cmd: 'set_inference_endpoint', endpoint: record.endpoint, ...(key ? { api_key: key } : {}) },
+  ).catch(() => null)
+  if (!id) return { record, endpoint: record.endpoint, node: 'unsent' }
+
+  const tracked = await trackEndpointDelivery(record.generation, id, node.ed)
+  if (tracked.applied && tracked.record) {
+    return { record: tracked.record, endpoint: tracked.record.endpoint, node: 'pending' }
+  }
+  const current = tracked.record ?? record
+  return { record: current, endpoint: current.endpoint, node: 'unsent' }
 }
 
 // --- resolution: echo the decision back to the proposer ---

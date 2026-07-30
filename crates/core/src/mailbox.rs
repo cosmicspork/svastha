@@ -325,8 +325,22 @@ pub struct ProposalResultBody {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum AdminCommand {
+    /// The endpoint the node runs **this sender's** inference against — their
+    /// pages and their questions, nobody else's (see
+    /// `crates/node/src/inference.rs`).
     SetInferenceEndpoint {
         endpoint: String,
+        /// The credential that endpoint needs, if it needs one.
+        ///
+        /// A secret on the wire, which is only sound because of where this wire
+        /// runs: an `admin_cmd` body is sealed to the node's X25519 key before
+        /// it is signed, so the relay stores ciphertext it cannot open and the
+        /// key is readable only by the node the owner chose to enrol. It is not
+        /// a new disclosure either — the node already reads that owner's whole
+        /// decrypted vault. Omitted (rather than empty) when the endpoint needs
+        /// none, so an absent field means "no key", never "unchanged".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        api_key: Option<String>,
     },
     JobStatus,
     LogTail {
@@ -643,6 +657,7 @@ mod tests {
         let admin = AdminCmdBody {
             command: AdminCommand::SetInferenceEndpoint {
                 endpoint: "http://inference.internal/v1".into(),
+                api_key: Some("k".into()),
             },
         };
         let chat = ChatMsgBody {
@@ -710,6 +725,40 @@ mod tests {
             json!({ "command": { "cmd": "set_inference_endpoint" } })
         )
         .is_err());
+    }
+
+    #[test]
+    fn an_endpoint_command_carries_an_optional_key_and_omits_it_when_there_is_none() {
+        // Absent means "no key", not "unchanged": a node that treated a missing
+        // field as "keep the last one" would keep sending an old credential to a
+        // host the owner has since repointed away from.
+        let bare: AdminCmdBody = serde_json::from_value(
+            json!({ "command": { "cmd": "set_inference_endpoint", "endpoint": "https://h/v1" } }),
+        )
+        .unwrap();
+        assert_eq!(
+            bare.command,
+            AdminCommand::SetInferenceEndpoint {
+                endpoint: "https://h/v1".into(),
+                api_key: None
+            }
+        );
+        // And a key set is carried, in the sealed body — never as an envelope field.
+        let with_key = AdminCmdBody {
+            command: AdminCommand::SetInferenceEndpoint {
+                endpoint: "https://h/v1".into(),
+                api_key: Some("sk-secret".into()),
+            },
+        };
+        let value = serde_json::to_value(&with_key).unwrap();
+        assert_eq!(value["command"]["api_key"], "sk-secret");
+        assert_eq!(
+            serde_json::from_value::<AdminCmdBody>(value).unwrap(),
+            with_key
+        );
+        // The bare form serializes without the field at all.
+        let value = serde_json::to_value(&bare).unwrap();
+        assert!(value["command"].get("api_key").is_none());
     }
 
     #[test]

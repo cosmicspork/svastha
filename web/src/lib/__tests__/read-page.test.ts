@@ -51,6 +51,14 @@ vi.mock('../session.svelte', () => ({
 }))
 vi.mock('../db', () => ({ get: vi.fn(), put: vi.fn(), del: vi.fn(), getAll: vi.fn(async () => []) }))
 
+// The Answers preference, which page reading follows too. Only the stored value
+// is faked; the rule itself (`answersHere`) is the real one.
+const where = vi.hoisted(() => ({ value: 'auto' as 'auto' | 'device' | 'node' }))
+vi.mock('../answerWhere', async () => {
+  const actual = await vi.importActual<typeof import('../answerWhere')>('../answerWhere')
+  return { ...actual, loadAnswerWhere: vi.fn(async () => where.value) }
+})
+
 import {
   readAndPropose,
   transcribe,
@@ -182,9 +190,28 @@ describe('buildExtractionPrompt', () => {
 
 describe('readAndPropose', () => {
   beforeEach(() => {
+    where.value = 'auto'
     engines.image.mockResolvedValue(PANEL)
     inference.chatComplete.mockResolvedValue('{"findings":[]}')
     wasm.code_from_lines.mockReturnValue('{"drafts":[],"dropped":0}')
+  })
+
+  // Reading a page is inference over the same record as answering, so it obeys
+  // the same choice. An owner who sent their AI work to the node did not exempt
+  // this one path — and it is the path that would quietly send a page to an
+  // endpoint they had just routed away from.
+  it('does not read here when the owner sends AI work to the node', async () => {
+    where.value = 'node'
+    await expect(readAndPropose('sha1', new Uint8Array(), 'image/jpeg')).rejects.toThrow(
+      /your node/i,
+    )
+    expect(inference.chatComplete).not.toHaveBeenCalled()
+  })
+
+  it('reads here when the owner chose this device', async () => {
+    where.value = 'device'
+    await readAndPropose('sha1', new Uint8Array(), 'image/jpeg')
+    expect(inference.chatComplete).toHaveBeenCalled()
   })
 
   // The page image stays on the device: only the transcript is sent for coding.

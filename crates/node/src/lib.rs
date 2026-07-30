@@ -96,12 +96,12 @@ pub fn run(config: Config, logs: LogBuffer) -> Result<()> {
     let cache = Arc::new(Cache::new(config.cache_dir.clone()));
     let state = Arc::new(Mutex::new(NodeState::new()));
 
-    // Inference (OCR + RAG) runs only when an endpoint is configured. The runtime
-    // resolves the effective endpoint from the env boot default plus any persisted
-    // `set_inference_endpoint` override (override wins — see `InferenceRuntime`),
-    // and can be reconfigured live by an admin command. The journal is the one
-    // durable state besides the identity — content-free by construction (see
-    // `journal`); it lives in the data dir so idempotence survives a restart.
+    // Inference (OCR + RAG) runs only where an endpoint is configured, and that
+    // is resolved per owner: their own persisted `set_inference_endpoint`, else
+    // the env boot default (see `InferenceRuntime`). Each owner can reconfigure
+    // their own live by an admin command. The journal is the one durable state
+    // besides the identity — content-free by construction (see `journal`); it
+    // lives in the data dir so idempotence survives a restart.
     let mut inference = InferenceRuntime::load(
         config.ocr_inference.clone(),
         config.chat_inference.clone(),
@@ -121,9 +121,8 @@ pub fn run(config: Config, logs: LogBuffer) -> Result<()> {
         "page reading gate (per owner; the default applies until an owner chooses)"
     );
     tracing::info!(
-        ocr = inference.ocr_client().is_some(),
-        chat = inference.chat_client().is_some(),
-        "inference roles configured (each runs only when its endpoint is set; admin can set one)"
+        operator_default = inference.has_operator_default(),
+        "inference boot default (each owner may set their own endpoint over the mailbox)"
     );
 
     // Stage A's reader, loaded once — the models cost a few hundred milliseconds
@@ -263,25 +262,34 @@ fn reconcile(
         }
     }
 
-    // Cited Q&A (design §7): answer `chat_msg` questions. Only when inference is
-    // available — a question the node cannot yet answer waits in the mailbox
-    // rather than getting a fake reply.
+    // Cited Q&A (design §7): answer `chat_msg` questions. The pass runs whatever
+    // the boot config says, because the endpoint is resolved per asker inside it
+    // — a question from an owner with no endpoint waits in the mailbox rather
+    // than getting a fake reply, and a question from an owner who set one is
+    // answered even on a node the operator configured nothing on.
     if drain_mailbox {
-        if let Some(client_inf) = inference.chat_client() {
-            match chat::run(client, state, client_inf, scopes, journal) {
-                Ok(r) if r.answered + r.cant_answer + r.dropped + r.deferred + r.ignored > 0 => {
-                    tracing::info!(
-                        answered = r.answered,
-                        cant_answer = r.cant_answer,
-                        deferred = r.deferred,
-                        dropped = r.dropped,
-                        ignored = r.ignored,
-                        "chat pass"
-                    );
-                }
-                Ok(_) => {}
-                Err(e) => tracing::warn!(error = %e, "chat pass failed"),
+        match chat::run(client, state, inference, scopes, journal) {
+            Ok(r)
+                if r.answered
+                    + r.cant_answer
+                    + r.dropped
+                    + r.deferred
+                    + r.ignored
+                    + r.no_endpoint
+                    > 0 =>
+            {
+                tracing::info!(
+                    answered = r.answered,
+                    cant_answer = r.cant_answer,
+                    deferred = r.deferred,
+                    dropped = r.dropped,
+                    ignored = r.ignored,
+                    no_endpoint = r.no_endpoint,
+                    "chat pass"
+                );
             }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "chat pass failed"),
         }
     }
 
@@ -289,13 +297,13 @@ fn reconcile(
     // ticks and restarts via the journal, so running it on every reconcile is
     // cheap — an already-processed page short-circuits.
     // Both halves are required: an endpoint to code the text, and a reader to
-    // produce it.
-    if let (Some(client_inf), Some(transcriber)) = (inference.ocr_client(), transcriber) {
+    // produce it. The endpoint half is per owner and resolved inside the pass.
+    if let Some(transcriber) = transcriber {
         match ocr::run(
             client,
             cache,
             state,
-            client_inf,
+            inference,
             transcriber,
             control,
             journal,
@@ -315,6 +323,7 @@ fn reconcile(
                     dropped_findings = r.dropped_findings,
                     deferred = r.deferred_to_next_pass,
                     paused_owners = r.paused_owners,
+                    no_endpoint_owners = r.no_endpoint_owners,
                     "ocr pass"
                 );
             }

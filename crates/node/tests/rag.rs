@@ -28,7 +28,7 @@ use svastha_node::cache::Cache;
 use svastha_node::chat;
 use svastha_node::client::RelayClient;
 use svastha_node::config::InferenceConfig;
-use svastha_node::inference::{InferenceClient, InferenceRuntime};
+use svastha_node::inference::InferenceRuntime;
 use svastha_node::journal::Journal;
 use svastha_node::logtail::LogBuffer;
 use svastha_node::ocr_control::{OcrControl, OcrSettings};
@@ -131,12 +131,20 @@ fn spawn_inference(mode: Mode) -> (String, Arc<AtomicUsize>) {
     (format!("http://{addr}/v1"), calls)
 }
 
-fn inference_client(base: &str) -> InferenceClient {
-    InferenceClient::new(&InferenceConfig {
+/// A runtime with `base` as the operator's boot default for both roles — the
+/// shape an owner who has set no endpoint of their own resolves to. Loaded from
+/// a fresh temp dir so no owner has a persisted choice.
+fn inference_client(base: &str) -> InferenceRuntime {
+    let boot = InferenceConfig {
         endpoint: base.to_string(),
         api_key: None,
         model: "chat-test".to_string(),
-    })
+    };
+    InferenceRuntime::load(
+        Some(boot.clone()),
+        Some(boot),
+        tempfile::tempdir().unwrap().path(),
+    )
 }
 
 // ---- owner-side helpers (the PWA's role) ----
@@ -718,6 +726,7 @@ fn admin_set_inference_endpoint_accepts_valid_and_rejects_batch() {
         &h.node,
         AdminCommand::SetInferenceEndpoint {
             endpoint: "https://new-inference.internal/v1".into(),
+            api_key: None,
         },
     );
     let mut journal = h.journal();
@@ -732,8 +741,8 @@ fn admin_set_inference_endpoint_accepts_valid_and_rejects_batch() {
     )
     .unwrap();
     assert_eq!(
-        rt.chat_endpoint(),
-        Some("https://new-inference.internal/v1")
+        rt.marker_for(&hex_ed(&owner.id)),
+        "[endpoint: new-inference.internal]"
     );
 
     let ok_reply = read_admin_replies(&owner.client, &owner.id).pop().unwrap();
@@ -750,6 +759,7 @@ fn admin_set_inference_endpoint_accepts_valid_and_rejects_batch() {
         &h.node,
         AdminCommand::SetInferenceEndpoint {
             endpoint: "https://api.internal/v1/batch".into(),
+            api_key: None,
         },
     );
     admin::run(
@@ -767,9 +777,225 @@ fn admin_set_inference_endpoint_accepts_valid_and_rejects_batch() {
     assert!(bad_reply.detail.as_deref().unwrap().contains("Batch"));
     // The rejected value never became live.
     assert_eq!(
-        rt.chat_endpoint(),
-        Some("https://new-inference.internal/v1")
+        rt.marker_for(&hex_ed(&owner.id)),
+        "[endpoint: new-inference.internal]"
     );
+}
+
+/// One owner's endpoint is one owner's. Over the real wire, with two enrolled
+/// owners on one node: the point of making this per-owner is that A cannot
+/// repoint B's plaintext, and `job_status` must not tell A about B's host or
+/// anyone's key either.
+#[test]
+fn an_owners_endpoint_and_its_key_reach_nobody_else() {
+    let h = Harness::new(b"endpoint tenancy node");
+    let a = h.add_owner(b"endpoint tenancy owner a");
+    let b = h.add_owner(b"endpoint tenancy owner b");
+    h.enroll_and_sync();
+
+    let logs = LogBuffer::new();
+    let mut rt = runtime(h.dir.path(), "https://boot.internal/v1");
+    let mut journal = h.journal();
+
+    command(
+        &a.id,
+        &a.client,
+        &h.node,
+        AdminCommand::SetInferenceEndpoint {
+            endpoint: "https://a-host.internal/v1".into(),
+            api_key: Some("a-secret-key".into()),
+        },
+    );
+    admin::run(
+        &h.node_client,
+        &h.state,
+        &mut rt,
+        &mut control(&h),
+        &mut scopes(&h),
+        &logs,
+        &mut journal,
+    )
+    .unwrap();
+
+    assert_eq!(rt.marker_for(&hex_ed(&a.id)), "[endpoint: a-host.internal]");
+    assert_eq!(
+        rt.marker_for(&hex_ed(&b.id)),
+        "[endpoint: boot.internal]",
+        "B never chose, so B still runs on the operator's default"
+    );
+
+    // A's own reply names A's host and never the key A just sent.
+    let a_reply = read_admin_replies(&a.client, &a.id).pop().unwrap();
+    assert!(a_reply.ok);
+    let detail = a_reply.detail.as_deref().unwrap();
+    assert!(detail.contains("a-host.internal"));
+    assert!(!detail.contains("a-secret-key"), "no key echoed: {detail}");
+
+    // B asks for status and is told about B's endpoint only.
+    command(&b.id, &b.client, &h.node, AdminCommand::JobStatus);
+    admin::run(
+        &h.node_client,
+        &h.state,
+        &mut rt,
+        &mut control(&h),
+        &mut scopes(&h),
+        &logs,
+        &mut journal,
+    )
+    .unwrap();
+    let b_status = read_admin_replies(&b.client, &b.id).pop().unwrap();
+    let detail = b_status.detail.as_deref().unwrap();
+    assert!(detail.contains("boot.internal"), "B's own endpoint");
+    assert!(
+        !detail.contains("a-host.internal"),
+        "never another owner's host: {detail}"
+    );
+    assert!(!detail.contains("a-secret-key"), "never a key: {detail}");
+}
+
+/// Two endpoint instructions from one owner in a single pass end on the later
+/// one, and the superseded device is told so rather than answered `ok`.
+///
+/// The mailbox hands items over in `HashMap` order, so without the pass's two
+/// phases the node lands on the stale endpoint some of the time — and keeps
+/// sending that owner's record to a host they had already moved away from,
+/// while both devices read `ok: true`.
+#[test]
+fn the_later_endpoint_instruction_wins_and_the_other_is_told() {
+    let h = Harness::new(b"endpoint order node");
+    let owner = h.add_owner(b"endpoint order owner");
+    h.enroll_and_sync();
+
+    let logs = LogBuffer::new();
+    let mut rt = runtime(h.dir.path(), "https://boot.internal/v1");
+    let mut journal = h.journal();
+
+    for round in 0..10i64 {
+        let (older_host, newer_host) = if round % 2 == 0 {
+            ("older.internal", "newer.internal")
+        } else {
+            ("newer.internal", "older.internal")
+        };
+        let older_id = command_at(
+            &owner.id,
+            &owner.client,
+            &h.node,
+            AdminCommand::SetInferenceEndpoint {
+                endpoint: format!("https://{older_host}/v1"),
+                api_key: None,
+            },
+            1_753_000_000_000 + round * 10,
+        );
+        let newer_id = command_at(
+            &owner.id,
+            &owner.client,
+            &h.node,
+            AdminCommand::SetInferenceEndpoint {
+                endpoint: format!("https://{newer_host}/v1"),
+                api_key: None,
+            },
+            1_753_000_000_005 + round * 10,
+        );
+
+        admin::run(
+            &h.node_client,
+            &h.state,
+            &mut rt,
+            &mut control(&h),
+            &mut scopes(&h),
+            &logs,
+            &mut journal,
+        )
+        .unwrap();
+
+        assert_eq!(
+            rt.marker_for(&hex_ed(&owner.id)),
+            format!("[endpoint: {newer_host}]"),
+            "round {round}: ended on the stale instruction"
+        );
+
+        let replies = read_admin_replies(&owner.client, &owner.id);
+        let older_reply = replies
+            .iter()
+            .find(|r| r.in_reply_to == older_id)
+            .expect("the superseded command is still answered");
+        let newer_reply = replies
+            .iter()
+            .find(|r| r.in_reply_to == newer_id)
+            .expect("the applied command is answered");
+        assert!(!older_reply.ok, "round {round}: superseded is not applied");
+        assert!(newer_reply.ok, "round {round}: the later one is applied");
+        // Both state the endpoint in force, so either device can check rather
+        // than take `ok` at its word.
+        let marker = format!("[endpoint: {newer_host}]");
+        for reply in [older_reply, newer_reply] {
+            let detail = reply.detail.as_deref().unwrap_or_default();
+            assert!(
+                detail.contains(&marker),
+                "round {round}: reply states the endpoint in force, got: {detail}"
+            );
+        }
+        for entry in owner.client.list_mailbox().unwrap() {
+            owner.client.delete_mailbox(&entry.id).unwrap();
+        }
+    }
+}
+
+/// An endpoint command and a scope command in the same pass are independent
+/// instructions: neither supersedes the other, and both apply.
+#[test]
+fn an_endpoint_command_does_not_supersede_a_scope_command() {
+    let h = Harness::new(b"two class node");
+    let owner = h.add_owner(b"two class owner");
+    h.enroll_and_sync();
+
+    let logs = LogBuffer::new();
+    let mut rt = runtime(h.dir.path(), "https://boot.internal/v1");
+    let mut journal = h.journal();
+    let mut sc = scopes(&h);
+
+    let scope_id = command_at(
+        &owner.id,
+        &owner.client,
+        &h.node,
+        AdminCommand::SetAnswerScope {
+            include: vec!["cycle".into()],
+        },
+        1_753_000_000_000,
+    );
+    let endpoint_id = command_at(
+        &owner.id,
+        &owner.client,
+        &h.node,
+        AdminCommand::SetInferenceEndpoint {
+            endpoint: "https://mine.internal/v1".into(),
+            api_key: None,
+        },
+        1_753_000_000_005,
+    );
+
+    admin::run(
+        &h.node_client,
+        &h.state,
+        &mut rt,
+        &mut control(&h),
+        &mut sc,
+        &logs,
+        &mut journal,
+    )
+    .unwrap();
+
+    let replies = read_admin_replies(&owner.client, &owner.id);
+    for id in [&scope_id, &endpoint_id] {
+        let reply = replies.iter().find(|r| &r.in_reply_to == id).unwrap();
+        assert!(reply.ok, "both applied, got: {:?}", reply.detail);
+    }
+    assert_eq!(
+        rt.marker_for(&hex_ed(&owner.id)),
+        "[endpoint: mine.internal]"
+    );
+    let cycle = app_local_entry(&owner.id, "cycle-start", "Period start", "2026-01-05");
+    assert!(sc.scope(&hex_ed(&owner.id)).allows(&cycle.event));
 }
 
 #[test]

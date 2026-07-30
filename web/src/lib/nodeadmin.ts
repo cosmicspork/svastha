@@ -23,9 +23,13 @@ const LAST_SEEN_KEY = 'node-last-seen'
  * is exactly the vault-scoped operations; there is intentionally no restart or
  * upgrade. `log_tail`'s `lines` is optional (the node defaults it). */
 export type AdminCommand =
-  | { cmd: 'set_inference_endpoint'; endpoint: string }
+  // The endpoint the node runs THIS owner's pages and questions against
+  // (crates/node/src/inference.rs) — not the node's, and not anyone else's.
+  // `api_key` rides inside the sealed body, which is why it may be here at all:
+  // the envelope is sealed to the node before it is signed, so the relay stores
+  // ciphertext. Omitted means "no key", never "unchanged".
+  | { cmd: 'set_inference_endpoint'; endpoint: string; api_key?: string }
   // A node reads nothing until it is resumed (crates/node/src/ocr_control.rs).
-  // No UI sends these yet — see docs/ROADMAP.md's "AI on device" group.
   | { cmd: 'pause_ocr' }
   | { cmd: 'resume_ocr' }
   | { cmd: 'job_status' }
@@ -60,7 +64,9 @@ export interface AdminLogEntry {
 export function describeCommand(command: AdminCommand): string {
   switch (command.cmd) {
     case 'set_inference_endpoint':
-      return `Set inference endpoint → ${command.endpoint}`
+      // The endpoint, never the key: this string is rendered into the admin log
+      // and read back on a screen anyone looking over a shoulder can see.
+      return `Set your inference endpoint → ${command.endpoint}`
     case 'job_status':
       return 'Requested job status'
     case 'log_tail':
