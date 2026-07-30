@@ -191,6 +191,11 @@ pub struct InferenceRuntime {
     default_clients: RoleClients,
     /// Live clients for owners who have chosen, by Ed25519 hex.
     owner_clients: BTreeMap<String, RoleClients>,
+    /// False when a present endpoint state file could not be read or parsed.
+    /// Falling back to the operator endpoint in that condition could disclose an
+    /// owner's record to a recipient they had explicitly replaced, so all
+    /// inference remains stopped until the state is repaired.
+    state_readable: bool,
 }
 
 /// One owner's endpoint choice.
@@ -233,10 +238,20 @@ impl InferenceRuntime {
         data_dir: &Path,
     ) -> Self {
         let state_path = data_dir.join(STATE_FILE);
-        let persisted = fs::read(&state_path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<PersistedState>(&bytes).ok())
-            .unwrap_or_default();
+        let (persisted, state_readable) = match fs::read(&state_path) {
+            Ok(bytes) => match serde_json::from_slice::<PersistedState>(&bytes) {
+                Ok(state) => (state, true),
+                Err(e) => {
+                    tracing::error!(error = %e, "inference endpoint state could not be parsed; inference is disabled");
+                    (PersistedState::default(), false)
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (PersistedState::default(), true),
+            Err(e) => {
+                tracing::error!(error = %e, "inference endpoint state could not be read; inference is disabled");
+                (PersistedState::default(), false)
+            }
+        };
         let mut rt = Self {
             ocr_boot,
             chat_boot,
@@ -244,6 +259,7 @@ impl InferenceRuntime {
             owners: persisted.owners,
             default_clients: RoleClients::default(),
             owner_clients: BTreeMap::new(),
+            state_readable,
         };
         rt.default_clients = rt.build_default();
         let owners: Vec<String> = rt.owners.keys().cloned().collect();
@@ -257,14 +273,16 @@ impl InferenceRuntime {
     /// coded at all. `None` means the pass does not run for them (a page waits
     /// rather than getting a fake extraction).
     pub fn ocr_client(&self, owner_hex: &str) -> Option<&InferenceClient> {
-        self.clients_for(owner_hex).ocr.as_ref()
+        self.clients_for(owner_hex)
+            .and_then(|clients| clients.ocr.as_ref())
     }
 
     /// The chat (RAG) client for `owner_hex`, if their questions can be answered
     /// at all. `None` means the question waits in the mailbox rather than getting
     /// a fake answer, mirroring the web's honest waiting state.
     pub fn chat_client(&self, owner_hex: &str) -> Option<&InferenceClient> {
-        self.clients_for(owner_hex).chat.as_ref()
+        self.clients_for(owner_hex)
+            .and_then(|clients| clients.chat.as_ref())
     }
 
     /// Whether any role has an operator default. Only for the boot log — an owner
@@ -281,7 +299,14 @@ impl InferenceRuntime {
     /// anything that reads the admin log. And only ever the asker's own: another
     /// owner's endpoint is not the asker's business.
     pub fn describe_for(&self, owner_hex: &str) -> String {
-        let clients = self.clients_for(owner_hex);
+        if !self.state_readable {
+            return "not configured — this node's endpoint state could not be read, \
+                    so nothing of yours is sent anywhere"
+                .to_string();
+        }
+        let clients = self
+            .clients_for(owner_hex)
+            .expect("readable endpoint state always resolves clients");
         let source = if self.owners.contains_key(owner_hex) {
             "your endpoint"
         } else if self.has_operator_default() {
@@ -312,6 +337,12 @@ impl InferenceRuntime {
         endpoint: &str,
         api_key: Option<&str>,
     ) -> Result<String, String> {
+        if !self.state_readable {
+            return Err(
+                "the saved endpoint state could not be read; repair it before changing an endpoint"
+                    .to_string(),
+            );
+        }
         let endpoint = endpoint.trim().to_string();
         validate_inference_endpoint(&endpoint)?;
         // The command carries no model; each role borrows one from its boot
@@ -356,6 +387,9 @@ impl InferenceRuntime {
     /// This owner's endpoint if they set one, else the role-independent operator
     /// default when both roles share one. `None` when nothing is configured.
     fn effective_endpoint(&self, owner_hex: &str) -> Option<&str> {
+        if !self.state_readable {
+            return None;
+        }
         if let Some(own) = self.owners.get(owner_hex) {
             return Some(&own.endpoint);
         }
@@ -370,10 +404,15 @@ impl InferenceRuntime {
         }
     }
 
-    fn clients_for(&self, owner_hex: &str) -> &RoleClients {
-        self.owner_clients
-            .get(owner_hex)
-            .unwrap_or(&self.default_clients)
+    fn clients_for(&self, owner_hex: &str) -> Option<&RoleClients> {
+        if !self.state_readable {
+            return None;
+        }
+        Some(
+            self.owner_clients
+                .get(owner_hex)
+                .unwrap_or(&self.default_clients),
+        )
     }
 
     /// The operator default's clients: each role entirely from its own boot
@@ -789,17 +828,26 @@ mod tests {
     }
 
     #[test]
-    fn an_unreadable_state_file_loads_as_no_choices() {
+    fn an_unreadable_state_file_fails_closed_instead_of_falling_back_to_the_operator() {
+        // A readable state file can contain an owner's endpoint that deliberately
+        // keeps their record away from the operator default. If it cannot be
+        // parsed, treating it as no choice silently changes that disclosure
+        // decision. Keep every owner's inference stopped until the state is
+        // repaired; do not overwrite the unreadable file from another command.
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join(STATE_FILE), b"not json").unwrap();
-        let rt = InferenceRuntime::load(
+        let mut rt = InferenceRuntime::load(
             Some(boot("https://default/v1")),
             Some(boot("https://default/v1")),
             dir.path(),
         );
-        assert_eq!(
-            rt.chat_client(A).unwrap().url,
-            "https://default/v1/chat/completions"
-        );
+        assert!(rt.ocr_client(A).is_none());
+        assert!(rt.chat_client(A).is_none());
+        assert!(rt.describe_for(A).contains("could not be read"));
+        assert_eq!(rt.marker_for(A), "[endpoint: none]");
+        assert!(rt
+            .set_endpoint(A, "https://replacement/v1", None)
+            .unwrap_err()
+            .contains("could not be read"));
     }
 }

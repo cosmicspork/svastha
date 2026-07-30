@@ -30,13 +30,18 @@ vi.mock('../db', () => ({
   getAll: vi.fn(async () => []),
 }))
 
-const node = vi.hoisted(() => ({ value: null as null | { ed: string; x25519: string } }))
+const node = vi.hoisted(() => ({
+  value: null as null | { ed: string; x25519: string },
+  logged: [] as unknown[],
+}))
 vi.mock('../nodeadmin', async () => {
   const actual = await vi.importActual<typeof import('../nodeadmin')>('../nodeadmin')
   return {
     ...actual,
     enrolledNode: vi.fn(async () => node.value),
-    recordCommand: vi.fn(async () => {}),
+    recordCommand: vi.fn(async (entry: unknown) => {
+      node.logged.push(entry)
+    }),
     refreshAdminLog: vi.fn(async () => {}),
   }
 })
@@ -104,6 +109,7 @@ beforeEach(() => {
   store.puts = 0
   store.allowPuts = Infinity
   node.value = null
+  node.logged = []
   lastBody = null
   relayFails = false
 })
@@ -248,6 +254,24 @@ describe('commitNodeEndpoint', () => {
     node.value = NODE
     await commitNodeEndpoint('https://mine/v1', 'sk-secret')
     expect(JSON.stringify([...store.values.values()])).not.toContain('sk-secret')
+  })
+
+  it('seals credentials to the node but redacts them from the durable admin log', async () => {
+    configureMailbox(client(), identity(), () => true)
+    node.value = NODE
+
+    await commitNodeEndpoint('https://mine/v1?api_key=url-secret', 'body-secret')
+
+    expect(lastBody?.command).toMatchObject({
+      endpoint: 'https://mine/v1?api_key=url-secret',
+      api_key: 'body-secret',
+    })
+    expect(node.logged).toHaveLength(1)
+    expect(JSON.stringify(node.logged)).not.toContain('url-secret')
+    expect(JSON.stringify(node.logged)).not.toContain('body-secret')
+    expect(node.logged[0]).toMatchObject({
+      command: { cmd: 'set_inference_endpoint', endpoint: 'mine' },
+    })
   })
 
   it('omits the key entirely when there is none, so absent means no key', async () => {

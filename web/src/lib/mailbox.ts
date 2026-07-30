@@ -579,6 +579,27 @@ export async function sendChatMessage(node: NodeTarget, text: string): Promise<C
   return turn
 }
 
+/** The only endpoint representation allowed in device-local command history.
+ * URL paths, query strings, and userinfo can carry credentials; the host is the
+ * recipient the owner needs to identify. */
+function endpointForAdminLog(endpoint: string): string {
+  try {
+    return new URL(endpoint).host
+  } catch {
+    return '(invalid endpoint)'
+  }
+}
+
+/** Remove credentials before a command becomes device-local history. The sealed
+ * envelope carries an endpoint key only to the node; the admin log is plaintext
+ * IndexedDB and must retain enough to match the reply without retaining a secret. */
+function commandForAdminLog(command: AdminCommand): AdminCommand {
+  if (command.cmd === 'set_inference_endpoint') {
+    return { cmd: command.cmd, endpoint: endpointForAdminLog(command.endpoint) }
+  }
+  return command
+}
+
 /**
  * Seal an `admin_cmd` to the node and deposit it, then record the local command
  * keyed by the envelope message id (so the node's `admin_reply`, which carries
@@ -598,7 +619,7 @@ export async function sendAdminCommand(
   const envelope = identity.seal_message(fromHex(node.x25519), 'admin_cmd', Date.now(), body)
   const id = messageIdOf(envelope)
   await client.putMailbox(node.ed, `admin-${id}`, new TextEncoder().encode(envelope))
-  await recordCommand({ id, command, sentAt: new Date().toISOString() })
+  await recordCommand({ id, command: commandForAdminLog(command), sentAt: new Date().toISOString() })
   return id
 }
 
