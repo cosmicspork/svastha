@@ -372,26 +372,74 @@ fn productions(lexemes: &[Lexeme]) -> Vec<Production> {
             continue;
         };
         // A dash between two numbers prints a range, however many bounds it runs
-        // to and whatever is printed against the last of them.
+        // to. Each bound takes its own unit with it first, so that a range
+        // printing one against every bound (`70mg/dL - 99mg/dL`) still reads as
+        // one range rather than as two unrelated results.
         let mut numbers = vec![first];
-        let mut last = i;
+        let mut carrying = i;
+        let mut end = unit_end(lexemes, i);
         while let Some(next) = lexemes
-            .get(last + 1)
+            .get(end + 1)
             .filter(|l| is_range_dash(&l.gap))
             .and_then(bound)
         {
             numbers.push(next);
-            last += 1;
+            carrying = end + 1;
+            end = unit_end(lexemes, carrying);
         }
         out.push(Production {
+            unit_at: lexemes[carrying].fused.as_ref().map(|f| f.unit_at),
+            // Neither a dash-joined run of bounds nor a number that has taken a
+            // unit with it is also one word.
+            word: (numbers.len() == 1 && end == i).then(|| lexemes[i].text.clone()),
             numbers,
-            unit_at: lexemes[last].fused.as_ref().map(|f| f.unit_at),
-            // A dash-joined run of bounds is never also one word.
-            word: (last == i).then(|| lexemes[i].text.clone()),
         });
-        i = last + 1;
+        i = end + 1;
     }
     out
+}
+
+/// The last lexeme of the unit printed with the quantity at `i` — run into its
+/// digits (`70mg/dL`) or standing just after them (`70 mg/dL`) — or `i` itself
+/// when no unit follows.
+///
+/// A quantity has to take its unit with it before ranges are grouped, or the
+/// unit stands between a bound and the dash and the range comes apart. Only a
+/// unit can be taken: one word away at most, and then only the punctuation a
+/// unit carries (`/dL`, `[Hg]`), so the next analyte along a collapsed row is
+/// never swallowed, and a number is never mistaken for a unit.
+fn unit_end(lexemes: &[Lexeme], i: usize) -> usize {
+    let mut end = i;
+    // Letters run into the digits are already part of this lexeme; a unit
+    // standing apart from its number is one word across the spaces.
+    if lexemes[i].fused.is_none() {
+        match lexemes.get(i + 1) {
+            Some(l) if is_unit_gap(&l.gap) && bound(l).is_none() => end = i + 1,
+            _ => return i,
+        }
+    }
+    while let Some(l) = lexemes.get(end + 1) {
+        if !is_unit_punctuation(&l.gap) || bound(l).is_some() {
+            break;
+        }
+        end += 1;
+    }
+    end
+}
+
+/// Whether a gap separates a number from the unit printed with it rather than
+/// from the next thing on the line.
+fn is_unit_gap(gap: &str) -> bool {
+    !gap.is_empty()
+        && gap
+            .chars()
+            .all(|c| c.is_whitespace() || matches!(c, '/' | '[' | ']' | '*'))
+}
+
+/// Whether a gap is punctuation internal to a unit, which spaces are not: the
+/// rest of `mg/dL` belongs to the number, the word after a space does not.
+fn is_unit_punctuation(gap: &str) -> bool {
+    !gap.is_empty() && gap.chars().all(|c| matches!(c, '/' | '[' | ']' | '*'))
 }
 
 /// The number a lexeme opens with, if any: itself, or the digits a name might be
@@ -1199,6 +1247,80 @@ mod tests {
         let na = vec!["Na 139mmol/L".to_string()];
         assert_eq!(
             parse_lines(&measured(1, "Na", "13", "mmol/L"), &na).dropped,
+            1
+        );
+    }
+
+    /// A range prints its unit against neither bound, one of them, or both, and
+    /// it is the same range. Looking for the dash before each bound had taken
+    /// its own unit with it left `70mg/dL - 99mg/dL` reading as two unrelated
+    /// quantities — and the lower bound quotable as a result.
+    #[test]
+    fn a_range_groups_across_the_unit_printed_with_each_bound() {
+        for line in [
+            "Glucose 105 mg/dL Ref 70mg/dL - 99mg/dL",
+            "Glucose 105 mg/dL Ref 70 mg/dL - 99 mg/dL",
+            "Glucose 105 mg/dL Ref 70mg/dL - 99",
+            "Glucose 105 mg/dL Ref 70 mg/dL - 99",
+            "Glucose 105 mg/dL Ref 70 - 99mg/dL",
+        ] {
+            let t = vec![line.to_string()];
+            for value in ["70", "99"] {
+                assert_eq!(
+                    parse_lines(&measured(1, "Glucose", value, "mg/dL"), &t).dropped,
+                    1,
+                    "{value} is a reference bound of {line:?}, not a result"
+                );
+                assert_eq!(
+                    parse_lines(&measured(1, "Glucose", value, ""), &t).dropped,
+                    1,
+                    "{value} is a reference bound of {line:?}, not a result"
+                );
+            }
+            // The result on the row still verifies, and so does the range quoted
+            // whole.
+            assert_eq!(
+                parse_lines(&measured(1, "Glucose", "105", "mg/dL"), &t)
+                    .drafts
+                    .len(),
+                1,
+                "the result of {line:?} must still verify"
+            );
+            assert_eq!(
+                parse_lines(&measured(1, "Glucose", "70-99", "mg/dL"), &t)
+                    .drafts
+                    .len(),
+                1,
+                "the range of {line:?} quoted whole must still verify"
+            );
+        }
+    }
+
+    /// The disclosed limit, pinned. An integer printed against a unit written in
+    /// one part is dropped rather than certified, because nothing on the line
+    /// tells `10mg` from `5HIAA`. Absorbing units to group ranges must not
+    /// quietly reopen it.
+    #[test]
+    fn an_integer_against_a_one_part_unit_is_still_dropped() {
+        let fused = vec!["Digoxin 10mg daily".to_string()];
+        assert_eq!(
+            parse_lines(&measured(1, "Digoxin", "10", "mg"), &fused).dropped,
+            1
+        );
+
+        // The printings that do verify are unchanged: spaced, and decimal.
+        let spaced = vec!["Digoxin 10 mg daily".to_string()];
+        assert_eq!(
+            parse_lines(&measured(1, "Digoxin", "10", "mg"), &spaced)
+                .drafts
+                .len(),
+            1
+        );
+        let decimal = vec!["Digoxin 0.25mg daily".to_string()];
+        assert_eq!(
+            parse_lines(&measured(1, "Digoxin", "0.25", "mg"), &decimal)
+                .drafts
+                .len(),
             1
         );
     }
