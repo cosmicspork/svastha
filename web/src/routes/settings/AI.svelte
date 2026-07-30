@@ -58,6 +58,8 @@
   import { formatDay, formatTime, dayKey } from '../../lib/time'
   import type { ProposerRecord } from '../../lib/proposals'
   import Sheet from '../../components/Sheet.svelte'
+  import BulkReadSheet from '../../components/BulkReadSheet.svelte'
+  import { unreadAttachmentPages, type BulkPage } from '../../lib/bulk-read'
 
   let endpoint = $state('')
   let model = $state('')
@@ -90,6 +92,8 @@
   let ocrError = $state('')
   let ocrProgress = $state(0)
   let ocrSizeMb = $state(0)
+  let unreadPages = $state<BulkPage[]>([])
+  let showBulkRead = $state(false)
 
   // Opt-in entries. Off unless the owner turns them on — see answerScope.ts.
   // What each category actually covers, said in the owner's words rather than
@@ -175,13 +179,15 @@
       .then((m) => (ocrSizeMb = downloadBytes(m) / 1024 / 1024))
       .catch(() => {})
     const config = await loadConfig()
-    if (!config) return
-    endpoint = config.endpoint
-    model = config.model
-    configured = true
-    // A stored key that will not unseal reads as absent everywhere else; say so
-    // here rather than silently sending requests with no credential.
-    keyStoredButUnreadable = !config.apiKey && (await hasStoredApiKey())
+    if (config) {
+      endpoint = config.endpoint
+      model = config.model
+      configured = true
+      // A stored key that will not unseal reads as absent everywhere else; say so
+      // here rather than silently sending requests with no credential.
+      keyStoredButUnreadable = !config.apiKey && (await hasStoredApiKey())
+    }
+    unreadPages = await unreadAttachmentPages()
   })
 
   async function beginSave(e: SubmitEvent) {
@@ -276,6 +282,11 @@
     } finally {
       ocrBusy = false
     }
+  }
+
+  async function closeBulkRead(): Promise<void> {
+    showBulkRead = false
+    unreadPages = await unreadAttachmentPages()
   }
 
   /**
@@ -660,6 +671,17 @@
     A one-time download, checked against the checksums this app shipped with before it is switched
     on. Everything is served from this app — nothing is fetched from anyone else's servers.
   </p>
+  {#if unreadPages.length > 0}
+    <div class="bulk-read-card" data-testid="bulk-read-card">
+      <h3>Read your unread pages</h3>
+      <p class="muted" data-testid="bulk-read-count">
+        {unreadPages.length === 1 ? "1 page hasn't been read yet." : `${unreadPages.length} pages haven't been read yet.`}
+      </p>
+      <button type="button" class="tonal" onclick={() => (showBulkRead = true)} data-testid="bulk-read-start">
+        Read pages
+      </button>
+    </div>
+  {/if}
 </section>
 
 <section class="stack" data-testid="node-admin">
@@ -861,6 +883,10 @@
   </Sheet>
 {/if}
 
+{#if showBulkRead}
+  <BulkReadSheet pages={unreadPages} onclose={closeBulkRead} />
+{/if}
+
 <style>
   section {
     margin-top: var(--space-6);
@@ -869,6 +895,17 @@
   .intro {
     font-size: var(--text-sm);
     margin: 0 0 var(--space-3);
+  }
+
+  .bulk-read-card {
+    margin-top: var(--space-4);
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+  }
+
+  .bulk-read-card h3 {
+    margin: 0 0 var(--space-1);
   }
 
   .note {
