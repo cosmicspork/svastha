@@ -112,7 +112,8 @@ What it's trusted with, exactly:
   OpenAI-compatible inference endpoint you configure. Point it at local
   Ollama/vLLM and plaintext never leaves your machines; point it at a cloud
   endpoint and that's your explicit, revocable decision — the relay stays
-  zero-knowledge either way, and the node ships no models of its own.
+  zero-knowledge either way, and the node ships no *language* models of its
+  own — only the small page-reading models it needs to transcribe a photo.
 - Its design assumes it will be discarded: durable state is one disposable
   identity keypair, decrypted data lives in an ephemeral cache that re-syncs
   on restart, and it makes no inbound connections at all.
