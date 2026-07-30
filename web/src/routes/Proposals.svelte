@@ -8,11 +8,15 @@
     setDraftStatus,
     groupByProposer,
     getProposer,
+    visibleDrafts,
+    approveAllSheetCopy,
+    PROPOSALS_PAGE_SIZE,
     type ProposalRecord,
     type ProposalDraft,
   } from '../lib/proposals'
   import { pullMailbox, resolveProposalIfDone } from '../lib/mailbox'
   import ProposalDraftRow from '../components/ProposalDraftRow.svelte'
+  import Sheet from '../components/Sheet.svelte'
 
   let busy = $state(false)
   // Proposer Ed25519 -> display label, resolved from the enrollment directory
@@ -20,6 +24,37 @@
   let labels = $state<Record<string, string>>({})
 
   const groups = $derived([...groupByProposer($pendingProposals).entries()])
+
+  // How many drafts each proposer group has paginated into view. Keyed by
+  // fromEd (not group index) so a group's page position survives the list
+  // re-deriving when `pendingProposals` changes.
+  let shown = $state<Record<string, number>>({})
+  function shownFor(fromEd: string): number {
+    return shown[fromEd] ?? PROPOSALS_PAGE_SIZE
+  }
+  function showMore(fromEd: string): void {
+    shown = { ...shown, [fromEd]: shownFor(fromEd) + PROPOSALS_PAGE_SIZE }
+  }
+
+  // Approve-all confirmation sheet: holds the proposer whose sheet is open, or
+  // null when closed. The records/count are re-derived from `groups` at
+  // render time (not snapshotted here) so the sheet stays correct if the
+  // underlying store changes while it's open.
+  let confirmFromEd = $state<string | null>(null)
+  const confirmRecords = $derived(
+    groups.find(([fromEd]) => fromEd === confirmFromEd)?.[1] ?? [],
+  )
+  const confirmCount = $derived(pendingCount(confirmRecords))
+
+  function closeConfirm(): void {
+    confirmFromEd = null
+  }
+
+  async function confirmApproveAll(): Promise<void> {
+    const records = confirmRecords
+    confirmFromEd = null
+    await approveAll(records)
+  }
 
   onMount(async () => {
     // A fresh pull in case the deep-link arrived before the sync cycle ran; then
@@ -127,6 +162,7 @@
   </p>
 
   {#each groups as [fromEd, records] (fromEd)}
+    {@const { visible, remaining } = visibleDrafts(records, shownFor(fromEd))}
     <section class="proposer" data-testid="proposer-group">
       <header class="phead">
         <div class="who">
@@ -139,7 +175,7 @@
           <button
             class="approve-all"
             disabled={busy}
-            onclick={() => approveAll(records)}
+            onclick={() => (confirmFromEd = fromEd)}
             data-testid="proposer-approve-all"
           >
             Approve all ({pendingCount(records)})
@@ -147,18 +183,64 @@
         {/if}
       </header>
 
-      {#each records as record (record.id)}
-        {#each record.drafts as draft (draft.event.id)}
-          <ProposalDraftRow
-            {draft}
-            {busy}
-            onApprove={(content) => approve(record, draft, content)}
-            onReject={() => reject(record, draft)}
-          />
-        {/each}
+      {#each visible as { record, draft } (`${record.id}:${draft.event.id}`)}
+        <ProposalDraftRow
+          {draft}
+          {busy}
+          onApprove={(content) => approve(record, draft, content)}
+          onReject={() => reject(record, draft)}
+        />
       {/each}
+
+      {#if remaining > 0}
+        <button
+          type="button"
+          class="ghost show-more"
+          onclick={() => showMore(fromEd)}
+          data-testid="proposer-show-more"
+        >
+          Show {PROPOSALS_PAGE_SIZE} more ({remaining} left)
+        </button>
+      {/if}
     </section>
   {/each}
+{/if}
+
+{#if confirmFromEd && confirmRecords.length > 0}
+  {@const copy = approveAllSheetCopy(confirmCount)}
+  <Sheet onclose={closeConfirm}>
+    <h2 data-testid="approve-all-heading">{copy.heading}</h2>
+    <p>{copy.body}</p>
+    <div class="row">
+      <button
+        type="button"
+        class="primary"
+        disabled={busy}
+        onclick={confirmApproveAll}
+        data-testid="approve-all-confirm"
+      >
+        {copy.confirmLabel}
+      </button>
+      <button
+        type="button"
+        class="ghost"
+        disabled={busy}
+        onclick={closeConfirm}
+        data-testid="approve-all-review"
+      >
+        Review one by one
+      </button>
+      <button
+        type="button"
+        class="ghost"
+        disabled={busy}
+        onclick={closeConfirm}
+        data-testid="approve-all-cancel"
+      >
+        Cancel
+      </button>
+    </div>
+  </Sheet>
 {/if}
 
 <style>
@@ -201,5 +283,18 @@
     background: var(--action-muted);
     color: var(--action);
     font-size: var(--text-sm);
+  }
+
+  .show-more {
+    width: 100%;
+    margin-top: var(--space-1);
+    font-size: var(--text-sm);
+  }
+
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-top: var(--space-4);
   }
 </style>

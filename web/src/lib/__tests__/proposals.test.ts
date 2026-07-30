@@ -17,6 +17,10 @@ import {
   proposalsFrom,
   getProposer,
   putProposer,
+  flattenDrafts,
+  visibleDrafts,
+  approveAllSheetCopy,
+  PROPOSALS_PAGE_SIZE,
   type DraftEvent,
   type ProposalRecord,
 } from '../proposals'
@@ -173,5 +177,78 @@ describe('proposer directory', () => {
     await putProposer({ ed: NODE_A, x25519: 'c'.repeat(64), label: 'Home node' })
     expect(await getProposer(NODE_A)).toEqual({ ed: NODE_A, x25519: 'c'.repeat(64), label: 'Home node' })
     expect(await getProposer(NODE_B)).toBeUndefined()
+  })
+})
+
+describe('pagination windowing (M5/D5)', () => {
+  const drafts = (n: number, prefix = 'd') =>
+    Array.from({ length: n }, (_, i) => ({ event: draftEvent(`${prefix}${i}`) }))
+
+  it('PROPOSALS_PAGE_SIZE is 20', () => {
+    expect(PROPOSALS_PAGE_SIZE).toBe(20)
+  })
+
+  it("flattenDrafts preserves record order then each record's own draft order", () => {
+    const a = record({ id: 'a', drafts: drafts(2, 'a') })
+    const b = record({ id: 'b', drafts: drafts(1, 'b') })
+    expect(flattenDrafts([a, b]).map((x) => x.draft.event.id)).toEqual(['a0', 'a1', 'b0'])
+  })
+
+  it("visibleDrafts slices to `shown` across a group's records and reports what remains", () => {
+    const a = record({ id: 'a', drafts: drafts(15, 'a') })
+    const b = record({ id: 'b', drafts: drafts(10, 'b') })
+
+    const page1 = visibleDrafts([a, b], 20)
+    expect(page1.visible.map((x) => x.draft.event.id)).toEqual([
+      ...drafts(15, 'a').map((d) => d.event.id),
+      ...drafts(5, 'b').map((d) => d.event.id),
+    ])
+    expect(page1.remaining).toBe(5)
+
+    const page2 = visibleDrafts([a, b], 40)
+    expect(page2.visible).toHaveLength(25)
+    expect(page2.remaining).toBe(0)
+  })
+
+  it('approving a visible draft does not move the pagination boundary (no duplicate or skipped draft on the next page)', () => {
+    const r = record({ id: 'r', drafts: drafts(25) })
+    const before = visibleDrafts([r], 20)
+    expect(before.visible).toHaveLength(20)
+    expect(before.remaining).toBe(5)
+
+    // Decide two of the currently-visible drafts in place, as setDraftStatus does
+    // (it flips `status` on the same array element rather than removing it).
+    r.drafts[3].status = 'approved'
+    r.drafts[19].status = 'rejected'
+
+    const after = visibleDrafts([r], 20)
+    expect(after.visible.map((x) => x.draft.event.id)).toEqual(before.visible.map((x) => x.draft.event.id))
+    expect(after.remaining).toBe(5)
+
+    // "Show more" reveals exactly the next page: nothing repeated, nothing skipped.
+    const more = visibleDrafts([r], 40)
+    expect(more.visible.map((x) => x.draft.event.id)).toEqual(r.drafts.map((d) => d.event.id))
+    expect(more.remaining).toBe(0)
+  })
+
+  it('an empty group or a group already fully shown has nothing remaining', () => {
+    const r = record({ id: 'r', drafts: drafts(5) })
+    expect(visibleDrafts([r], 20).remaining).toBe(0)
+    expect(visibleDrafts([], 20)).toEqual({ visible: [], remaining: 0 })
+  })
+})
+
+describe('approve-all sheet copy (M5/D5)', () => {
+  it('echoes the exact pending count in the heading and confirm label, with the locked body copy', () => {
+    expect(approveAllSheetCopy(7)).toEqual({
+      heading: 'Approve 7 entries?',
+      body: 'Each one is signed with your key, exactly as if you had logged it yourself. You can still edit or remove entries afterwards.',
+      confirmLabel: 'Approve 7',
+    })
+  })
+
+  it('scales the count for a small and a large batch', () => {
+    expect(approveAllSheetCopy(2).heading).toBe('Approve 2 entries?')
+    expect(approveAllSheetCopy(42).confirmLabel).toBe('Approve 42')
   })
 })
