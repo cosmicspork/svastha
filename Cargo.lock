@@ -2717,6 +2717,7 @@ dependencies = [
  "qrcode",
  "rand_core 0.6.4",
  "rten",
+ "rten-imageproc",
  "serde",
  "serde_json",
  "sha2",

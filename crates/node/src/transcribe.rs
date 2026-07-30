@@ -10,20 +10,16 @@
 //! with no OpenSSL and no C toolchain; `ocrs` (with `rten` underneath) keeps that
 //! true where a Tesseract binding would not.
 //!
-//! ## Why there is no column-aligned rendering here
-//!
-//! The browser assembles lines itself from positioned runs, so it renders a
-//! column-aligned view to stop a lab panel's rows being read across each other.
-//! `ocrs` groups words into lines from the page geometry before recognition, so
-//! the lines this produces are already rows. Sending them numbered — and making
-//! the extractor verify each finding against the line it cites — is the same
-//! protection without a second copy of the layout code in a second language.
+//! `ocrs` recognition regions retain page geometry, but their order is not a
+//! transcript order. This module rebuilds visual rows from those regions before
+//! numbering them for the extractor.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use ocrs::{ImageSource, OcrEngine, OcrEngineParams};
 use rten::Model;
+use rten_imageproc::{bounding_rect, RotatedRect};
 
 /// Where the recognition models live inside the image. Baked in at build time
 /// (see `Dockerfile.node`) rather than fetched at boot: a node that downloads its
@@ -33,6 +29,10 @@ pub const DEFAULT_MODELS_DIR: &str = "/models";
 
 const DETECTION_MODEL: &str = "text-detection.rten";
 const RECOGNITION_MODEL: &str = "text-recognition.rten";
+
+/// Match the browser's row band: centers within this fraction of the shorter
+/// local height share a visual row.
+const ROW_BAND_TOLERANCE: f32 = 0.9;
 
 /// Decode bounds for one page. Three of them, and each catches something the
 /// others do not.
@@ -101,6 +101,99 @@ pub trait PageReader {
     fn transcribe(&self, bytes: &[u8]) -> Result<Vec<String>>;
 }
 
+/// Recognized text paired with the detected region that produced it. The
+/// detector's rectangles are borrowed only while this is built; rows own the
+/// compact geometry and recognized text afterwards.
+struct RecognizedRegion {
+    text: String,
+    x: f32,
+    center_y: f32,
+    height: f32,
+}
+
+struct Row {
+    regions: Vec<RecognizedRegion>,
+    centers: Vec<f32>,
+    heights: Vec<f32>,
+}
+
+fn median(values: &mut [f32]) -> f32 {
+    let len = values.len();
+    let middle = len / 2;
+    let upper = {
+        let (_, upper, _) = values.select_nth_unstable_by(middle, f32::total_cmp);
+        *upper
+    };
+    if len % 2 == 1 {
+        upper
+    } else {
+        let lower = values[..middle]
+            .iter()
+            .copied()
+            .max_by(f32::total_cmp)
+            .expect("the lower half of an even-length slice is non-empty");
+        (lower + upper) / 2.0
+    }
+}
+
+fn joins_row(region: &RecognizedRegion, row: &mut Row) -> bool {
+    let local_height = region.height.min(median(&mut row.heights));
+    (region.center_y - median(&mut row.centers)).abs() <= local_height * ROW_BAND_TOLERANCE
+}
+
+/// Group recognized OCR regions into visual rows, using the same median-center,
+/// row-local band as the browser.
+fn assemble_rows(mut regions: Vec<RecognizedRegion>) -> Vec<String> {
+    regions.retain(|region| !region.text.trim().is_empty());
+    regions.sort_unstable_by(|left, right| {
+        left.center_y
+            .total_cmp(&right.center_y)
+            .then_with(|| left.x.total_cmp(&right.x))
+    });
+
+    let mut rows = Vec::<Row>::new();
+    for region in regions {
+        let joins_open_row = rows.last_mut().is_some_and(|row| joins_row(&region, row));
+        if joins_open_row {
+            let row = rows.last_mut().expect("the open row exists");
+            row.centers.push(region.center_y);
+            row.heights.push(region.height);
+            row.regions.push(region);
+        } else {
+            rows.push(Row {
+                centers: vec![region.center_y],
+                heights: vec![region.height],
+                regions: vec![region],
+            });
+        }
+    }
+    rows.into_iter()
+        .map(|mut row| {
+            row.regions
+                .sort_unstable_by(|left, right| left.x.total_cmp(&right.x));
+            let mut text = String::new();
+            for region in row.regions {
+                let region_text = region.text.trim();
+                if !text.is_empty() {
+                    text.push(' ');
+                }
+                text.push_str(region_text);
+            }
+            text
+        })
+        .collect()
+}
+
+fn recognized_region(text: String, region: &[RotatedRect]) -> Option<RecognizedRegion> {
+    let bounds = bounding_rect(region.iter())?;
+    Some(RecognizedRegion {
+        text,
+        x: bounds.left(),
+        center_y: bounds.center().y,
+        height: bounds.height(),
+    })
+}
+
 /// The in-process page reader. Loading the models costs a few hundred milliseconds
 /// and a chunk of memory, so a single instance is built once and reused for every
 /// page — never per job.
@@ -154,12 +247,15 @@ impl Transcriber {
             .recognize_text(&input, &lines)
             .map_err(|e| anyhow!("could not read the text on this page: {e}"))?;
 
-        Ok(recognized
+        let regions = recognized
             .into_iter()
-            .flatten()
-            .map(|line| line.to_string().trim().to_string())
-            .filter(|line| !line.is_empty())
-            .collect())
+            .zip(lines)
+            .filter_map(|(text, region)| {
+                text.and_then(|text| recognized_region(text.to_string(), &region))
+            })
+            .collect();
+
+        Ok(assemble_rows(regions))
     }
 }
 
@@ -247,6 +343,32 @@ mod tests {
     #[test]
     fn an_empty_transcript_numbers_to_nothing() {
         assert_eq!(numbered(&[]), "");
+    }
+
+    fn region(text: &str, x: f32, center_y: f32, height: f32) -> RecognizedRegion {
+        RecognizedRegion {
+            text: text.to_string(),
+            x,
+            center_y,
+            height,
+        }
+    }
+
+    #[test]
+    fn column_major_regions_are_reassembled_into_visual_rows() {
+        let lines = assemble_rows(vec![
+            // `ocrs` can return the regions a column at a time. The cells at
+            // 108.9 and 127.0 are 0.1 px inside the 0.9-height band; the next
+            // labels are far enough from the running median to remain separate.
+            region("Sodium", 10.0, 100.0, 10.0),
+            region("Potassium", 10.0, 118.1, 10.0),
+            region("139", 110.0, 108.9, 10.0),
+            region("4.1", 110.0, 127.0, 10.0),
+            region("mmol/L", 180.0, 100.2, 10.0),
+            region("mmol/L", 180.0, 118.3, 10.0),
+        ]);
+
+        assert_eq!(lines, vec!["Sodium 139 mmol/L", "Potassium 4.1 mmol/L"]);
     }
 
     /// A real RGB PNG of the given size. One pixel tall keeps it cheap: the
