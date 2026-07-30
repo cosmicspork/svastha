@@ -3,6 +3,9 @@
   import { formatDay, formatTime, dayKey } from '../lib/time'
   import type { AttachmentRef } from '../lib/timeline'
   import { prettyTextForDoc } from '../lib/provenance'
+  // Type-only, so naming the read flow's outcome here costs the viewer's bundle
+  // nothing: neither wasm nor the inference client comes with it.
+  import type { ReadNotice, ReadNoticeAction } from '../lib/read-page'
   import PdfDoc from './PdfDoc.svelte'
 
   /** How a page's bytes are shown: image/* inline, application/pdf via pdf.js,
@@ -22,6 +25,8 @@
     source = null,
     loadBytes,
     onread,
+    notice = null,
+    readPages = new Set<string>(),
     onclose,
   }: {
     pages: AttachmentRef[]
@@ -37,6 +42,13 @@
      * owner's own record can be proposed into, so the share-recipient mounts
      * leave it off and the action simply isn't there. */
     onread?: (sha256: string, bytes: Uint8Array, mime: string) => Promise<void>
+    /** What the last read amounted to, drawn over the stage. A read that fails
+     * behind the viewer is a read that reported nothing, so every outcome
+     * belongs in here — including the ones the owner can act on. */
+    notice?: ReadNotice | null
+    /** Pages already read on this device, by content hash: the action reads
+     * "Read again" for those. */
+    readPages?: Set<string>
     onclose: () => void
   } = $props()
 
@@ -60,6 +72,9 @@
   const total = $derived(pages.length)
   const kind = $derived(renderKind(pages[index].mime))
   const pretty = $derived(currentBytes ? prettyTextForDoc(currentBytes, pages[index].mime) : null)
+  // Tied to the page it came from, so paging away hides it and paging back
+  // brings it with the page it is about.
+  const shownNotice = $derived(notice?.sha256 === pages[index].sha256 ? notice : null)
   const recordedDay = $derived(formatDay(dayKey(recordedIso)))
   const recordedTime = $derived(formatTime(recordedIso))
 
@@ -102,6 +117,18 @@
     if (next < 0 || next >= total) return
     index = next
     void show(index)
+  }
+
+  /** Run a notice's action with the same busy state the read action uses —
+   * "Continue" and "Turn on reading" both go back to the endpoint or the
+   * network, and neither should be re-entrant. */
+  async function runAction(action: ReadNoticeAction) {
+    reading = true
+    try {
+      await action.onclick()
+    } finally {
+      reading = false
+    }
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -148,7 +175,7 @@
           }
         }}
       >
-        {reading ? 'Reading…' : 'Read this page'}
+        {reading ? 'Reading…' : readPages.has(pages[index].sha256) ? 'Read again' : 'Read this page'}
       </button>
     {/if}
     <button type="button" class="close" aria-label="Close" onclick={onclose} data-testid="viewer-close">
@@ -213,6 +240,35 @@
       >
         ›
       </button>
+    {/if}
+
+    {#if shownNotice}
+      <div
+        class="notice"
+        class:error={shownNotice.tone === 'error'}
+        role="status"
+        data-testid="read-notice"
+      >
+        <p class="notice-text" data-testid="read-notice-text">{shownNotice.text}</p>
+        {#if shownNotice.detail}
+          <p class="notice-detail" data-testid="read-notice-detail">{shownNotice.detail}</p>
+        {/if}
+        {#if shownNotice.actions.length > 0}
+          <div class="notice-actions">
+            {#each shownNotice.actions as action (action.label)}
+              <button
+                type="button"
+                class={action.kind}
+                disabled={reading}
+                onclick={() => runAction(action)}
+                data-testid="read-notice-action"
+              >
+                {action.label}
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
     {/if}
   </div>
 
@@ -381,6 +437,56 @@
 
   .nav.next {
     right: var(--space-3);
+  }
+
+  /* An app-surface card floating over the black stage, just above the meta
+     band: the outcome of reading a page belongs on top of the page it was read
+     from, not on the screen underneath the viewer. Its own tokens rather than
+     the viewer's white-on-black, so it reads as the app speaking. */
+  .notice {
+    position: absolute;
+    left: var(--space-4);
+    right: var(--space-4);
+    bottom: var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: var(--shadow-2);
+  }
+
+  .notice.error {
+    border-color: var(--danger);
+  }
+
+  .notice-text {
+    margin: 0;
+    font-size: var(--text-sm);
+    color: var(--action);
+  }
+
+  .notice.error .notice-text {
+    color: var(--danger);
+  }
+
+  .notice-detail {
+    margin: var(--space-1) 0 0;
+    font-size: var(--text-xs);
+    color: var(--muted);
+  }
+
+  .notice-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    margin-top: var(--space-3);
+  }
+
+  .notice-actions button {
+    min-height: 38px;
+    padding: var(--space-1) var(--space-3);
+    font-size: var(--text-sm);
   }
 
   .meta {

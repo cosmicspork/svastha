@@ -140,6 +140,46 @@ describe('persistence + dedupe', () => {
     expect((await getProposal('m1'))!.drafts[0].status).toBe('approved')
   })
 
+  // Re-reading a page files under the same record id (see read-page.ts). The
+  // second pass has to land: an owner who re-reads a page and is told it
+  // worked, while nothing changed, has been lied to.
+  it('upsertProposal replaces the undecided drafts of an already-seen id', async () => {
+    await upsertProposal(
+      record({
+        id: 'local-att',
+        drafts: [{ event: draftEvent('ev-1') }, { event: draftEvent('ev-2') }],
+      }),
+    )
+    await setDraftStatus('local-att', 'ev-1', 'approved')
+
+    // A second read of the same page, coded differently this time.
+    await upsertProposal(record({ id: 'local-att', drafts: [{ event: draftEvent('ev-3') }] }))
+
+    const merged = (await getProposal('local-att'))!
+    expect(merged.drafts.map((d) => [d.event.id, d.status])).toEqual([
+      ['ev-3', 'pending'],
+      ['ev-1', 'approved'],
+    ])
+  })
+
+  // A decision is a fact about an event, not about the pass that proposed it.
+  it('upsertProposal keeps a decided draft the new pass no longer proposes', async () => {
+    await upsertProposal(
+      record({
+        id: 'local-att',
+        drafts: [{ event: draftEvent('ev-1') }, { event: draftEvent('ev-2') }],
+      }),
+    )
+    await setDraftStatus('local-att', 'ev-1', 'rejected')
+    await setDraftStatus('local-att', 'ev-2', 'approved')
+
+    await upsertProposal(record({ id: 'local-att', drafts: [{ event: draftEvent('ev-9') }] }))
+
+    const merged = (await getProposal('local-att'))!
+    expect(merged.drafts.map((d) => d.event.id)).toEqual(['ev-9', 'ev-1', 'ev-2'])
+    expect(merged.resolved).toBe(false)
+  })
+
   it('setDraftStatus flips a draft and recomputes resolved', async () => {
     await upsertProposal(
       record({ id: 'm2', drafts: [{ event: draftEvent('ev-a') }, { event: draftEvent('ev-b') }] }),

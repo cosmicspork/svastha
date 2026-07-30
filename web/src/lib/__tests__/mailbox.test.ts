@@ -319,7 +319,7 @@ describe('pullMailbox dispatch', () => {
 })
 
 describe('resolveProposalIfDone', () => {
-  async function seedResolved(resultSent = false) {
+  async function seedResolved(resultSent = false, local = false) {
     const record = buildProposalRecord({
       id: 'msg-1',
       fromEd: NODE,
@@ -329,6 +329,7 @@ describe('resolveProposalIfDone', () => {
         { event: { id: 'ev-a', kind: 'observation', code: null, effective_at: null, value: null, provenance: { source: 'n', source_doc: null } } },
         { event: { id: 'ev-b', kind: 'observation', code: null, effective_at: null, value: null, provenance: { source: 'n', source_doc: null } } },
       ],
+      ...(local ? { local: true } : {}),
     })
     record.drafts[0].status = 'approved'
     record.drafts[1].status = 'rejected'
@@ -350,6 +351,38 @@ describe('resolveProposalIfDone', () => {
     expect(client.put[0].recipient).toBe(NODE)
     expect(client.deleted).toContain('item-1')
     expect(await getProposal('msg-1')).toBeUndefined()
+  })
+
+  it('retains resolved local decisions when the same page is re-read', async () => {
+    await seedResolved(false, true)
+    expect(await resolveProposalIfDone('msg-1')).toBe(true)
+
+    await upsertProposal(
+      buildProposalRecord({
+        id: 'msg-1',
+        fromEd: NODE,
+        mailboxItemId: '',
+        sentAt: 2,
+        local: true,
+        drafts: [
+          {
+            event: {
+              id: 'ev-a',
+              kind: 'observation',
+              code: null,
+              effective_at: null,
+              value: null,
+              provenance: { source: 'n', source_doc: null },
+            },
+          },
+        ],
+      }),
+    )
+
+    expect((await getProposal('msg-1'))!.drafts.map((draft) => [draft.event.id, draft.status])).toEqual([
+      ['ev-a', 'approved'],
+      ['ev-b', 'rejected'],
+    ])
   })
 
   it('defers the reply (keeps the record) when the proposer key is unknown', async () => {

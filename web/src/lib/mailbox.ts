@@ -739,9 +739,11 @@ export async function retryAnswerScope(): Promise<AnswerScopeCommit> {
 // --- resolution: echo the decision back to the proposer ---
 
 /**
- * Once every draft in a proposal is decided, seal a `proposal_result` back to
- * the proposer's mailbox, delete the now-handled incoming item, and forget the
- * proposal locally. A no-op while any draft is still pending.
+ * Once every draft in a remote proposal is decided, seal a `proposal_result`
+ * back to the proposer's mailbox, delete the now-handled incoming item, and
+ * forget that remote proposal locally. Locally-read records have neither an
+ * item nor a recipient, so their resolved decisions remain as the re-read merge
+ * baseline. A no-op while any draft is still pending.
  *
  * The reply is sealed to the proposer's **X25519** key, which the incoming
  * `proposal` envelope does not carry (it carries only the proposer's Ed25519
@@ -749,20 +751,18 @@ export async function retryAnswerScope(): Promise<AnswerScopeCommit> {
  * it; see proposals.ts). If it is unknown, the local resolution still stands —
  * approved events were already signed and synced — but the reply is deferred
  * and `resultSent` stays false, so a later pass (once enrollment is known) can
- * complete it. Returns whether the reply was sent.
+ * complete it. Returns whether resolution completed.
  */
 export async function resolveProposalIfDone(proposalId: string): Promise<boolean> {
   const record = await getProposal(proposalId)
   if (!record || !record.resolved || record.resultSent) return false
 
   // A locally-read proposal has no envelope to delete and nobody to reply to —
-  // this device authored it. Checked before the relay guard, because reading a
-  // page and approving what it found needs no relay at all. Without this it
-  // would look up its own identity in the proposer directory (which deliberately
-  // holds only nodes and caregivers), warn, mark the result unsent, and leave
-  // the record pending forever.
+  // this device authored it. Keep its resolved decisions as the re-read merge
+  // baseline: pendingProposals already hides resolved records, so retention adds
+  // no inbox work while preventing an approved/rejected event from returning as
+  // a fresh draft on the next pass.
   if (record.local) {
-    await removeProposal(proposalId)
     return true
   }
 
