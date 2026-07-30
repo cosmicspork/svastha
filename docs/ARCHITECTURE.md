@@ -331,17 +331,12 @@ stays under its own license instead of being embedded in signed events.
   proposes coded events from what it read, into the same approval queue a node's
   proposals land in.
 
-  This reverses an earlier decision that "OCR stays out of the web app by
-  design", which held that reading a photo's contents belonged to native OS OCR
-  or the processing node, "inside the user's trust boundary". The reasoning
-  conflated *inside the boundary* with *on a server*: the browser holds the seed
-  and the decrypted vault, so it was always inside the boundary — and reading
-  locally is in fact the stronger posture, because the page image never leaves
-  the device, where the node used to upload it to a vision endpoint. Handwriting
-  is the one thing neither reader will do — the node transcribes in-process now
-  too, so no vision model is involved anywhere — and a handwritten page answers
-  "couldn't read this" rather than being guessed at. Entering it by hand is the
-  remaining route.
+  The browser was always inside the trust boundary — it holds the seed and the
+  decrypted vault — so reading locally rather than on a server is the stronger
+  posture: the page image never leaves the device, and only the transcribed
+  text goes out for coding. Handwriting is the one thing no reader will do,
+  on-device or on a node — a handwritten page answers "couldn't read this"
+  rather than being guessed at, and entering it by hand is the remaining route.
 - **India (later).** ABDM is consent-federated rather than self-custodial; it is
   a future boundary adapter, and its consent-artifact schema is prior art for
   the grant model.
@@ -430,24 +425,27 @@ enrolls another vault, and tenants are structurally isolated.
 What it runs: page reading into draft coded events (each proposal carrying
 source-blob, method, and model provenance) — transcribed **in-process**, so the
 page image never leaves the node and every finding must quote back the numbered
-line it was read from or be dropped, and cited Q&A over the
-owner's own record (every answer cites the event ids it drew from; an answer
-that cannot be grounded is an honest "couldn't answer").
+line it was read from or be dropped — and cited Q&A over the owner's own record
+(every answer cites the event ids it drew from; an answer that cannot be
+grounded is an honest "couldn't answer").
 
-**Cited Q&A no longer requires a node.** The app holds the decrypted vault
-already, so it can retrieve, prompt, and ground on its own once the owner points
-it at an inference endpoint (Settings → AI); `crates/retrieval` is shared with
-the node through WASM, so both run one ranker and one citation contract rather
-than two that could drift. A node is still what you want for work the browser
-cannot do: a large backlog it can chew through while nothing is open (a phone
-gets no reliable background execution), several household vaults served from one
-place, and one machine holding an inference credential instead of every device.
+**Cited Q&A runs on the app too, without a node.** The app holds the decrypted
+vault already, so it can retrieve, prompt, and ground on its own once the owner
+points it at an inference endpoint (Settings → AI); `crates/retrieval` is shared
+with the node through WASM, so both run one ranker and one citation contract
+rather than two that could drift. A node is still what you want for work the
+browser cannot do: a large backlog it can chew through while nothing is open (a
+phone gets no reliable background execution), several household vaults served
+from one place, and one machine holding an inference credential instead of
+every device.
 
-It ships no models —
-inference delegates to a user-supplied OpenAI-compatible endpoint (Ollama, LM
-Studio, vLLM, or a cloud endpoint the user explicitly chooses), which is how AI
-features stay compatible with a zero-knowledge relay: the trust decision about
-who sees plaintext belongs to the owner, explicitly, in one place.
+It ships no *language* models — inference delegates to a user-supplied
+OpenAI-compatible endpoint (Ollama, LM Studio, vLLM, or a cloud endpoint the
+user explicitly chooses), which is how AI features stay compatible with a
+zero-knowledge relay: the trust decision about who sees plaintext belongs to
+the owner, explicitly, in one place. It does carry the small page-reading
+models (~15 MiB) baked into its image, so transcription works without a
+network call.
 
 Its state mirrors its trust position: the only durable state is a disposable
 identity keypair (lose it, re-enroll via a fresh grant); decrypted plaintext
@@ -611,7 +609,8 @@ keystore (Keychain, Keystore) then secures the seed in hardware.
 
 ## Self-hosting
 
-Two roles with different trust properties:
+Two roles with different trust properties, and a third place plaintext goes
+even where nobody is hosting anything:
 
 - **Relay.** Keyless and dumb. Anyone can run the binary and point a client at it.
   A compromised relay leaks nothing but ciphertext and metadata.
@@ -621,9 +620,18 @@ Two roles with different trust properties:
   the trust boundary: a compromised node leaks plaintext, so the host must be
   secured accordingly. The node needs no inbound connections (it reaches the
   relay outbound), so a deployment stays secure regardless of network topology.
+- **Inference endpoint.** Not infrastructure you run — the OpenAI-compatible
+  endpoint the owner points AI features at (Settings → AI), needed whether or
+  not a node is enrolled: the app reads a page on-device, but coding what it
+  read and answering cited questions both delegate to this endpoint, sending
+  the transcribed text and decrypted record excerpts straight from the browser.
+  Point it at local Ollama/vLLM and plaintext never leaves your machines; point
+  it at a cloud endpoint and that is the owner's explicit, revocable choice,
+  made per device. The relay never sees any of it.
 
 Keep these separate so the hosted relay stays truthfully zero-knowledge while
-power users can run everything locally, from the same codebase.
+power users can run everything — including inference — locally, from the same
+codebase.
 
 ## Keep in sync
 

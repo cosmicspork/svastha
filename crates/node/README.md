@@ -3,7 +3,9 @@
 The [Svastha](https://github.com/cosmicspork/svastha) node: a trusted processing
 client that holds keys, syncs a vault's plaintext locally, and runs page reading and cited
 Q&A by delegating inference to a user-supplied OpenAI-compatible endpoint. It ships
-no models.
+no *language* models — inference is always the user's own endpoint — but it does
+carry the small page-reading models (~15 MiB; see `SVASTHA_NODE_OCR_MODELS_DIR`
+below).
 
 The node is a **keyed grantee**, not a service: each owner grants it whole-vault
 read access from their app and hands off the keys through the relay's mailbox. It

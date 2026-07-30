@@ -10,6 +10,8 @@ harvest a PR's "## Deferred" notes into the list.
 - Multi-relay replication — client-driven; relays stay dumb replicas, no
   inter-relay protocol (contract enablers — envelope message ids, mergeable
   epoch ids — land with the protocol wave)
+- Ordered transition token + per-owner node-side high-water mark for admin
+  commands (cross-pass replay/reorder; trust-contract design)
 
 ## Sharing
 
@@ -37,6 +39,8 @@ harvest a PR's "## Deferred" notes into the list.
 - Per-item curation on grouped spine entries
 - Long-press bloom shortcut
 - Friendly provenance source names
+- Compare-and-update for `applyAdminReply` and `noteNodeSeen`
+  (two-transaction read-modify-write races)
 
 ## Native (arrives with the wrapper)
 
@@ -46,10 +50,6 @@ harvest a PR's "## Deferred" notes into the list.
 - Research marketplace (the grant primitive at different settings)
 
 ## AI on device
-
-The node is now optional: the app holds the decrypted vault, so it reads pages
-and answers cited questions itself, and vision models are gone from both sides.
-What is left is measurement and polish.
 
 - Measure the node's in-process page reader against real pages before trusting
   it unattended — it replaced a working vision path and has not been run against
@@ -62,11 +62,12 @@ What is left is measurement and polish.
 - Runtime-cache the OCR assets in the service worker, so a device that has
   switched on on-device reading can still read a page offline (they are excluded
   from the install precache, so today it depends on the browser's HTTP cache)
-
-Handwriting is out of scope for both readers — the node transcribes in-process
-too, so no vision model is left to fall back on. A handwritten page answers
-"couldn't read this page" rather than guessing; entering it by hand is the
-remaining route, and that is the deliberate choice, not a gap to close.
+- UCUM-aware unit validation for extraction claims (claimed unit is currently
+  unvalidated)
+- Decide unit-vocabulary handling for integer+attached one-part units ("10mg"
+  currently drops by design)
+- Read-page message distinguishes unparseable model output from an empty page
+  (web; wasm already carries the flag)
 
 ## Processing node
 
@@ -74,6 +75,17 @@ remaining route, and that is the deliberate choice, not a gap to close.
   proposals (follow-up to OCR proposals)
 - Sender-sealed push notification hints — richer lock-screen text needs a
   service-worker-accessible key custody decision first
+- Active node must derive from live grant state — a revoked node's proposer
+  row still selects it and its messages stay accepted (trust boundary;
+  predates the AI arc, PR #115 lineage)
+- Fail-closed node Q&A enrollment handshake — send and confirm an empty
+  answer scope before enabling the node branch
+- Attempt cap for pages whose model output is persistently unusable (journal
+  retries on backoff indefinitely)
+- Within-pass `sent_at` ordering for `pause_ocr`/`resume_ocr` like
+  `set_answer_scope` (a reversed pair leaves reading on)
+- Decide: node inference endpoint as owner command vs. host-operator config
+  (any enrolled owner can currently repoint it for all)
 
 ## Intentionally not doing
 
@@ -90,3 +102,7 @@ remaining route, and that is the deliberate choice, not a gap to close.
   Global Patient Set; CPT falls through to the earlier display layers.
 - **Code-less negative statements** ("No known drug allergies") — the app
   says "None recorded", never a clinical negative the vault can't back.
+- **Handwriting recognition** — out of scope for both readers; the node
+  transcribes in-process too, so no vision model is left to fall back on. A
+  handwritten page answers "couldn't read this page" rather than guessing;
+  entering it by hand is the remaining route.
