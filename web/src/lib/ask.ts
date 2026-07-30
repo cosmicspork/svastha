@@ -36,7 +36,13 @@ import { allStatuses, allNames, type ConceptStatus } from './curation'
 import { buildCodeNameIndex, resolveDisplay } from './code-names'
 import { loadDictionaryIndex } from './dictionary'
 import { conceptKey } from './summary'
-import { loadConfig, chatComplete, endpointHost, InferenceError } from './inference'
+import {
+  loadConfig,
+  chatComplete,
+  endpointHost,
+  InferenceError,
+  type InferenceConfig,
+} from './inference'
 import { appendLocalTurn, dropTurn } from './chat'
 import { filterSensitive, loadOptIns } from './answerScope'
 import type { Code } from './codes'
@@ -177,11 +183,9 @@ async function gatherCandidates(): Promise<Candidate[]> {
 }
 
 /**
- * Whether this device can answer without a node, and the host it would send to.
- *
- * Read together on purpose: the UI labels an answer with the host, and a label
- * derived from a second, later read could name an endpoint that is not the one
- * the answer actually went to.
+ * Whether this device can answer without a node, together with the host for the
+ * current mode label. Returning the two from one config snapshot keeps a ready
+ * mode from displaying a host read from a different configuration.
  */
 export async function localAnswerer(): Promise<{ ready: boolean; host: string }> {
   const config = await loadConfig()
@@ -208,7 +212,13 @@ export async function canAnswerLocally(): Promise<boolean> {
  * say".
  */
 export async function askLocally(question: string): Promise<GroundedAnswer> {
-  const config = await loadConfig()
+  return askWithConfig(question, await loadConfig())
+}
+
+async function askWithConfig(
+  question: string,
+  config: InferenceConfig | null,
+): Promise<GroundedAnswer> {
   if (!config?.endpoint || !config.model) {
     throw new InferenceError('No inference endpoint is configured on this device.')
   }
@@ -264,12 +274,13 @@ export async function askLocally(question: string): Promise<GroundedAnswer> {
 export async function askAndRecord(question: string): Promise<void> {
   const asked = await appendLocalTurn('user', question)
   try {
-    const answer = await askLocally(question)
+    const config = await loadConfig()
+    const answer = await askWithConfig(question, config)
     // The caveat goes into the turn itself, not a transient banner: the
     // transcript is what gets re-read later, and an answer recorded without the
     // note that records were missing from it reads as complete forever.
     const body = answer.caveat ? `${answer.text}\n\n${answer.caveat}` : answer.text
-    await appendLocalTurn('node', body, answer.citations)
+    await appendLocalTurn('node', body, answer.citations, endpointHost(config?.endpoint ?? ''))
   } catch (err) {
     await dropTurn(asked.id)
     throw err

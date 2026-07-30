@@ -104,6 +104,16 @@ describe('askAndRecord', () => {
     expect(turns.every((t) => t.id.startsWith('local-'))).toBe(true)
     expect(conversationState(turns)).toBe('answered')
   })
+  it('keeps the answering endpoint with a local answer after settings change', async () => {
+    wasm.ground_answer.mockReturnValue('{"answer":"You take X.","citations":["aaa"]}')
+    fetchMock.mockResolvedValue(reply('{"answer":"You take X.","used":[1]}'))
+
+    await askAndRecord('what do i take')
+    config.value = { endpoint: 'https://new-model.home.arpa/v1', model: 'm' }
+
+    const answer = (await listChatTurns()).find((turn) => turn.role === 'node')!
+    expect(answer.sourceHost).toBe('llama.home.arpa')
+  })
 
   it('keeps the caveat with the answer it qualifies', async () => {
     wasm.rank_context.mockReturnValue(`{"items":[${LINE}],"unreadable":2}`)

@@ -21,6 +21,9 @@ export interface ChatTurn {
   text: string
   /** Event content ids an answer cited (always empty on a `user` turn). */
   citations: string[]
+  /** Endpoint host that generated this local answer. Kept with the turn so a
+   * later Settings change cannot rewrite where a recorded answer came from. */
+  sourceHost?: string
   /** ISO instant this turn was recorded on this device. Drives order. */
   createdAt: string
 }
@@ -81,12 +84,14 @@ export async function appendLocalTurn(
   role: ChatTurn['role'],
   text: string,
   citations: string[] = [],
+  sourceHost?: string,
 ): Promise<ChatTurn> {
   const turn: ChatTurn = {
     id: `local-${crypto.randomUUID()}`,
     role,
     text,
     citations,
+    ...(sourceHost ? { sourceHost } : {}),
     createdAt: new Date().toISOString(),
   }
   await appendTurn(turn)

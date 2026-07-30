@@ -47,9 +47,9 @@
   // (Settings -> AI). It is preferred over the node when both are available: no
   // mailbox round-trip, and it works while the node is asleep.
   let localReady = $state(false)
-  // The host the configured endpoint reaches. This is what the mode pill and the
-  // local turns are labelled with: an answer that left this device for a model
-  // on the LAN did not come from "this device", whatever the setting is called.
+  // The current endpoint host. It labels the mode pill; each completed local
+  // answer keeps its own host in the transcript so Settings changes do not
+  // rewrite where an earlier answer came from.
   let localHost = $state('')
   let askError = $state('')
   // Who the outstanding question went to. A one-off fallback to the node does
@@ -216,7 +216,7 @@
               >{turn.role === 'user'
                 ? 'You'
                 : turn.id.startsWith('local-')
-                  ? localHost
+                  ? turn.sourceHost || localHost
                   : nodeLabel}</span
             >
             <p class="text">{turn.text}</p>
