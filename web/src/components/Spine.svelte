@@ -309,7 +309,7 @@
       text,
       actions: [
         {
-          label: `Turn on reading${await readerSize()}`,
+          label: `Prepare reading${await readerSize()}`,
           kind: 'tonal',
           onclick: () => turnOnReading(sha256, mime, fromPage),
         },

@@ -14,11 +14,9 @@
     testConnection,
   } from '../../lib/inference'
   import {
-    assetsEnabled,
+    pageReadingEnabled,
     enableAssets,
     disableAssets,
-    loadManifest,
-    downloadBytes,
   } from '../../lib/ocr-assets'
   import {
     OPT_IN_CATEGORIES,
@@ -84,9 +82,9 @@
   // Where questions are answered (answerWhere.ts). Page reading follows it too.
   let answerWhere = $state<AnswerWhere>('auto')
 
-  // On-device page reading. Off by default and staying that way until its
-  // accuracy has been measured against the tabular fixtures — a lab panel read
-  // wrong is a wrong number against the right analyte.
+  // Page reading is enabled unless this device explicitly turns it off. Its
+  // runtime stays lazy: this is only the preference, not a claim that assets
+  // have been downloaded and verified.
   let ocrOn = $state(false)
   let ocrBusy = $state(false)
   let ocrError = $state('')
@@ -174,10 +172,7 @@
     endpointRecord = await loadNodeEndpoint()
     nodeEndpoint = endpointRecord?.endpoint ?? ''
     await refreshAdminLog()
-    ocrOn = await assetsEnabled()
-    void loadManifest()
-      .then((m) => (ocrSizeMb = downloadBytes(m) / 1024 / 1024))
-      .catch(() => {})
+    ocrOn = await pageReadingEnabled()
     const config = await loadConfig()
     if (config) {
       endpoint = config.endpoint
@@ -656,7 +651,7 @@
 
   <div class="swatches">
     <button type="button" onclick={toggleOcr} disabled={ocrBusy} data-testid="ocr-toggle">
-      {ocrOn ? 'Turn off' : `Turn on${ocrSizeMb ? ` (${ocrSizeMb.toFixed(0)} MB)` : ''}`}
+      {ocrOn ? 'Turn off' : 'Turn on'}
     </button>
   </div>
   {#if ocrBusy}
@@ -668,8 +663,9 @@
     <p class="error" data-testid="ocr-error">{ocrError}</p>
   {/if}
   <p class="muted note">
-    A one-time download, checked against the checksums this app shipped with before it is switched
-    on. Everything is served from this app — nothing is fetched from anyone else's servers.
+    Reading pages is on by default. The first photographed or scanned page needs an approximately
+    10 MB download, checked against the checksums this app shipped with before it can run. Turn it
+    off here to avoid that download on a metered connection.
   </p>
   {#if unreadPages.length > 0}
     <div class="bulk-read-card" data-testid="bulk-read-card">

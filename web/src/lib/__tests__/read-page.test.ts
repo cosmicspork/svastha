@@ -44,7 +44,10 @@ vi.mock('../proposals', async () => {
     }),
   }
 })
-const ocr = vi.hoisted(() => ({ assetsEnabled: vi.fn(async () => true) }))
+const ocr = vi.hoisted(() => ({
+  assetsEnabled: vi.fn(async () => true),
+  pageReadingEnabled: vi.fn(async () => true),
+}))
 vi.mock('../ocr-assets', () => ocr)
 vi.mock('../session.svelte', () => ({
   session: { identity: { ed25519_public_hex: 'owner-ed' } },
@@ -103,6 +106,7 @@ const longDocument = (count: number): OcrLine[][] =>
 beforeEach(() => {
   stored.records = []
   ocr.assetsEnabled.mockResolvedValue(true)
+  ocr.pageReadingEnabled.mockResolvedValue(true)
   for (const fn of [...Object.values(wasm), ...Object.values(engines), ...Object.values(inference)]) {
     if (typeof fn === 'function' && 'mockReset' in fn) (fn as { mockReset: () => void }).mockReset()
   }
@@ -135,10 +139,22 @@ describe('transcribe', () => {
     )
   })
 
+  it('names lazy preparation when a default-enabled reader has not verified its assets', async () => {
+    ocr.assetsEnabled.mockResolvedValue(false)
+
+    const err = await transcribe(new Uint8Array(), 'image/jpeg').catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(ReadingOffError)
+    expect((err as Error).message).toBe(
+      'Reading pages needs its one-time download before it can read this page.',
+    )
+  })
+
   // A PDF with no text layer is a scan. Whether the recognizer is switched on
   // is the one thing about that the owner can change, so it is what the error
   // has to say — and only when it is true.
   it('names the switch when a scan meets a reader that is off', async () => {
+    ocr.pageReadingEnabled.mockResolvedValue(false)
     ocr.assetsEnabled.mockResolvedValue(false)
     const err = await transcribe(new Uint8Array(), 'application/pdf').catch((e: unknown) => e)
     expect(err).toBeInstanceOf(ReadingOffError)

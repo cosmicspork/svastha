@@ -58,6 +58,32 @@ async function openCapturedPdf(page: Page): Promise<void> {
   await expect(page.getByTestId('viewer-pdf').locator('canvas')).toBeVisible()
 }
 
+test('page reading starts on without downloading assets, and an explicit opt-out survives reload', async ({
+  page,
+}) => {
+  const ocrRequests: string[] = []
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname.startsWith('/ocr/')) ocrRequests.push(request.url())
+  })
+
+  await onboardViaUI(page)
+  await page.evaluate(() => (window.location.hash = '#/settings/ai'))
+
+  const toggle = page.getByTestId('ocr-toggle')
+  await expect(toggle).toHaveText('Turn off')
+  expect(ocrRequests).toEqual([])
+
+  await toggle.click()
+  await expect(toggle).toHaveText('Turn on')
+  expect(ocrRequests).toEqual([])
+
+  await page.reload()
+  await page.getByTestId('unlock-passphrase').fill('correct horse battery staple')
+  await page.getByTestId('unlock-submit').click()
+  await expect(toggle).toHaveText('Turn on')
+  expect(ocrRequests).toEqual([])
+})
+
 test('a read reports inside the viewer, and re-reading updates', async ({ page }) => {
   await stubEndpoint(page, CODED)
   await onboardViaUI(page)
