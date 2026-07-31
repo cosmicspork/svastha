@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.14.0](https://github.com/cosmicspork/svastha/compare/v0.13.0...v0.14.0) (2026-07-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* **ai:** one AI screen, and each owner brings their own node endpoint ([#178](https://github.com/cosmicspork/svastha/issues/178))
+* **node:** scope reading pause to the owner who sent it ([#167](https://github.com/cosmicspork/svastha/issues/167))
+
+### Features
+
+* **ai:** keep sensitive categories out of answers unless opted in ([#170](https://github.com/cosmicspork/svastha/issues/170)) ([41097e4](https://github.com/cosmicspork/svastha/commit/41097e440559e482ec0e844ccfbdc131e9ccde3e))
+* **ai:** one AI screen, and each owner brings their own node endpoint ([#178](https://github.com/cosmicspork/svastha/issues/178)) ([31c6d9e](https://github.com/cosmicspork/svastha/commit/31c6d9e1392c2bdc96eb2575f6ed2778a87e5127))
+* **devtool:** score the page readers against fixture pages ([#177](https://github.com/cosmicspork/svastha/issues/177)) ([0435103](https://github.com/cosmicspork/svastha/commit/0435103f931f710f4b7762dd6c831595488e3deb))
+* **node:** pause page reading by default and cap each pass ([#157](https://github.com/cosmicspork/svastha/issues/157)) ([a28be3b](https://github.com/cosmicspork/svastha/commit/a28be3b2a37f2a19122ead7286bdadc3687d2f75))
+* **node:** two-stage extraction with in-process OCR ([#156](https://github.com/cosmicspork/svastha/issues/156)) ([1f72aea](https://github.com/cosmicspork/svastha/commit/1f72aeabdc523f21e872d14a53212c683bbffaa5))
+* **relay:** batched blob fetch via include=body on the listings ([#146](https://github.com/cosmicspork/svastha/issues/146)) ([a7884c2](https://github.com/cosmicspork/svastha/commit/a7884c26a7cfbd620f3c7df7ec43933ed06074e3))
+* **web:** answer questions on this device ([#151](https://github.com/cosmicspork/svastha/issues/151)) ([36c793e](https://github.com/cosmicspork/svastha/commit/36c793e61d8afb5d04252a5c8adc604b82b33a63))
+* **web:** bulk "read my unread pages" ([#179](https://github.com/cosmicspork/svastha/issues/179)) ([af84e06](https://github.com/cosmicspork/svastha/commit/af84e06b421e4c78805a620b6dc130e97c784a3c))
+* **web:** configure an inference endpoint on this device ([#150](https://github.com/cosmicspork/svastha/issues/150)) ([6f11171](https://github.com/cosmicspork/svastha/commit/6f11171648a92c7fa1f7404c9e8711ac00a7c7b1))
+* **web:** give the ask screen a front door, an honest pill, and a visible failure state ([#174](https://github.com/cosmicspork/svastha/issues/174)) ([2c93609](https://github.com/cosmicspork/svastha/commit/2c936098c3db73f224c357f3559f29c1bb5aeea4))
+* **web:** on-device reading defaults to on ([#180](https://github.com/cosmicspork/svastha/issues/180)) ([c7ebd52](https://github.com/cosmicspork/svastha/commit/c7ebd5294c89fd9486ef8b0170e1f40bfa5043ad))
+* **web:** optional on-device OCR for photographed pages ([#154](https://github.com/cosmicspork/svastha/issues/154)) ([6696554](https://github.com/cosmicspork/svastha/commit/66965545a29f6af627d2c89a0190209e273ce4e1))
+* **web:** paginate proposal groups and confirm approve-all ([#175](https://github.com/cosmicspork/svastha/issues/175)) ([8aee8ad](https://github.com/cosmicspork/svastha/commit/8aee8ad7ad94e96eb715bf92ba15121949b3ff2d))
+* **web:** propose coded events from pages read on this device ([#155](https://github.com/cosmicspork/svastha/issues/155)) ([aba5dec](https://github.com/cosmicspork/svastha/commit/aba5dec4121ea85d5fea89fe1295e0e439e1dd5a))
+* **web:** read text from digital PDF attachments ([#152](https://github.com/cosmicspork/svastha/issues/152)) ([e14f1a1](https://github.com/cosmicspork/svastha/commit/e14f1a1be8319285759db16a2eec54a08af4cfae))
+* **web:** surface read-page outcomes in the viewer and make re-reads real ([#176](https://github.com/cosmicspork/svastha/issues/176)) ([96fd10e](https://github.com/cosmicspork/svastha/commit/96fd10ef7fdb4d810923ccdc106d2d3e863520c7))
+
+
+### Bug Fixes
+
+* **extract:** anchor the source-line guard to whole tokens and verify free text ([#159](https://github.com/cosmicspork/svastha/issues/159)) ([8b7d337](https://github.com/cosmicspork/svastha/commit/8b7d337d161cb20f86161381072a9ae969829f56))
+* **node:** assemble transcript lines as visual rows ([#181](https://github.com/cosmicspork/svastha/issues/181)) ([bb8d784](https://github.com/cosmicspork/svastha/commit/bb8d784600376c8c78bd48f8ebb46b8a754c9b88))
+* **node:** fold allergy and uncoded events into concepts like the web does ([#147](https://github.com/cosmicspork/svastha/issues/147)) ([2c41312](https://github.com/cosmicspork/svastha/commit/2c413127013129a700bf075adeb092f56c5cd2ef))
+* **node:** scope reading pause to the owner who sent it ([#167](https://github.com/cosmicspork/svastha/issues/167)) ([3d8665f](https://github.com/cosmicspork/svastha/commit/3d8665f5c72a82af219c430c2656d298d1f4a4a7))
+* **node:** tolerate malformed findings without erasing the page ([#166](https://github.com/cosmicspork/svastha/issues/166)) ([34feada](https://github.com/cosmicspork/svastha/commit/34feada82a92fa81965750bcd0ddc3453caac5c2))
+* **relay:** namespace the mailbox store so it stops listing blobs ([#144](https://github.com/cosmicspork/svastha/issues/144)) ([5469790](https://github.com/cosmicspork/svastha/commit/5469790d73a9679bcf4bf6584671c17ba5fdbac1))
+* **relay:** never panic building the batch cursor header ([#160](https://github.com/cosmicspork/svastha/issues/160)) ([186bfbf](https://github.com/cosmicspork/svastha/commit/186bfbfd3a12ae4c9d524b94fc37d1f2fe45bdf4))
+* **retrieval:** one rendering and one tokenizer for node and browser ([#162](https://github.com/cosmicspork/svastha/issues/162)) ([2d03b73](https://github.com/cosmicspork/svastha/commit/2d03b7375c10739a9f158c9a1ec662555f371bee))
+* **web:** band OCR rows on a median center, not the tallest run ([#158](https://github.com/cosmicspork/svastha/issues/158)) ([eb48fc5](https://github.com/cosmicspork/svastha/commit/eb48fc5c6daca956798b7efe6e1d9cb7846ee2e0))
+* **web:** correct PDF text geometry, lifecycle, and error paths ([#163](https://github.com/cosmicspork/svastha/issues/163)) ([9d7fe94](https://github.com/cosmicspork/svastha/commit/9d7fe94a7b5d15368c15fbba014ba41af1b80e28))
+* **web:** keep batch pulls from clobbering pushes, dropping pokes, and over-fetching ([#164](https://github.com/cosmicspork/svastha/issues/164)) ([782e42a](https://github.com/cosmicspork/svastha/commit/782e42af3d56c81cb86d3aa667c67bc9b13015a6))
+* **web:** keep recently-logged labels beside long note text ([#165](https://github.com/cosmicspork/svastha/issues/165)) ([ae3b2d7](https://github.com/cosmicspork/svastha/commit/ae3b2d78e54570d44c5c67c2102e2a545f45f9c3))
+* **web:** surface pull failures instead of stalling sync silently ([#143](https://github.com/cosmicspork/svastha/issues/143)) ([b7250bf](https://github.com/cosmicspork/svastha/commit/b7250bfbe4c218f1300cc10a13cd504df0235fda))
+* **web:** vendor the tesseract cores the worker actually requests ([#161](https://github.com/cosmicspork/svastha/issues/161)) ([169fb05](https://github.com/cosmicspork/svastha/commit/169fb05d68020ee125453839c5bf098fe544f1a4))
+
 ## [0.13.0](https://github.com/cosmicspork/svastha/compare/v0.12.0...v0.13.0) (2026-07-27)
 
 

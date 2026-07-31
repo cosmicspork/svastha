@@ -1,6 +1,6 @@
 [package]
 name = "svastha-retrieval"
-version = "0.13.0" # x-release-please-version
+version = "0.14.0" # x-release-please-version
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -10,7 +10,7 @@ keywords = ["retrieval", "rag", "citations", "health", "svastha"]
 categories = ["text-processing"]
 
 [dependencies]
-svastha-core = { path = "../core", version = "0.13.0" } # x-release-please-version
+svastha-core = { path = "../core", version = "0.14.0" } # x-release-please-version
 serde = { version = "1", features = ["derive"] }
 # Event-kind wire names (the same serde source the event schema uses) and the
 # tolerant parse of a model's JSON answer.
