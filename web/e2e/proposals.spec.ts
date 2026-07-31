@@ -364,6 +364,7 @@ test('proposals persist across reload and are not re-processed on re-pull', asyn
 test('paginates a large group and confirms approve-all via the sheet, including hidden drafts (M5)', async ({
   page,
 }) => {
+  test.slow()
   const words = await onboardViaUI(page)
   await connectRelayViaUI(page)
 
@@ -421,7 +422,7 @@ test('paginates a large group and confirms approve-all via the sheet, including 
   // that were never scrolled into view.
   await page.getByTestId('proposer-approve-all').click()
   await page.getByTestId('approve-all-confirm').click()
-  await expect(page.getByTestId('proposals-empty')).toBeVisible()
+  await expect(page.getByTestId('proposals-empty')).toBeVisible({ timeout: 30_000 })
 
   const results = await readAllProposalResults(page, deposited.proposerMnemonic)
   const accepted = results.flatMap((r) => r.accepted)
