@@ -45,8 +45,12 @@ import {
   noteNodeSeen,
   isEnrolledNode,
   enrolledNode,
+  getAdminEntry,
+  notifiesOnReply,
+  describeCommand,
   type AdminCommand,
 } from './nodeadmin'
+import { notifyNodeReply } from './notifications'
 import {
   commitScopeLocally,
   loadAnswerScope,
@@ -530,11 +534,26 @@ async function handleAdminReply(env: Envelope, itemId: string, body: Uint8Array)
   }
   if (typeof parsed.in_reply_to !== 'string' || parsed.in_reply_to === '') return 'ignored'
 
+  const ok = parsed.ok === true
+  const detail = typeof parsed.detail === 'string' ? parsed.detail : undefined
   const applied = await applyAdminReply(parsed.in_reply_to, {
-    ok: parsed.ok === true,
-    detail: typeof parsed.detail === 'string' ? parsed.detail : undefined,
+    ok,
+    detail,
     receivedAt: new Date().toISOString(),
   })
+  // Only after the fold succeeded: an orphan reply has no command to name, and a
+  // notification pointing at a log row that isn't there would be a dead end.
+  if (applied) {
+    const entry = await getAdminEntry(parsed.in_reply_to)
+    if (entry && notifiesOnReply(entry.command)) {
+      await notifyNodeReply({
+        inReplyTo: parsed.in_reply_to,
+        label: describeCommand(entry.command),
+        ok,
+        detail,
+      })
+    }
+  }
   await noteNodeSeen(new Date().toISOString())
   if (client) await client.deleteMailbox(itemId)
   return applied ? 'applied' : 'ignored'

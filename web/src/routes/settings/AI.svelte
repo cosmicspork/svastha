@@ -51,6 +51,7 @@
     enrolledNode,
     getNodeLastSeen,
     describeCommand,
+    replyState,
     type AdminCommand,
   } from '../../lib/nodeadmin'
   import { formatDay, formatTime, dayKey } from '../../lib/time'
@@ -123,7 +124,7 @@
     resolveNodeScopeState(scopeRecord, $adminLog, nodeEd, nowMs),
   )
 
-  // --- your node ---
+  // --- processing node ---
   let node = $state<ProposerRecord | null>(null)
   let lastSeen = $state<string | null>(null)
   let nodeEndpoint = $state('')
@@ -151,9 +152,21 @@
       (!!endpointRecord?.pending.id &&
         !$adminLog.find((e) => e.id === endpointRecord?.pending.id)?.reply),
   )
+  // Log rows age out too (`replyState`), so the clock has to run for them as
+  // well — otherwise a job-status row sits on "Waiting…" until something else
+  // happens to re-render. Also `nowMs`-independent, for the same reason.
+  let unrepliedRows = $derived($adminLog.filter((e) => !e.reply))
   $effect(() => {
-    if (!awaitingReply) return
-    const tick = setInterval(() => (nowMs = Date.now()), 5000)
+    if (!awaitingReply && unrepliedRows.length === 0) return
+    const tick = setInterval(() => {
+      nowMs = Date.now()
+      // Every unreplied row has aged out and nothing else is outstanding, so no
+      // further tick can change what's on screen: stop rather than run forever
+      // against a log that keeps its unanswered rows.
+      if (!awaitingReply && unrepliedRows.every((e) => replyState(e, nowMs) === 'unanswered')) {
+        clearInterval(tick)
+      }
+    }, 5000)
     return () => clearInterval(tick)
   })
 
@@ -367,7 +380,7 @@
     error = ''
   }
 
-  // --- your node ---
+  // --- processing node ---
 
   async function sendToNode(command: AdminCommand): Promise<void> {
     if (!node) return
@@ -681,10 +694,10 @@
 </section>
 
 <section class="stack" data-testid="node-admin">
-  <h2>Your node</h2>
+  <h2>Processing node</h2>
   {#if !node}
     <p class="muted intro" data-testid="node-none">
-      No node is enrolled. A node is still the way to process a large backlog, or to read
+      No processing node is enrolled. One is still the way to process a large backlog, or to read
       handwriting — enrol one from People.
     </p>
   {:else}
@@ -839,6 +852,10 @@
                 {entry.reply.ok ? 'OK' : 'Failed'}{entry.reply.detail
                   ? ` — ${entry.reply.detail}`
                   : ''}
+              </span>
+            {:else if replyState(entry, nowMs) === 'unanswered'}
+              <span class="log-reply pending muted" data-testid="admin-unanswered">
+                No answer — the node may be offline.
               </span>
             {:else}
               <span class="log-reply pending muted" data-testid="admin-pending">
@@ -1050,7 +1067,7 @@
     margin-top: var(--space-2);
   }
 
-  /* --- your node --- */
+  /* --- processing node --- */
 
   .last-seen {
     font-size: var(--text-sm);

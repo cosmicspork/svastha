@@ -50,6 +50,7 @@ export type NotificationKind =
   | 'dictionary-update'
   | 'app-update'
   | 'scopes-notice'
+  | 'node-reply'
 
 export interface Notification {
   /** Caller-supplied, stable per real-world fact so re-derivation is idempotent
@@ -255,5 +256,35 @@ export function notifyAppUpdate(version: string): Promise<void> {
     body: 'Tap to see what’s new, then relaunch.',
     createdAt: new Date().toISOString(),
     data: { version },
+  })
+}
+
+/** Called by mailbox.ts when a processing node answers a command that has no
+ * other surface (job status, log tail — see `notifiesOnReply`). Those replies
+ * otherwise land silently: the AI screen updates behind you, and the relay's
+ * Web Push is both content-free and suppressed outright while a live SSE stream
+ * is open (crates/relay/src/push.rs), so a foregrounded app shows nothing at all.
+ *
+ * Keyed by the answered command's envelope id — unique per issued command — so a
+ * re-pulled reply folds onto the same row instead of minting a second. The
+ * caller passes the label rather than this module reaching for `describeCommand`:
+ * notifications.ts stays free of nodeadmin *value* imports so it keeps
+ * unit-testing under node vitest without the wasm bundle those pull in. */
+export function notifyNodeReply(args: {
+  inReplyTo: string
+  label: string
+  ok: boolean
+  detail?: string
+}): Promise<void> {
+  return addNotification({
+    id: `node-reply:${args.inReplyTo}`,
+    kind: 'node-reply',
+    title: args.ok ? args.label : `${args.label} — failed`,
+    // The node's own detail string (job counts, log lines). Vault-scoped
+    // operational text, never record content — the same string already rendered
+    // in the admin log on the AI screen.
+    body: args.detail,
+    createdAt: new Date().toISOString(),
+    data: { action: 'View', href: '#/settings/ai' },
   })
 }

@@ -15,6 +15,7 @@ import { getAll, get, put } from './db'
 import { CATEGORY_META, type Category } from './category'
 import { listProposers, type ProposerRecord } from './proposals'
 import { getGrantMeta } from './grants'
+import { CONFIRM_WINDOW_MS } from './trackedCommand'
 
 const STORE = 'admin_log'
 const LAST_SEEN_KEY = 'node-last-seen'
@@ -88,6 +89,47 @@ export function sortNewestFirst(entries: AdminLogEntry[]): AdminLogEntry[] {
 }
 
 /**
+ * Whether this command's reply deserves a notification-inbox row.
+ *
+ * True only for the commands whose answer *is* the point and which have no other
+ * surface. `set_inference_endpoint` and `set_answer_scope` already resolve
+ * through the tracked-command state machine into their own on-screen banners
+ * (see `resolveNodeEndpointState`), and `pause_ocr`/`resume_ocr` show up in the
+ * job-status tiles, so notifying for those would report the same fact twice.
+ */
+export function notifiesOnReply(command: AdminCommand): boolean {
+  return command.cmd === 'job_status' || command.cmd === 'log_tail'
+}
+
+/** How a log row reads right now: answered, still plausibly in flight, or waited
+ * out. `unanswered` is a *display* state, never terminal — a reply that arrives
+ * late still folds on and flips the row back to `replied`. */
+export type ReplyState = 'replied' | 'waiting' | 'unanswered'
+
+/**
+ * Whether an issued command is still worth waiting on, at `nowMs`.
+ *
+ * `job_status`/`log_tail`/`pause_ocr`/`resume_ocr` sit outside the ordered
+ * tracked-command machine (`ordered_class` in crates/node/src/admin.rs returns
+ * `Some` only for the two settings commands), so nothing else ever ages them —
+ * without this they read "Waiting for the node…" forever against a node that is
+ * off, unreachable, or too old to parse the command. Shares
+ * {@link CONFIRM_WINDOW_MS} with that machine rather than inventing a second
+ * timeout, so both surfaces give up at the same moment.
+ *
+ * Pure, with an injected `nowMs`, so every branch tests without a node or a clock.
+ */
+export function replyState(entry: AdminLogEntry, nowMs: number): ReplyState {
+  if (entry.reply) return 'replied'
+  const sentMs = Date.parse(entry.sentAt)
+  // An unparseable stamp is not evidence the node went quiet, and a stamp in the
+  // future (a device clock that moved backwards, or skew against the node) would
+  // otherwise read as instantly waited-out. Both keep waiting.
+  if (Number.isNaN(sentMs)) return 'waiting'
+  return nowMs - sentMs >= CONFIRM_WINDOW_MS ? 'unanswered' : 'waiting'
+}
+
+/**
  * The single source of "which identities are the owner's node": the granted
  * identity directory (`proposers`) filtered to `kind === 'node'`. Both the
  * send-target resolution (`enrolledNode`) and the inbound sender gate
@@ -135,6 +177,13 @@ export const adminLog = writable<AdminLogEntry[]>([])
 
 export function listAdminLog(): Promise<AdminLogEntry[]> {
   return getAll<AdminLogEntry>(STORE)
+}
+
+/** One logged command by its envelope id, or undefined if this device never
+ * issued it. Lets the reply path read back *which* command was answered without
+ * re-deriving it from the store. */
+export function getAdminEntry(id: string): Promise<AdminLogEntry | undefined> {
+  return get<AdminLogEntry>(STORE, id)
 }
 
 export async function refreshAdminLog(): Promise<void> {
