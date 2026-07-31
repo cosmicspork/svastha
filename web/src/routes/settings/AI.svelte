@@ -123,7 +123,7 @@
     resolveNodeScopeState(scopeRecord, $adminLog, nodeEd, nowMs),
   )
 
-  // --- your node ---
+  // --- processing node ---
   let node = $state<ProposerRecord | null>(null)
   let lastSeen = $state<string | null>(null)
   let nodeEndpoint = $state('')
@@ -367,7 +367,7 @@
     error = ''
   }
 
-  // --- your node ---
+  // --- processing node ---
 
   async function sendToNode(command: AdminCommand): Promise<void> {
     if (!node) return
@@ -681,10 +681,10 @@
 </section>
 
 <section class="stack" data-testid="node-admin">
-  <h2>Your node</h2>
+  <h2>Processing node</h2>
   {#if !node}
     <p class="muted intro" data-testid="node-none">
-      No node is enrolled. A node is still the way to process a large backlog, or to read
+      No processing node is enrolled. One is still the way to process a large backlog, or to read
       handwriting — enrol one from People.
     </p>
   {:else}
@@ -1050,7 +1050,7 @@
     margin-top: var(--space-2);
   }
 
-  /* --- your node --- */
+  /* --- processing node --- */
 
   .last-seen {
     font-size: var(--text-sm);
