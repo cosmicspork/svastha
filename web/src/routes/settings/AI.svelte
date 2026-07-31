@@ -51,6 +51,7 @@
     enrolledNode,
     getNodeLastSeen,
     describeCommand,
+    replyState,
     type AdminCommand,
   } from '../../lib/nodeadmin'
   import { formatDay, formatTime, dayKey } from '../../lib/time'
@@ -151,9 +152,21 @@
       (!!endpointRecord?.pending.id &&
         !$adminLog.find((e) => e.id === endpointRecord?.pending.id)?.reply),
   )
+  // Log rows age out too (`replyState`), so the clock has to run for them as
+  // well — otherwise a job-status row sits on "Waiting…" until something else
+  // happens to re-render. Also `nowMs`-independent, for the same reason.
+  let unrepliedRows = $derived($adminLog.filter((e) => !e.reply))
   $effect(() => {
-    if (!awaitingReply) return
-    const tick = setInterval(() => (nowMs = Date.now()), 5000)
+    if (!awaitingReply && unrepliedRows.length === 0) return
+    const tick = setInterval(() => {
+      nowMs = Date.now()
+      // Every unreplied row has aged out and nothing else is outstanding, so no
+      // further tick can change what's on screen: stop rather than run forever
+      // against a log that keeps its unanswered rows.
+      if (!awaitingReply && unrepliedRows.every((e) => replyState(e, nowMs) === 'unanswered')) {
+        clearInterval(tick)
+      }
+    }, 5000)
     return () => clearInterval(tick)
   })
 
@@ -839,6 +852,10 @@
                 {entry.reply.ok ? 'OK' : 'Failed'}{entry.reply.detail
                   ? ` — ${entry.reply.detail}`
                   : ''}
+              </span>
+            {:else if replyState(entry, nowMs) === 'unanswered'}
+              <span class="log-reply pending muted" data-testid="admin-unanswered">
+                No answer — the node may be offline.
               </span>
             {:else}
               <span class="log-reply pending muted" data-testid="admin-pending">

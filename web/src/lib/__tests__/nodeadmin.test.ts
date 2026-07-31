@@ -7,6 +7,7 @@ import {
   adminLog,
   describeCommand,
   notifiesOnReply,
+  replyState,
   sortNewestFirst,
   enrolledNode,
   isEnrolledNode,
@@ -17,6 +18,7 @@ import {
   noteNodeSeen,
   type AdminLogEntry,
 } from '../nodeadmin'
+import { CONFIRM_WINDOW_MS } from '../trackedCommand'
 
 beforeEach(async () => {
   await deleteDb()
@@ -59,6 +61,57 @@ describe('pure helpers', () => {
     expect(notifiesOnReply({ cmd: 'set_answer_scope', include: ['cycle'] })).toBe(false)
     expect(notifiesOnReply({ cmd: 'pause_ocr' })).toBe(false)
     expect(notifiesOnReply({ cmd: 'resume_ocr' })).toBe(false)
+  })
+})
+
+describe('replyState', () => {
+  const SENT = '2026-07-24T10:00:00Z'
+  const sentMs = Date.parse(SENT)
+  const pending: AdminLogEntry = { id: 'a', command: { cmd: 'job_status' }, sentAt: SENT }
+
+  it('is waiting inside the window and unanswered past it', () => {
+    expect(replyState(pending, sentMs)).toBe('waiting')
+    expect(replyState(pending, sentMs + CONFIRM_WINDOW_MS - 1)).toBe('waiting')
+    expect(replyState(pending, sentMs + CONFIRM_WINDOW_MS + 1)).toBe('unanswered')
+  })
+
+  // Pin the boundary explicitly rather than leaving it to whichever comparison
+  // happens to be written: at exactly the window, the wait is over.
+  it('treats exactly the window as unanswered', () => {
+    expect(replyState(pending, sentMs + CONFIRM_WINDOW_MS)).toBe('unanswered')
+  })
+
+  // The timeout is a display state, not a verdict — the node is free to answer
+  // late (it may have been off for a day) and the row must go back to replied.
+  it('reads replied for a reply that arrives long after the window', () => {
+    const late: AdminLogEntry = {
+      ...pending,
+      reply: { ok: true, detail: 'idle', receivedAt: '2026-07-25T10:00:00Z' },
+    }
+    expect(replyState(late, sentMs + CONFIRM_WINDOW_MS * 1000)).toBe('replied')
+  })
+
+  // Adversarial: a device clock that moved backwards (or skew against whatever
+  // stamped `sentAt`) makes `now - sent` negative. That is not evidence the node
+  // went quiet, and must not read as instantly waited-out.
+  it('keeps waiting when sentAt is in the future', () => {
+    expect(replyState(pending, sentMs - CONFIRM_WINDOW_MS * 10)).toBe('waiting')
+  })
+
+  // Adversarial: a corrupted or hand-edited record must not throw or silently
+  // resolve to unanswered on NaN arithmetic.
+  it('keeps waiting on an unparseable sentAt instead of throwing', () => {
+    const broken: AdminLogEntry = { id: 'b', command: { cmd: 'log_tail' }, sentAt: 'not-a-date' }
+    expect(() => replyState(broken, sentMs)).not.toThrow()
+    expect(replyState(broken, sentMs)).toBe('waiting')
+  })
+
+  it('reads replied regardless of the clock once a reply is folded on', () => {
+    const answered: AdminLogEntry = {
+      ...pending,
+      reply: { ok: false, detail: 'no such job', receivedAt: SENT },
+    }
+    expect(replyState(answered, sentMs)).toBe('replied')
   })
 })
 
