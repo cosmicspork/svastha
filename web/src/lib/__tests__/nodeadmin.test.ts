@@ -6,6 +6,7 @@ import { putGrantMeta } from '../grants'
 import {
   adminLog,
   describeCommand,
+  notifiesOnReply,
   sortNewestFirst,
   enrolledNode,
   isEnrolledNode,
@@ -45,6 +46,19 @@ describe('pure helpers', () => {
     const a: AdminLogEntry = { id: 'a', command: { cmd: 'job_status' }, sentAt: '2026-07-24T10:00:00Z' }
     const b: AdminLogEntry = { id: 'b', command: { cmd: 'job_status' }, sentAt: '2026-07-24T11:00:00Z' }
     expect(sortNewestFirst([a, b]).map((e) => e.id)).toEqual(['b', 'a'])
+  })
+
+  it('notifies only for the commands with no other surface', () => {
+    // Asking a question is the whole point of these two — their answer has
+    // nowhere else to appear.
+    expect(notifiesOnReply({ cmd: 'job_status' })).toBe(true)
+    expect(notifiesOnReply({ cmd: 'log_tail' })).toBe(true)
+    expect(notifiesOnReply({ cmd: 'log_tail', lines: 50 })).toBe(true)
+    // These confirm themselves on screen; notifying would double-report.
+    expect(notifiesOnReply({ cmd: 'set_inference_endpoint', endpoint: 'https://x/v1' })).toBe(false)
+    expect(notifiesOnReply({ cmd: 'set_answer_scope', include: ['cycle'] })).toBe(false)
+    expect(notifiesOnReply({ cmd: 'pause_ocr' })).toBe(false)
+    expect(notifiesOnReply({ cmd: 'resume_ocr' })).toBe(false)
   })
 })
 

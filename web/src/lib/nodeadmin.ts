@@ -88,6 +88,19 @@ export function sortNewestFirst(entries: AdminLogEntry[]): AdminLogEntry[] {
 }
 
 /**
+ * Whether this command's reply deserves a notification-inbox row.
+ *
+ * True only for the commands whose answer *is* the point and which have no other
+ * surface. `set_inference_endpoint` and `set_answer_scope` already resolve
+ * through the tracked-command state machine into their own on-screen banners
+ * (see `resolveNodeEndpointState`), and `pause_ocr`/`resume_ocr` show up in the
+ * job-status tiles, so notifying for those would report the same fact twice.
+ */
+export function notifiesOnReply(command: AdminCommand): boolean {
+  return command.cmd === 'job_status' || command.cmd === 'log_tail'
+}
+
+/**
  * The single source of "which identities are the owner's node": the granted
  * identity directory (`proposers`) filtered to `kind === 'node'`. Both the
  * send-target resolution (`enrolledNode`) and the inbound sender gate
@@ -135,6 +148,13 @@ export const adminLog = writable<AdminLogEntry[]>([])
 
 export function listAdminLog(): Promise<AdminLogEntry[]> {
   return getAll<AdminLogEntry>(STORE)
+}
+
+/** One logged command by its envelope id, or undefined if this device never
+ * issued it. Lets the reply path read back *which* command was answered without
+ * re-deriving it from the store. */
+export function getAdminEntry(id: string): Promise<AdminLogEntry | undefined> {
+  return get<AdminLogEntry>(STORE, id)
 }
 
 export async function refreshAdminLog(): Promise<void> {

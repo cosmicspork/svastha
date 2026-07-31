@@ -19,11 +19,13 @@ import { getProposal, upsertProposal, putProposer, buildProposalRecord } from '.
 import { listChatTurns } from '../chat'
 import { listAdminLog, recordCommand, getNodeLastSeen } from '../nodeadmin'
 import { loadOptIns } from '../answerScope'
+import { notifications, loadNotifications } from '../notifications'
 
 beforeEach(async () => {
   await deleteDb()
   teardownMailbox()
   pendingInvites.set([])
+  notifications.set([])
 })
 
 const NODE = 'a'.repeat(64)
@@ -530,6 +532,111 @@ describe('admin_reply routing', () => {
     expect(result.adminReplies).toBe(0)
     const log = await listAdminLog()
     expect(log[0].reply).toBeUndefined()
+  })
+})
+
+// The reply path is otherwise silent: the AI screen updates behind you, and the
+// relay's Web Push is content-free *and* suppressed while an SSE stream is live.
+describe('admin_reply notifications', () => {
+  beforeEach(async () => {
+    await putProposer({ ed: NODE, x25519: NODE_X, label: 'Home node', kind: 'node' })
+  })
+
+  async function deliver(itemId: string, envId: string, inReplyTo: string, ok = true, detail?: string) {
+    const env = adminReplyEnvelope(envId, inReplyTo, ok, detail)
+    const client = fakeClient([{ id: itemId, from: NODE, env }])
+    configureMailbox(client, fakeIdentity(), verifyOk)
+    return pullMailbox()
+  }
+
+  it('notifies for a job_status reply, pointing at the AI screen', async () => {
+    await recordCommand({ id: 'cmd-1', command: { cmd: 'job_status' }, sentAt: '2026-07-24T10:00:00Z' })
+
+    await deliver('item-a', 'rep-a', 'cmd-1', true, '2 jobs queued')
+
+    const list = storeGet(notifications)
+    expect(list).toHaveLength(1)
+    expect(list[0]).toMatchObject({
+      id: 'node-reply:cmd-1',
+      kind: 'node-reply',
+      body: '2 jobs queued',
+      data: { href: '#/settings/ai' },
+    })
+  })
+
+  it('notifies for a log_tail reply', async () => {
+    await recordCommand({
+      id: 'cmd-2',
+      command: { cmd: 'log_tail', lines: 50 },
+      sentAt: '2026-07-24T10:00:00Z',
+    })
+
+    await deliver('item-b', 'rep-b', 'cmd-2', true, '…log…')
+
+    expect(storeGet(notifications)).toHaveLength(1)
+  })
+
+  it('marks a failed reply in the title rather than staying silent', async () => {
+    await recordCommand({ id: 'cmd-3', command: { cmd: 'job_status' }, sentAt: '2026-07-24T10:00:00Z' })
+
+    await deliver('item-c', 'rep-c', 'cmd-3', false, 'no such job')
+
+    expect(storeGet(notifications)[0].title).toMatch(/failed/i)
+  })
+
+  // Adversarial: the same reply pulled twice (a re-delivered mailbox item) must
+  // not stack a second row. The id is the answered command's envelope id, which
+  // is why it can't.
+  it('does not duplicate when the same reply is delivered twice', async () => {
+    await recordCommand({ id: 'cmd-4', command: { cmd: 'job_status' }, sentAt: '2026-07-24T10:00:00Z' })
+
+    await deliver('item-d', 'rep-d', 'cmd-4', true, 'first')
+    await loadNotifications()
+    await deliver('item-d2', 'rep-d2', 'cmd-4', true, 'second')
+
+    const list = storeGet(notifications)
+    expect(list).toHaveLength(1)
+    expect(list[0].id).toBe('node-reply:cmd-4')
+  })
+
+  // These two already confirm themselves on screen via the tracked-command
+  // banners / status tiles; a notification would report the same fact twice.
+  it('stays quiet for commands that have their own on-screen confirmation', async () => {
+    await recordCommand({
+      id: 'cmd-5',
+      command: { cmd: 'set_inference_endpoint', endpoint: 'https://x/v1' },
+      sentAt: '2026-07-24T10:00:00Z',
+    })
+    await recordCommand({
+      id: 'cmd-6',
+      command: { cmd: 'set_answer_scope', include: ['cycle'] },
+      sentAt: '2026-07-24T10:00:00Z',
+    })
+
+    await deliver('item-e', 'rep-e', 'cmd-5')
+    await deliver('item-f', 'rep-f', 'cmd-6')
+
+    expect(storeGet(notifications)).toHaveLength(0)
+  })
+
+  it('mints nothing for an orphan reply (no command to name)', async () => {
+    await deliver('item-g', 'rep-g', 'never-sent', true, 'orphan')
+
+    expect(storeGet(notifications)).toHaveLength(0)
+  })
+
+  // Adversarial: the spoof gate must cut in before the notification, or a
+  // non-node identity could put arbitrary text in the owner's inbox.
+  it('mints nothing for a validly-signed reply from a non-node identity', async () => {
+    await recordCommand({ id: 'cmd-7', command: { cmd: 'job_status' }, sentAt: '2026-07-24T10:00:00Z' })
+    const other = 'b'.repeat(64)
+    const env = adminReplyEnvelope('rep-h', 'cmd-7', true, 'forged ok', other)
+    const client = fakeClient([{ id: 'item-h', from: other, env }])
+    configureMailbox(client, fakeIdentity(), verifyOk)
+
+    await pullMailbox()
+
+    expect(storeGet(notifications)).toHaveLength(0)
   })
 })
 
