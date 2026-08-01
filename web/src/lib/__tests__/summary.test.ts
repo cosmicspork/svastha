@@ -32,6 +32,11 @@ const CHOL: Code = { system: LOINC, code: '2093-3', display: 'Cholesterol' }
 const CVX_FLU: Code = { system: 'http://hl7.org/fhir/sid/cvx', code: '140', display: 'Influenza' }
 const CASHEW: Code = { system: SNOMED, code: '227493005', display: 'Cashew nuts' }
 
+/** Fixed "today" for the recency-window split: mid-2025, so the 2024-dated
+ * fixtures above sit inside a 12-month window and the tests don't rot as the
+ * real clock moves. */
+const NOW = Date.parse('2025-01-15T00:00:00+00:00')
+
 function q(value: string, unitCode?: string): EventValue {
   return { quantity: { value, unit: unitCode ? { system: 'http://unitsofmeasure.org', code: unitCode } : null } }
 }
@@ -133,6 +138,195 @@ describe('buildSummary: rows with no coding', () => {
   })
 })
 
+describe('buildSummary: medications', () => {
+  const LISINOPRIL: Code = { system: RXNORM, code: '29046', display: 'Lisinopril 10 MG Oral Tablet' }
+  const AMOXICILLIN: Code = { system: RXNORM, code: '723', display: 'amoxicillin' }
+  const ZOLPIDEM: Code = { system: RXNORM, code: '39786', display: 'Zolpidem' }
+
+  it('orders by name, not by date, and ignores case', () => {
+    const events = [
+      ev({ kind: 'medication_statement', code: ZOLPIDEM, effective_at: '2024-06-01T00:00:00+00:00' }),
+      ev({ kind: 'medication_statement', code: LISINOPRIL, effective_at: '2024-05-01T00:00:00+00:00' }),
+      // lowercase display: a case-sensitive sort would drop it below Zolpidem
+      ev({ kind: 'medication_statement', code: AMOXICILLIN, effective_at: '2024-01-01T00:00:00+00:00' }),
+    ]
+    const { medications } = buildSummary(events, { now: NOW })
+    expect(medications.map((m) => m.label)).toEqual([
+      'amoxicillin',
+      'Lisinopril 10 MG Oral Tablet',
+      'Zolpidem',
+    ])
+  })
+
+  it('sorts an undated medication by name alongside the dated ones', () => {
+    const events = [
+      ev({ kind: 'medication_statement', code: ZOLPIDEM, effective_at: '2024-06-01T00:00:00+00:00' }),
+      ev({ kind: 'medication_statement', code: AMOXICILLIN, effective_at: null }),
+    ]
+    const { medications } = buildSummary(events, { now: NOW })
+    expect(medications.map((m) => m.label)).toEqual(['amoxicillin', 'Zolpidem'])
+    expect(medications[0].date).toBeNull()
+  })
+
+  it('shows the dose from the most recent statement that recorded one, even when a later one did not', () => {
+    // The refill (May) carries no doseQuantity; the dose is on the January
+    // statement. Reading only the label source (the latest) loses it.
+    const events = [
+      ev({ kind: 'medication_statement', code: LISINOPRIL, value: q('10', 'mg'), effective_at: '2024-01-01T00:00:00+00:00' }),
+      ev({ kind: 'medication_statement', code: LISINOPRIL, effective_at: '2024-05-01T00:00:00+00:00' }),
+    ]
+    const { medications } = buildSummary(events, { now: NOW })
+    expect(medications).toHaveLength(1)
+    expect(medications[0].detail).toBe('10 mg')
+    // and the row still dates from the latest mention
+    expect(medications[0].date).toBe('2024-05-01T00:00:00+00:00')
+  })
+
+  it('prefers the newer of two recorded doses', () => {
+    const events = [
+      ev({ kind: 'medication_statement', code: LISINOPRIL, value: q('10', 'mg'), effective_at: '2024-01-01T00:00:00+00:00' }),
+      ev({ kind: 'medication_statement', code: LISINOPRIL, value: q('20', 'mg'), effective_at: '2024-05-01T00:00:00+00:00' }),
+    ]
+    expect(buildSummary(events, { now: NOW }).medications[0].detail).toBe('20 mg')
+  })
+
+  it('never re-derives a dose from a strength baked into the drug name', () => {
+    // "400 MG/5 ML" is a concentration; any name-parsed "dose" would misstate
+    // it. With no doseQuantity in the source there is no dose to show.
+    const suspension: Code = { system: RXNORM, code: '308182', display: 'Amoxicillin 400 MG/5 ML Oral Suspension' }
+    const events = [ev({ kind: 'medication_statement', code: suspension, effective_at: '2024-05-01T00:00:00+00:00' })]
+    const { medications } = buildSummary(events, { now: NOW })
+    expect(medications[0].detail).toBe('')
+    expect(medications[0].label).toBe('Amoxicillin 400 MG/5 ML Oral Suspension')
+  })
+
+  it('leaves a free-text quick-log medication its own text and no derived dose', () => {
+    const events = [
+      ev({ kind: 'medication_statement', value: { text: 'Ibuprofen 400 mg' }, effective_at: '2024-05-01T00:00:00+00:00' }),
+    ]
+    const { medications } = buildSummary(events, { now: NOW })
+    expect(medications[0].label).toBe('Ibuprofen 400 mg')
+    expect(medications[0].detail).toBe('')
+  })
+
+  it('is not windowed — a medication from years ago still leads the list', () => {
+    const events = [ev({ kind: 'medication_statement', code: ZOLPIDEM, effective_at: '2015-01-01T00:00:00+00:00' })]
+    expect(buildSummary(events, { now: NOW }).medications).toHaveLength(1)
+  })
+})
+
+describe('buildSummary: the recency window', () => {
+  const CVX_TETANUS: Code = { system: 'http://hl7.org/fhir/sid/cvx', code: '115', display: 'Tdap' }
+
+  it('splits immunizations at the window and keeps every older one', () => {
+    const events = [
+      ev({ kind: 'immunization', code: CVX_FLU, effective_at: '2024-11-01T00:00:00+00:00' }),
+      ev({ kind: 'immunization', code: CVX_TETANUS, effective_at: '2016-05-01T00:00:00+00:00' }),
+    ]
+    const { immunizations } = buildSummary(events, { now: NOW })
+    expect(immunizations.recent.map((r) => r.label)).toEqual(['Influenza'])
+    expect(immunizations.older.map((r) => r.label)).toEqual(['Tdap'])
+  })
+
+  it('demotes an undated row to older — recency it cannot prove is not claimed', () => {
+    const events = [ev({ kind: 'immunization', code: CVX_TETANUS, effective_at: null })]
+    const { immunizations } = buildSummary(events, { now: NOW })
+    expect(immunizations.recent).toEqual([])
+    expect(immunizations.older).toHaveLength(1)
+  })
+
+  it('counts the window in calendar months, so exactly-a-year-ago is still inside it', () => {
+    const events = [
+      ev({ kind: 'immunization', code: CVX_FLU, effective_at: '2024-01-15T00:00:00+00:00' }),
+    ]
+    const { immunizations } = buildSummary(events, { now: Date.parse('2025-01-15T00:00:00+00:00') })
+    expect(immunizations.recent).toHaveLength(1)
+  })
+
+  it('demotes a stale vital rather than presenting it as the latest', () => {
+    const events = [
+      ev({ code: HR, value: q('72', '/min'), effective_at: '2019-05-01T09:00:00+00:00' }),
+      ev({ code: BP_SYSTOLIC, value: q('120', 'mm[Hg]'), effective_at: '2024-12-01T09:00:00+00:00' }),
+      ev({ code: BP_DIASTOLIC, value: q('80', 'mm[Hg]'), effective_at: '2024-12-01T09:00:00+00:00' }),
+    ]
+    const { latestVitals } = buildSummary(events, { now: NOW })
+    expect(latestVitals.recent.map((r) => r.label)).toEqual(['Blood pressure'])
+    expect(latestVitals.older.map((r) => r.label)).toEqual(['Heart rate'])
+    // the stale reading is still carried, not dropped
+    expect(latestVitals.older[0].detail).toBe('72 /min')
+  })
+
+  it('applies the result limit to each bucket, so older results are not truncated by the recent ones', () => {
+    const events = [
+      ev({ code: CHOL, value: q('190', 'mg/dL'), effective_at: '2024-12-01T00:00:00+00:00' }),
+      ev({ code: { system: LOINC, code: '4548-4', display: 'HbA1c' }, value: q('5.4', '%'), effective_at: '2024-11-01T00:00:00+00:00' }),
+      ev({ code: { system: LOINC, code: '2951-2', display: 'Sodium' }, value: q('140', 'mmol/L'), effective_at: '2018-02-01T00:00:00+00:00' }),
+      ev({ code: { system: LOINC, code: '2823-3', display: 'Potassium' }, value: q('4.1', 'mmol/L'), effective_at: '2017-02-01T00:00:00+00:00' }),
+    ]
+    const { recentResults } = buildSummary(events, { resultLimit: 1, now: NOW })
+    expect(recentResults.recent.map((r) => r.label)).toEqual(['Cholesterol'])
+    expect(recentResults.older.map((r) => r.label)).toEqual(['Sodium'])
+  })
+
+  it('reports the window it used', () => {
+    expect(buildSummary([], { now: NOW }).windowMonths).toBe(12)
+    expect(buildSummary([], { now: NOW, windowMonths: 6 }).windowMonths).toBe(6)
+  })
+
+  it('honours a caller-supplied window', () => {
+    const events = [ev({ kind: 'immunization', code: CVX_FLU, effective_at: '2024-09-01T00:00:00+00:00' })]
+    expect(buildSummary(events, { now: NOW, windowMonths: 3 }).immunizations.older).toHaveLength(1)
+    expect(buildSummary(events, { now: NOW, windowMonths: 24 }).immunizations.recent).toHaveLength(1)
+  })
+})
+
+describe('buildSummary: focusId (the row\'s "see on timeline" target)', () => {
+  it('points at the event whose date the row shows — earliest onset for a problem', () => {
+    const events = [
+      ev({ kind: 'condition', code: HTN, effective_at: '2020-03-01T00:00:00+00:00', id: 'onset' }),
+      ev({ kind: 'condition', code: HTN, effective_at: '2022-06-01T00:00:00+00:00', id: 'later' }),
+    ]
+    const { problems } = buildSummary(events, { now: NOW })
+    expect(problems[0].date).toBe('2020-03-01T00:00:00+00:00')
+    expect(problems[0].focusId).toBe('onset')
+  })
+
+  it('points at the latest mention for a medication', () => {
+    const AMOX: Code = { system: RXNORM, code: '723', display: 'Amoxicillin' }
+    const events = [
+      ev({ kind: 'medication_statement', code: AMOX, effective_at: '2024-01-01T00:00:00+00:00', id: 'first' }),
+      ev({ kind: 'medication_statement', code: AMOX, effective_at: '2024-05-01T00:00:00+00:00', id: 'refill' }),
+    ]
+    expect(buildSummary(events, { now: NOW }).medications[0].focusId).toBe('refill')
+  })
+
+  it('falls back to the labelling event when the whole fold is undated', () => {
+    const events = [ev({ kind: 'condition', code: HTN, effective_at: null, id: 'undated' })]
+    const { problems } = buildSummary(events, { now: NOW })
+    expect(problems[0].date).toBeNull()
+    expect(problems[0].focusId).toBe('undated')
+  })
+
+  it('points a vitals row at the reading it displays', () => {
+    const events = [
+      ev({ code: HR, value: q('66', '/min'), effective_at: '2024-02-01T09:00:00+00:00', id: 'old' }),
+      ev({ code: HR, value: q('72', '/min'), effective_at: '2024-12-01T09:00:00+00:00', id: 'latest' }),
+    ]
+    const { latestVitals } = buildSummary(events, { now: NOW })
+    expect(latestVitals.recent[0].detail).toBe('72 /min')
+    expect(latestVitals.recent[0].focusId).toBe('latest')
+  })
+
+  it('points a blood-pressure row at the systolic reading it paired', () => {
+    const events = [
+      ev({ code: BP_SYSTOLIC, value: q('120', 'mm[Hg]'), effective_at: '2024-12-01T09:00:00+00:00', id: 'sys' }),
+      ev({ code: BP_DIASTOLIC, value: q('80', 'mm[Hg]'), effective_at: '2024-12-01T09:00:00+00:00', id: 'dia' }),
+    ]
+    const { latestVitals } = buildSummary(events, { now: NOW })
+    expect(latestVitals.recent[0].focusId).toBe('sys')
+  })
+})
+
 describe('buildSummary: allergies', () => {
   it('reads the substance from value.coded, not the (null) event code, and sorts by name', () => {
     const events = [
@@ -151,15 +345,15 @@ describe('buildSummary: immunizations', () => {
       ev({ kind: 'immunization', code: CVX_FLU, effective_at: '2023-10-01T00:00:00+00:00' }),
       ev({ kind: 'immunization', code: CVX_FLU, effective_at: '2024-10-01T00:00:00+00:00' }),
     ]
-    const { immunizations } = buildSummary(events)
-    expect(immunizations).toHaveLength(1)
-    expect(immunizations[0].detail).toBe('2 doses')
-    expect(immunizations[0].date).toBe('2024-10-01T00:00:00+00:00')
+    const { immunizations } = buildSummary(events, { now: NOW })
+    expect(immunizations.recent).toHaveLength(1)
+    expect(immunizations.recent[0].detail).toBe('2 doses')
+    expect(immunizations.recent[0].date).toBe('2024-10-01T00:00:00+00:00')
   })
 
   it('shows no dose count for a single immunization', () => {
     const events = [ev({ kind: 'immunization', code: CVX_FLU, effective_at: '2024-10-01T00:00:00+00:00' })]
-    expect(buildSummary(events).immunizations[0].detail).toBe('')
+    expect(buildSummary(events, { now: NOW }).immunizations.recent[0].detail).toBe('')
   })
 })
 
@@ -173,15 +367,15 @@ describe('buildSummary: latest vitals', () => {
       ev({ code: HR, value: q('72', '/min'), effective_at: '2024-05-01T09:00:00+00:00' }),
       ev({ code: HR, value: q('66', '/min'), effective_at: '2024-02-01T09:00:00+00:00' }),
     ]
-    const { latestVitals } = buildSummary(events)
-    const bp = latestVitals.find((r) => r.label === 'Blood pressure')!
-    const hr = latestVitals.find((r) => r.label === 'Heart rate')!
+    const { latestVitals } = buildSummary(events, { now: NOW })
+    const bp = latestVitals.recent.find((r) => r.label === 'Blood pressure')!
+    const hr = latestVitals.recent.find((r) => r.label === 'Heart rate')!
     expect(bp.detail).toBe('120/80 mm[Hg]')
     expect(bp.count).toBe(4)
     expect(hr.detail).toBe('72 /min')
     expect(hr.count).toBe(2)
     // BP row comes before HR (VITALS declaration order)
-    expect(latestVitals.map((r) => r.label)).toEqual(['Blood pressure', 'Heart rate'])
+    expect(latestVitals.recent.map((r) => r.label)).toEqual(['Blood pressure', 'Heart rate'])
     // vitals always resolve from the hardcoded VITALS labels; the paired BP
     // row has no single coding of its own, but a plain vital carries its LOINC.
     expect(bp.coding).toBeNull()
@@ -202,10 +396,10 @@ describe('buildSummary: recent results', () => {
       // excluded: a coded symptom (SNOMED -> 'symptom')
       ev({ code: { system: SNOMED, code: '25064002', display: 'Headache' }, value: q('4'), effective_at: '2024-04-02T00:00:00+00:00' }),
     ]
-    const { recentResults } = buildSummary(events, { resultLimit: 2 })
-    expect(recentResults).toHaveLength(2)
-    expect(recentResults.map((r) => r.label)).toEqual(['HbA1c', 'Sodium'])
-    expect(recentResults[0].detail).toBe('5.4 %')
+    const { recentResults } = buildSummary(events, { resultLimit: 2, now: NOW })
+    expect(recentResults.recent).toHaveLength(2)
+    expect(recentResults.recent.map((r) => r.label)).toEqual(['HbA1c', 'Sodium'])
+    expect(recentResults.recent[0].detail).toBe('5.4 %')
   })
 })
 
@@ -325,9 +519,9 @@ describe('buildSummary: empty and hidden', () => {
     expect(summary.problems).toEqual([])
     expect(summary.medications).toEqual([])
     expect(summary.allergies).toEqual([])
-    expect(summary.immunizations).toEqual([])
-    expect(summary.latestVitals).toEqual([])
-    expect(summary.recentResults).toEqual([])
+    expect(summary.immunizations).toEqual({ recent: [], older: [] })
+    expect(summary.latestVitals).toEqual({ recent: [], older: [] })
+    expect(summary.recentResults).toEqual({ recent: [], older: [] })
   })
 
   it('subtracts hidden event ids before grouping', () => {

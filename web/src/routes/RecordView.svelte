@@ -36,7 +36,7 @@
     <h1>Timeline</h1>
     <Spine {hue} />
   {:else}
-    <ClinicianSummary heading="Summary" />
+    <ClinicianSummary heading="Summary" timelineHref="#/timeline" />
   {/if}
 {:else if loaded}
   {#if !share}
@@ -51,7 +51,7 @@
     {#if view === 'timeline'}
       <Spine hue={share.hue} {events} readonly />
     {:else}
-      <ClinicianSummary {events} readonly />
+      <ClinicianSummary {events} readonly timelineHref={`#/person/${ed}/timeline`} />
     {/if}
   {/if}
 {/if}

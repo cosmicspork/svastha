@@ -103,11 +103,13 @@
   const present = $derived(new Set(categoriesPresent(events)))
   const filterChips = $derived(CATEGORIES.filter((c) => present.has(c)))
 
-  // Deep-link focus: a citation on the ask screen targets one of the owner's
-  // events. Only the own-record spine honors it (a citation always points into
-  // the owner's own log). Drop the category filter to 'all' if it would hide the
-  // target, then let the matching SpineEntry scroll+pulse; clear after it lands.
-  const highlightId = $derived(readonly ? null : $focusedEventId)
+  // Deep-link focus: a citation on the ask screen, a search hit, or a summary
+  // row's "see on timeline" targets one event. Honored on a shared spine too —
+  // that record's own summary links into it — and harmless when the id isn't
+  // here (nothing matches, and the signal clears itself below). Drop the
+  // category filter to 'all' if it would hide the target, then let the matching
+  // SpineEntry scroll+pulse; clear after it lands.
+  const highlightId = $derived($focusedEventId)
   $effect(() => {
     const id = highlightId
     if (id === null) return

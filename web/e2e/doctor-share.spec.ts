@@ -295,13 +295,18 @@ test('doctor share carries verified curation: current-only by default, past on o
   await openSummary(ownerPage)
   await expect(currentMeds(ownerPage).filter({ hasText: 'Lisinopril' })).toHaveCount(1)
 
-  // Mark Lisinopril past (leaves Current for the collapsed Past group).
-  await currentMeds(ownerPage).filter({ hasText: 'Lisinopril' }).click()
+  // Mark Lisinopril past (leaves Current for the collapsed Past group). A short
+  // press expands the row; the status sheet is behind its panel's curate button.
+  const lisinopril = currentMeds(ownerPage).filter({ hasText: 'Lisinopril' })
+  await lisinopril.getByTestId('summary-row-trigger').click()
+  await lisinopril.getByTestId('summary-row-curate').click()
   await ownerPage.getByTestId('action-toggle-status').click()
   await expect(currentMeds(ownerPage).filter({ hasText: 'Lisinopril' })).toHaveCount(0)
 
-  // Rename Metformin — the override leads, the code line stays demoted.
-  await currentMeds(ownerPage).filter({ hasText: 'Metformin' }).click()
+  // Rename Metformin — the override leads, the code stays in its panel.
+  const metformin = currentMeds(ownerPage).filter({ hasText: 'Metformin' })
+  await metformin.getByTestId('summary-row-trigger').click()
+  await metformin.getByTestId('summary-row-curate').click()
   await ownerPage.getByTestId('action-name-input').fill('BP + sugar combo')
   await ownerPage.getByTestId('action-save-name').click()
   await expect(currentMeds(ownerPage).filter({ hasText: 'BP + sugar combo' })).toHaveCount(1)
@@ -320,10 +325,11 @@ test('doctor share carries verified curation: current-only by default, past on o
   const defaultDoc = await openAsRecipient(browser, defaultLink)
   const defaultMeds = defaultDoc.getByTestId('summary-section-medications')
   await expect(defaultMeds).toContainText('BP + sugar combo')
-  // The override leads with the source code demoted beneath it (#86 rendering,
-  // now threaded through the read-only recipient path).
-  await expect(defaultMeds).toContainText('RxNorm')
-  await expect(defaultMeds).toContainText('6809')
+  // The override leads; the source code rides along in the row's panel (#86
+  // rendering, threaded through the read-only recipient path).
+  const renamedRow = defaultMeds.getByTestId('summary-row').filter({ hasText: 'BP + sugar combo' })
+  await renamedRow.getByTestId('summary-row-trigger').click()
+  await expect(renamedRow.getByTestId('summary-coding')).toContainText('RxNorm 6809')
   // Lisinopril is past — excluded entirely from the default share.
   await expect(defaultDoc.getByTestId('clinician-summary')).not.toContainText('Lisinopril')
   await expect(defaultDoc.getByTestId('meds-past-toggle')).toHaveCount(0)

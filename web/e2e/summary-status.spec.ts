@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type Locator, type Page } from '@playwright/test'
 import { onboardViaUI, PASSPHRASE } from './helpers'
 
 // Owner-side curation over the clinician summary: mark a medication "past" and
@@ -57,6 +57,13 @@ function pastMeds(page: Page) {
   return page.getByTestId('summary-section-past').getByTestId('summary-row')
 }
 
+/** Expand a row and open its status/name sheet from the panel. */
+async function openCurate(row: Locator): Promise<void> {
+  await row.getByTestId('summary-row-trigger').click()
+  await row.getByTestId('summary-row-curate').click()
+  await expect(row.page().getByTestId('row-action-sheet')).toBeVisible()
+}
+
 test('curate the clinician summary: mark a med past (persistent) and rename a concept', async ({ page }) => {
   await onboardViaUI(page)
   await seedCodedMeds(page)
@@ -69,8 +76,9 @@ test('curate the clinician summary: mark a med past (persistent) and rename a co
   await expect(currentMeds(page).filter({ hasText: 'Lisinopril' })).toHaveCount(1)
   await expect(currentMeds(page).filter({ hasText: 'Metformin' })).toHaveCount(1)
 
-  await currentMeds(page).filter({ hasText: 'Lisinopril' }).click()
-  await expect(page.getByTestId('row-action-sheet')).toBeVisible()
+  // A short press expands the row; the action sheet is behind the panel's
+  // curate button (or a swipe right).
+  await openCurate(currentMeds(page).filter({ hasText: 'Lisinopril' }))
   await page.getByTestId('action-toggle-status').click()
 
   await expect(currentMeds(page).filter({ hasText: 'Lisinopril' })).toHaveCount(0)
@@ -87,16 +95,19 @@ test('curate the clinician summary: mark a med past (persistent) and rename a co
   await page.getByTestId('meds-past-toggle').click()
   await expect(pastMeds(page).filter({ hasText: 'Lisinopril' })).toHaveCount(1)
 
-  await currentMeds(page).filter({ hasText: 'Metformin' }).click()
-  await expect(page.getByTestId('row-action-sheet')).toBeVisible()
+  await openCurate(currentMeds(page).filter({ hasText: 'Metformin' }))
   await page.getByTestId('action-name-input').fill('BP + sugar combo')
   await page.getByTestId('action-save-name').click()
 
   const renamed = currentMeds(page).filter({ hasText: 'BP + sugar combo' })
   await expect(renamed).toHaveCount(1)
-  // The demoted source code (#86) is still visible beneath the override.
-  await expect(renamed).toContainText('RxNorm')
-  await expect(renamed).toContainText('6809')
+  // The source code is off the row's face now, but still there in the panel —
+  // still open from openCurate, since the rename kept the same concept key.
+  const trigger = renamed.getByTestId('summary-row-trigger')
+  await expect(trigger).not.toContainText('RxNorm')
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true')
+  await expect(renamed.getByTestId('summary-coding')).toContainText('RxNorm')
+  await expect(renamed.getByTestId('summary-coding')).toContainText('6809')
 
   await page.reload()
   await unlock(page)
