@@ -9,8 +9,11 @@
     setName,
     type ConceptStatus,
   } from '../lib/curation'
-  import { buildSummary, type SummaryRow } from '../lib/summary'
+  import { buildSummary, type SummaryRow, type WindowedSection } from '../lib/summary'
   import { loadDictionaryIndex, dictionaryStatus } from '../lib/dictionary'
+  import { shortenSystem } from '../lib/codes'
+  import { focusedEventId } from '../lib/spine-focus'
+  import { navigate } from '../lib/router.svelte'
   import SummarySection from './SummarySection.svelte'
   import Sheet from './Sheet.svelte'
 
@@ -30,6 +33,7 @@
     status: providedStatus,
     names: providedNames,
     heading,
+    timelineHref,
   }: {
     events?: StoredEvent[]
     readonly?: boolean
@@ -39,6 +43,11 @@
      * Print action (the own Summary page). Left unset where the host already
      * has an h1 (the shared-person screen), so the Print action sits alone. */
     heading?: string
+    /** Where "see on timeline" goes — `#/timeline` for your own record,
+     * `#/person/{ed}/timeline` for a shared one. Unset drops the action
+     * entirely, which is what a doctor-share preview (no route to leave to)
+     * wants. */
+    timelineHref?: string
   } = $props()
 
   let ownEvents = $state<StoredEvent[]>([])
@@ -63,8 +72,14 @@
     void loadDictionaryIndex().then((d) => (dictionary = d))
   })
 
+  // `now` is read once at mount, not per derivation: a window that re-evaluated
+  // on every keystroke could reclassify a row mid-session (and makes the render
+  // depend on wall-clock time for no benefit — the boundary is a year away).
+  const now = Date.now()
+
   const summary = $derived(
     buildSummary(events, {
+      now,
       // Hides are a device-local redaction, never applied to someone else's
       // shared record; only the own-vault render folds them.
       hiddenIds: readonly ? undefined : hiddenIds,
@@ -74,18 +89,98 @@
     }),
   )
 
+  // A visit is a lookup, not a read-through: type a few letters and every
+  // section narrows to the matching concepts. Matches the label and the value
+  // shown next to it (a dose, a result), so "10 mg" and "penicillin" both work.
+  let filter = $state('')
+  const needle = $derived(filter.trim().toLowerCase())
+  function matches(row: SummaryRow): boolean {
+    if (needle === '') return true
+    return (
+      row.label.toLowerCase().includes(needle) || row.detail.toLowerCase().includes(needle)
+    )
+  }
+  const keep = (rows: SummaryRow[]): SummaryRow[] => (needle === '' ? rows : rows.filter(matches))
+  const keepWindowed = (s: WindowedSection): WindowedSection => ({
+    recent: keep(s.recent),
+    older: keep(s.older),
+  })
+
   // Meds split into current / past; problems into active / resolved. Same
   // underlying `status` ('active' | 'inactive'), different clinician wording.
   // Without a status overlay (Person view, or a share that carried none) every
   // row is 'active', so "past"/"resolved" stay empty and their groups don't
   // render.
-  const currentMeds = $derived(summary.medications.filter((r) => r.status === 'active'))
-  const pastMeds = $derived(summary.medications.filter((r) => r.status === 'inactive'))
-  const activeProblems = $derived(summary.problems.filter((r) => r.status === 'active'))
-  const resolvedProblems = $derived(summary.problems.filter((r) => r.status === 'inactive'))
+  const currentMeds = $derived(keep(summary.medications.filter((r) => r.status === 'active')))
+  const pastMeds = $derived(keep(summary.medications.filter((r) => r.status === 'inactive')))
+  const activeProblems = $derived(keep(summary.problems.filter((r) => r.status === 'active')))
+  const resolvedProblems = $derived(keep(summary.problems.filter((r) => r.status === 'inactive')))
+  const allergies = $derived(keep(summary.allergies))
+  const immunizations = $derived(keepWindowed(summary.immunizations))
+  const vitals = $derived(keepWindowed(summary.latestVitals))
+  const results = $derived(keepWindowed(summary.recentResults))
+
+  /** "older than 12 months" — the windowed sections' collapsed-group wording,
+   * named from the window the summary was actually built with. */
+  const olderLabel = $derived(
+    summary.windowMonths === 12 ? 'older than a year' : `older than ${summary.windowMonths} months`,
+  )
+  const noneRecently = $derived(
+    summary.windowMonths === 12
+      ? 'Nothing in the last year'
+      : `Nothing in the last ${summary.windowMonths} months`,
+  )
+
+  const matchCount = $derived(
+    currentMeds.length +
+      pastMeds.length +
+      activeProblems.length +
+      resolvedProblems.length +
+      allergies.length +
+      immunizations.recent.length +
+      immunizations.older.length +
+      vitals.recent.length +
+      vitals.older.length +
+      results.recent.length +
+      results.older.length,
+  )
 
   let pastMedsOpen = $state(false)
   let resolvedOpen = $state(false)
+  let olderImmunizationsOpen = $state(false)
+  let olderVitalsOpen = $state(false)
+  let olderResultsOpen = $state(false)
+
+  // A filter searches the whole record, so it opens the collapsed groups too —
+  // otherwise the one row you typed three letters to find sits behind a toggle
+  // labelled "Show 14 older" and reads as "not here".
+  const searching = $derived(needle !== '')
+  const showPastMeds = $derived(pastMedsOpen || searching)
+  const showResolved = $derived(resolvedOpen || searching)
+  const showOlderImmunizations = $derived(olderImmunizationsOpen || searching)
+  const showOlderVitals = $derived(olderVitalsOpen || searching)
+  const showOlderResults = $derived(olderResultsOpen || searching)
+
+  /** The systems the installed dictionary actually carries, shortened to match
+   * a row's `coding.system`. Drives the honest third hint state in
+   * SummarySection: a code in a system nothing ships for (NDC, CPT) is never
+   * going to be named by a dictionary update. */
+  const coveredSystems = $derived(
+    new Set(
+      $dictionaryStatus.fileStatuses
+        .filter((f) => f.state === 'verified')
+        .map((f) => shortenSystem(f.system)),
+    ),
+  )
+
+  /** Jump to this concept on the timeline: focus the event the row stands for
+   * (the spine scrolls it into view and pulses it), then navigate. */
+  function viewOnTimeline(row: SummaryRow): void {
+    if (!timelineHref) return
+    focusedEventId.set(row.focusId)
+    navigate(timelineHref)
+  }
+  const onviewtimeline = $derived(timelineHref ? viewOnTimeline : undefined)
 
   // The row-action sheet: which row was tapped and which section it belongs to
   // (meds vs. problems drives the status wording). Null when closed.
@@ -160,6 +255,36 @@
       </button>
     </div>
 
+    <div class="filter-row">
+      <input
+        type="search"
+        class="filter"
+        placeholder="Find a medication, problem, result…"
+        aria-label="Filter this summary"
+        bind:value={filter}
+        data-testid="summary-filter"
+      />
+      {#if needle !== '' && matchCount === 0}
+        <p class="no-match muted" data-testid="summary-no-match">
+          Nothing here matches “{filter.trim()}”.
+        </p>
+      {/if}
+    </div>
+
+    <!-- Allergies lead: they are the one section a clinician must not miss,
+         and "None recorded" is itself the answer they came for. -->
+    <SummarySection
+      title="Allergies"
+      rows={allergies}
+      hueClass="cat-symptom"
+      alwaysShow={needle === ''}
+      emptyText="None recorded"
+      dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
+      {readonly}
+      {onviewtimeline}
+    />
+
     <!-- Problems: Active (always shown) then a collapsed Resolved group. The
          same layout for owner and recipient; a recipient's rows are inert
          (no onrowtap) and the collapsed group appears only when the share
@@ -169,31 +294,37 @@
         title="Problems"
         rows={activeProblems}
         hueClass="cat-clinical"
-        alwaysShow
+        alwaysShow={needle === ''}
         emptyText="None recorded"
         dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
+        curateLabel="Resolve or rename"
         {readonly}
+        {onviewtimeline}
         onrowtap={readonly ? undefined : (row) => openAction(row, 'problem')}
       />
       {#if resolvedProblems.length > 0}
         <button
           type="button"
           class="ghost collapse-toggle"
-          aria-expanded={resolvedOpen}
+          aria-expanded={showResolved}
           onclick={() => (resolvedOpen = !resolvedOpen)}
           data-testid="problems-resolved-toggle"
         >
-          {resolvedOpen ? 'Hide' : 'Show'}
+          {showResolved ? 'Hide' : 'Show'}
           {resolvedProblems.length} resolved
         </button>
-        {#if resolvedOpen}
+        {#if showResolved}
           <SummarySection
             title="Resolved"
             rows={resolvedProblems}
             hueClass="cat-clinical"
             heading="h3"
             dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
+            curateLabel="Reactivate or rename"
             {readonly}
+            {onviewtimeline}
             onrowtap={readonly ? undefined : (row) => openAction(row, 'problem')}
           />
         {/if}
@@ -205,68 +336,180 @@
         title="Medications"
         rows={currentMeds}
         hueClass="cat-med"
-        alwaysShow
+        alwaysShow={needle === ''}
         emptyText="None recorded"
         dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
+        curateLabel="Mark past or rename"
+        detailLabel="Dose"
         {readonly}
+        {onviewtimeline}
         onrowtap={readonly ? undefined : (row) => openAction(row, 'med')}
       />
       {#if pastMeds.length > 0}
         <button
           type="button"
           class="ghost collapse-toggle"
-          aria-expanded={pastMedsOpen}
+          aria-expanded={showPastMeds}
           onclick={() => (pastMedsOpen = !pastMedsOpen)}
           data-testid="meds-past-toggle"
         >
-          {pastMedsOpen ? 'Hide' : 'Show'}
+          {showPastMeds ? 'Hide' : 'Show'}
           {pastMeds.length} past
         </button>
-        {#if pastMedsOpen}
+        {#if showPastMeds}
           <SummarySection
             title="Past"
             rows={pastMeds}
             hueClass="cat-med"
             heading="h3"
             dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
+            curateLabel="Mark current or rename"
+            detailLabel="Dose"
             {readonly}
+            {onviewtimeline}
             onrowtap={readonly ? undefined : (row) => openAction(row, 'med')}
           />
         {/if}
       {/if}
     </div>
-    <SummarySection
-      title="Allergies"
-      rows={summary.allergies}
-      hueClass="cat-symptom"
-      alwaysShow
-      emptyText="None recorded"
-      dictionaryEnabled={$dictionaryStatus.enabled}
-      {readonly}
-    />
-    <SummarySection
-      title="Immunizations"
-      rows={summary.immunizations}
-      hueClass="cat-clinical"
-      dictionaryEnabled={$dictionaryStatus.enabled}
-      {readonly}
-    />
-    <SummarySection
-      title="Latest vitals"
-      rows={summary.latestVitals}
-      hueClass="cat-vital"
-      dictionaryEnabled={$dictionaryStatus.enabled}
-      {readonly}
-    />
-    <SummarySection
-      title="Recent results"
-      rows={summary.recentResults}
-      hueClass="cat-clinical"
-      dictionaryEnabled={$dictionaryStatus.enabled}
-      {readonly}
-    />
 
-    {#if summary.cycle}
+    <!-- Windowed sections: the last year leads, everything older sits behind a
+         toggle. Nothing is dropped — an older row is one tap away, and the
+         toggle states how many there are. -->
+    {#if immunizations.recent.length > 0 || immunizations.older.length > 0}
+      <div class="split-group">
+        <SummarySection
+          title="Immunizations"
+          rows={immunizations.recent}
+          hueClass="cat-clinical"
+          alwaysShow={immunizations.older.length > 0}
+          emptyText={noneRecently}
+          dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
+          detailLabel="Doses"
+          {readonly}
+          {onviewtimeline}
+        />
+        {#if immunizations.older.length > 0}
+          <button
+            type="button"
+            class="ghost collapse-toggle"
+            aria-expanded={showOlderImmunizations}
+            onclick={() => (olderImmunizationsOpen = !olderImmunizationsOpen)}
+            data-testid="immunizations-older-toggle"
+          >
+            {showOlderImmunizations ? 'Hide' : 'Show'}
+            {immunizations.older.length}
+            {olderLabel}
+          </button>
+          <!-- Always rendered, hidden on screen until the toggle opens it: paper
+               has no toggle, so a printed handoff must carry these rows. -->
+          <div class="older" class:open={showOlderImmunizations}>
+            <SummarySection
+              title="Earlier immunizations"
+              rows={immunizations.older}
+              hueClass="cat-clinical"
+              heading="h3"
+              dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
+              detailLabel="Doses"
+              {readonly}
+              {onviewtimeline}
+            />
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+    {#if vitals.recent.length > 0 || vitals.older.length > 0}
+      <div class="split-group">
+        <SummarySection
+          title="Latest vitals"
+          rows={vitals.recent}
+          hueClass="cat-vital"
+          alwaysShow={vitals.older.length > 0}
+          emptyText={noneRecently}
+          dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
+          {readonly}
+          {onviewtimeline}
+        />
+        {#if vitals.older.length > 0}
+          <button
+            type="button"
+            class="ghost collapse-toggle"
+            aria-expanded={showOlderVitals}
+            onclick={() => (olderVitalsOpen = !olderVitalsOpen)}
+            data-testid="vitals-older-toggle"
+          >
+            {showOlderVitals ? 'Hide' : 'Show'}
+            {vitals.older.length}
+            {olderLabel}
+          </button>
+          <!-- Always rendered, hidden on screen until the toggle opens it: paper
+               has no toggle, so a printed handoff must carry these rows. -->
+          <div class="older" class:open={showOlderVitals}>
+            <SummarySection
+              title="Earlier vitals"
+              rows={vitals.older}
+              hueClass="cat-vital"
+              heading="h3"
+              dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
+              {readonly}
+              {onviewtimeline}
+            />
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+    {#if results.recent.length > 0 || results.older.length > 0}
+      <div class="split-group">
+        <SummarySection
+          title="Recent results"
+          rows={results.recent}
+          hueClass="cat-clinical"
+          alwaysShow={results.older.length > 0}
+          emptyText={noneRecently}
+          dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
+          {readonly}
+          {onviewtimeline}
+        />
+        {#if results.older.length > 0}
+          <button
+            type="button"
+            class="ghost collapse-toggle"
+            aria-expanded={showOlderResults}
+            onclick={() => (olderResultsOpen = !olderResultsOpen)}
+            data-testid="results-older-toggle"
+          >
+            {showOlderResults ? 'Hide' : 'Show'}
+            {results.older.length}
+            {olderLabel}
+          </button>
+          <!-- Always rendered, hidden on screen until the toggle opens it: paper
+               has no toggle, so a printed handoff must carry these rows. -->
+          <div class="older" class:open={showOlderResults}>
+            <SummarySection
+              title="Earlier results"
+              rows={results.older}
+              hueClass="cat-clinical"
+              heading="h3"
+              dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
+              {readonly}
+              {onviewtimeline}
+            />
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+    {#if summary.cycle && !searching}
       <section class="section cycle-section" data-testid="summary-section-cycle">
         <h2 class="section-head">
           <span class="dot cat-cycle" aria-hidden="true"></span>
@@ -370,6 +613,27 @@
     gap: var(--space-2);
     min-height: 36px;
     min-width: 0;
+    font-size: var(--text-sm);
+  }
+
+  .filter-row {
+    margin-bottom: var(--space-4);
+  }
+
+  /* A collapsed "older than a year" group stays in the DOM so the print
+     stylesheet can reveal it; on screen it is simply not there. */
+  @media screen {
+    .older:not(.open) {
+      display: none;
+    }
+  }
+
+  .filter {
+    width: 100%;
+  }
+
+  .no-match {
+    margin: var(--space-2) 0 0;
     font-size: var(--text-sm);
   }
 
@@ -511,8 +775,31 @@
     :global(.tag-chip) {
       display: none !important;
     }
-    .print-btn {
+    .print-btn,
+    .filter-row,
+    .collapse-toggle {
       display: none;
+    }
+    /* Codes live in the expanded panel on screen, where they're one tap away.
+       Paper has no taps — but printing every panel open turns a one-page
+       handoff into four. Instead the panel stays shut and each row reveals the
+       code it carries for exactly this purpose, restoring the compact
+       one-line-per-row printout with its coding demoted alongside. */
+    .summary :global(.paper) {
+      display: inline !important;
+    }
+    /* The panel and the on-screen affordances around it: the swipe action
+       labels (positioned under the row face) and the expand chevron. */
+    .summary :global(.panel-wrap),
+    .summary :global(.action),
+    .summary :global(.chevron) {
+      display: none !important;
+    }
+    /* The row face carries the app background so it can slide over the swipe
+       actions beneath it. On paper that prints as a grey block behind every
+       row. */
+    .summary :global(.row) {
+      background: transparent !important;
     }
     .summary :global(.section) {
       break-inside: avoid;

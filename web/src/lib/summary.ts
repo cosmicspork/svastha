@@ -7,6 +7,10 @@
 // onset/medication dates, and a clinician summary that silently dropped those
 // facts would be actively misleading. Undated rows sort last and render "date
 // unknown".
+//
+// Immunizations, vitals, and results are split around a recency window (see
+// RECENT_WINDOW_MONTHS) rather than filtered by it — same reason: the older
+// rows stay in the payload, the view just doesn't lead with them.
 import { VITALS, BP_SYSTOLIC, BP_DIASTOLIC, VITAL_LOINC_CODES, shortenSystem, type Code } from './codes'
 import { categorize } from './category'
 import { buildCodeNameIndex, resolveDisplay } from './code-names'
@@ -18,6 +22,21 @@ import { isoToMillis } from './time'
 
 /** The cycle section's shape: exactly {@link cycleStats}' non-null result. */
 export type CycleSummary = CycleStats
+
+/** How far back the windowed sections (immunizations, vitals, results) reach
+ * before a row is demoted to `older`. A visit asks "what's happened lately";
+ * a decade of flu shots and old lab panels buries the answer. Nothing is
+ * dropped — `older` still carries every row, one tap away. */
+export const RECENT_WINDOW_MONTHS = 12
+
+/** A section split around {@link RECENT_WINDOW_MONTHS}. `older` holds the rows
+ * outside the window *and* every undated row: an undated fact cannot be shown
+ * to be recent, and presenting it as such would be a claim the data doesn't
+ * support. */
+export interface WindowedSection {
+  recent: SummaryRow[]
+  older: SummaryRow[]
+}
 
 export interface SummaryRow {
   /** `${kind}|${system}|${code}` — the folded clinical concept. For allergies
@@ -40,8 +59,10 @@ export interface SummaryRow {
    * it. True for every other row, including free text and kind-word labels,
    * which are real labels even though they're not a resolved coded name. */
   nameResolved: boolean
-  /** Formatted value / dose count / '' — the measurement or context the label
-   * doesn't already carry. */
+  /** Formatted value / dose / dose count / '' — the measurement or context the
+   * label doesn't already carry. For a medication this is the recorded dose
+   * quantity (see `medicationDose`); the strength baked into a drug name stays
+   * in the label, never re-derived here. */
   detail: string
   /** Representative `effective_at` (earliest onset for problems, latest mention
    * elsewhere), or null when every folded event was undated. */
@@ -49,6 +70,11 @@ export interface SummaryRow {
   /** How many source events folded into this row. */
   count: number
   eventIds: string[]
+  /** The single event this row stands for — the one whose `effective_at` is
+   * `date` (or, when the whole group is undated, the one that named the row).
+   * "See on timeline" focuses this id, so the spine lands on the mention the
+   * summary is actually showing rather than an arbitrary member of the fold. */
+  focusId: string
   /** The owner's curated lifecycle for this concept (see curation.ts's
    * `status:` namespace), `'active'` by default. Only the meds and problems
    * sections split on it (current/past, active/resolved); it is `'active'` and
@@ -59,11 +85,17 @@ export interface SummaryRow {
 
 export interface ClinicianSummary {
   problems: SummaryRow[]
+  /** Alphabetical, not newest-first: in a visit the name is what you're
+   * looking up, and a med list you can't scan by name is a list you have to
+   * read end to end. */
   medications: SummaryRow[]
   allergies: SummaryRow[]
-  immunizations: SummaryRow[]
-  latestVitals: SummaryRow[]
-  recentResults: SummaryRow[]
+  immunizations: WindowedSection
+  latestVitals: WindowedSection
+  recentResults: WindowedSection
+  /** The window the three sections above were split on, so the view can name
+   * it ("older than 12 months") without hardcoding the same number twice. */
+  windowMonths: number
   /** Present iff the events carry cycle data. Because it derives from the same
    * events the section renders over, a share preview shows a cycle section
    * exactly when cycle was opted into the scope — no separate flag to keep in
@@ -153,14 +185,15 @@ function labelSource(events: Ev[]): Ev {
   return mostRecent(events)!
 }
 
-function representativeDate(events: Ev[], strategy: 'earliest' | 'latest'): string | null {
+/** The event a row stands for: earliest onset for problems, latest mention
+ * elsewhere. Null when every folded event was undated. */
+function representative(events: Ev[], strategy: 'earliest' | 'latest'): Ev | null {
   const dated = events.filter((e) => e.effective_at)
   if (dated.length === 0) return null
-  const pick = dated.reduce((a, b) => {
+  return dated.reduce((a, b) => {
     const cmp = isoToMillis(a.effective_at!) - isoToMillis(b.effective_at!)
     return (strategy === 'earliest' ? cmp <= 0 : cmp >= 0) ? a : b
   })
-  return pick.effective_at
 }
 
 function byDateDescNullLast(a: SummaryRow, b: SummaryRow): number {
@@ -168,6 +201,35 @@ function byDateDescNullLast(a: SummaryRow, b: SummaryRow): number {
   if (a.date === null) return 1
   if (b.date === null) return -1
   return isoToMillis(b.date) - isoToMillis(a.date)
+}
+
+/** Name order, case- and accent-insensitive, with the date as a stable
+ * tie-break so two same-named concepts keep a deterministic order. */
+function byLabel(a: SummaryRow, b: SummaryRow): number {
+  return (
+    a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }) || byDateDescNullLast(a, b)
+  )
+}
+
+/** The start of the recency window: `months` before `nowMs`. Month arithmetic,
+ * not a 365-day approximation, so "the last 12 months" means the same calendar
+ * date a year ago however the leap years fall. */
+function windowStartMillis(nowMs: number, months: number): number {
+  const d = new Date(nowMs)
+  d.setMonth(d.getMonth() - months)
+  return d.getTime()
+}
+
+/** Split rows around the window cutoff, preserving each bucket's incoming
+ * order. Undated rows land in `older` — see {@link WindowedSection}. */
+function splitByWindow(rows: SummaryRow[], cutoffMillis: number): WindowedSection {
+  const recent: SummaryRow[] = []
+  const older: SummaryRow[] = []
+  for (const row of rows) {
+    if (row.date !== null && isoToMillis(row.date) >= cutoffMillis) recent.push(row)
+    else older.push(row)
+  }
+  return { recent, older }
 }
 
 /** Curation layered over the folded concepts: the owner's per-concept status
@@ -197,6 +259,7 @@ function foldSection(
   const rows: SummaryRow[] = []
   for (const [key, group] of groups) {
     const ls = labelSource(group)
+    const rep = representative(group, dateStrategy)
     const resolved = resolveLabel(ls, nameIndex, dictionary)
     // The owner's name override is the top of the render-time name chain (above
     // the event's own display, the vault index, and the dictionary — see
@@ -210,9 +273,10 @@ function foldSection(
       coding: named.coding,
       nameResolved: named.nameResolved,
       detail: detailFor(ls, group),
-      date: representativeDate(group, dateStrategy),
+      date: rep?.effective_at ?? null,
       count: group.length,
       eventIds: group.map((e) => e.id),
+      focusId: (rep ?? ls).id,
       status: curation.status.get(key) ?? 'active',
     })
   }
@@ -222,6 +286,22 @@ function foldSection(
 function quantityString(e: Ev): string {
   const q = quantityOf(e)
   return q ? renderQuantity(q) : ''
+}
+
+/** A medication row's dose: the most recent dose quantity anywhere in the fold,
+ * not just on the event that happened to name the row. Sources are uneven — a
+ * later refill often arrives as a bare coded statement with no doseQuantity —
+ * and reading only the label source dropped a dose the record plainly holds.
+ *
+ * Nothing is parsed out of the *name*: an RxNorm display carries its strength
+ * verbatim ("Amoxicillin 400 MG/5 ML Suspension"), and splitting a strength out
+ * of one would sooner or later print "400 MG" for a per-5-mL concentration.
+ * The name keeps its strength; this slot carries only what the source recorded
+ * as a dose. */
+function medicationDose(group: Ev[]): string {
+  const dosed = group.filter((e) => quantityOf(e))
+  const latest = mostRecent(dosed)
+  return latest ? quantityString(latest) : ''
 }
 
 /** One row per vital code, each showing that vital's single most-recent
@@ -254,7 +334,7 @@ function buildVitals(observations: Ev[]): SummaryRow[] {
       if (sQ && dQ) detail = `${sQ.value}/${dQ.value} ${sQ.unit}`.trim()
       else if (sQ) detail = renderQuantity(sQ)
       else if (dQ) detail = renderQuantity(dQ)
-      const rep = latestSys ?? pairedDia
+      const rep = (latestSys ?? pairedDia)!
       rows.push({
         key: `observation|${BP_SYSTOLIC.system}|${BP_SYSTOLIC.code}`,
         label: 'Blood pressure',
@@ -264,9 +344,10 @@ function buildVitals(observations: Ev[]): SummaryRow[] {
         coding: null,
         nameResolved: true,
         detail,
-        date: rep?.effective_at ?? null,
+        date: rep.effective_at,
         count: sys.length + dia.length,
         eventIds: [...sys, ...dia].map((e) => e.id),
+        focusId: rep.id,
         status: 'active',
       })
     } else {
@@ -282,11 +363,18 @@ function buildVitals(observations: Ev[]): SummaryRow[] {
         date: latest.effective_at,
         count: evs.length,
         eventIds: evs.map((e) => e.id),
+        focusId: latest.id,
         status: 'active',
       })
     }
   }
   return rows
+}
+
+/** Cap each bucket separately: a windowed section that shared one limit would
+ * let a long recent list swallow the older one's entire allowance. */
+function limitBoth(section: WindowedSection, limit: number): WindowedSection {
+  return { recent: section.recent.slice(0, limit), older: section.older.slice(0, limit) }
 }
 
 export function buildSummary(
@@ -302,11 +390,24 @@ export function buildSummary(
      * pure (no db/session/wasm). */
     status?: Map<string, ConceptStatus>
     names?: Map<string, string>
+    /** "Now" for the recency window, injectable so the split is testable
+     * without freezing the clock. */
+    now?: number
+    /** How far back the windowed sections reach; see
+     * {@link RECENT_WINDOW_MONTHS}. `0` puts every dated row in `older`. */
+    windowMonths?: number
   } = {},
 ): ClinicianSummary {
   // `dictionary`: the offline code dictionary (see dictionary.ts), hydrated once
   // and passed in. Empty by default, which makes its resolution layer a no-op.
-  const { hiddenIds, resultLimit = 20, dictionary = new Map() } = opts
+  const {
+    hiddenIds,
+    resultLimit = 20,
+    dictionary = new Map(),
+    now = Date.now(),
+    windowMonths = RECENT_WINDOW_MONTHS,
+  } = opts
+  const cutoff = windowStartMillis(now, windowMonths)
   const curation: Curation = { status: opts.status ?? new Map(), names: opts.names ?? new Map() }
   // Subtract hides before grouping; dropped silently — a clinical summary
   // shouldn't advertise redactions with a "hidden entry" placeholder. The name
@@ -334,31 +435,44 @@ export function buildSummary(
     problems: foldSection(conditions, 'earliest', () => '', nameIndex, dictionary, curation).sort(
       byDateDescNullLast,
     ),
-    medications: foldSection(meds, 'latest', (ls) => quantityString(ls), nameIndex, dictionary, curation).sort(
-      byDateDescNullLast,
-    ),
-    allergies: foldSection(allergyEvents, 'latest', () => '', nameIndex, dictionary, curation).sort((a, b) =>
-      a.label.localeCompare(b.label),
-    ),
-    immunizations: foldSection(
-      immunizations,
+    medications: foldSection(
+      meds,
       'latest',
-      (_ls, group) => (group.length > 1 ? `${group.length} doses` : ''),
+      (_ls, group) => medicationDose(group),
       nameIndex,
       dictionary,
       curation,
-    ).sort(byDateDescNullLast),
-    latestVitals: buildVitals(observations),
-    recentResults: foldSection(
-      results,
-      'latest',
-      (ls) => quantityString(ls) || textOf(ls) || '',
-      nameIndex,
-      dictionary,
-      curation,
-    )
-      .sort(byDateDescNullLast)
-      .slice(0, resultLimit),
+    ).sort(byLabel),
+    allergies: foldSection(allergyEvents, 'latest', () => '', nameIndex, dictionary, curation).sort(
+      byLabel,
+    ),
+    immunizations: splitByWindow(
+      foldSection(
+        immunizations,
+        'latest',
+        (_ls, group) => (group.length > 1 ? `${group.length} doses` : ''),
+        nameIndex,
+        dictionary,
+        curation,
+      ).sort(byDateDescNullLast),
+      cutoff,
+    ),
+    latestVitals: splitByWindow(buildVitals(observations), cutoff),
+    recentResults: limitBoth(
+      splitByWindow(
+        foldSection(
+          results,
+          'latest',
+          (ls) => quantityString(ls) || textOf(ls) || '',
+          nameIndex,
+          dictionary,
+          curation,
+        ).sort(byDateDescNullLast),
+        cutoff,
+      ),
+      resultLimit,
+    ),
+    windowMonths,
     cycle,
   }
 }
