@@ -385,7 +385,9 @@
             {immunizations.older.length}
             {olderLabel}
           </button>
-          {#if showOlderImmunizations}
+          <!-- Always rendered, hidden on screen until the toggle opens it: paper
+               has no toggle, so a printed handoff must carry these rows. -->
+          <div class="older" class:open={showOlderImmunizations}>
             <SummarySection
               title="Earlier immunizations"
               rows={immunizations.older}
@@ -396,7 +398,7 @@
               {readonly}
               {onviewtimeline}
             />
-          {/if}
+          </div>
         {/if}
       </div>
     {/if}
@@ -425,7 +427,9 @@
             {vitals.older.length}
             {olderLabel}
           </button>
-          {#if showOlderVitals}
+          <!-- Always rendered, hidden on screen until the toggle opens it: paper
+               has no toggle, so a printed handoff must carry these rows. -->
+          <div class="older" class:open={showOlderVitals}>
             <SummarySection
               title="Earlier vitals"
               rows={vitals.older}
@@ -435,7 +439,7 @@
               {readonly}
               {onviewtimeline}
             />
-          {/if}
+          </div>
         {/if}
       </div>
     {/if}
@@ -464,7 +468,9 @@
             {results.older.length}
             {olderLabel}
           </button>
-          {#if showOlderResults}
+          <!-- Always rendered, hidden on screen until the toggle opens it: paper
+               has no toggle, so a printed handoff must carry these rows. -->
+          <div class="older" class:open={showOlderResults}>
             <SummarySection
               title="Earlier results"
               rows={results.older}
@@ -474,7 +480,7 @@
               {readonly}
               {onviewtimeline}
             />
-          {/if}
+          </div>
         {/if}
       </div>
     {/if}
@@ -588,6 +594,14 @@
 
   .filter-row {
     margin-bottom: var(--space-4);
+  }
+
+  /* A collapsed "older than a year" group stays in the DOM so the print
+     stylesheet can reveal it; on screen it is simply not there. */
+  @media screen {
+    .older:not(.open) {
+      display: none;
+    }
   }
 
   .filter {
@@ -738,17 +752,30 @@
       display: none !important;
     }
     .print-btn,
-    .filter-row {
+    .filter-row,
+    .collapse-toggle {
       display: none;
     }
     /* Codes live in the expanded panel on screen, where they're one tap away.
-       Paper has no taps: print every panel open so the printed handoff still
-       carries the coding and record counts behind each row. */
-    .summary :global(.panel-wrap) {
-      grid-template-rows: 1fr !important;
+       Paper has no taps — but printing every panel open turns a one-page
+       handoff into four. Instead the panel stays shut and each row reveals the
+       code it carries for exactly this purpose, restoring the compact
+       one-line-per-row printout with its coding demoted alongside. */
+    .summary :global(.paper) {
+      display: inline !important;
     }
-    .summary :global(.panel-actions) {
+    /* The panel and the on-screen affordances around it: the swipe action
+       labels (positioned under the row face) and the expand chevron. */
+    .summary :global(.panel-wrap),
+    .summary :global(.action),
+    .summary :global(.chevron) {
       display: none !important;
+    }
+    /* The row face carries the app background so it can slide over the swipe
+       actions beneath it. On paper that prints as a grey block behind every
+       row. */
+    .summary :global(.row) {
+      background: transparent !important;
     }
     .summary :global(.section) {
       break-inside: avoid;
@@ -760,8 +787,6 @@
     .summary :global(.detail),
     .summary :global(.date),
     .summary :global(.count),
-    .summary :global(.panel dt),
-    .summary :global(.panel dd),
     .cycle-section .note,
     .cycle-footer,
     .coverage {

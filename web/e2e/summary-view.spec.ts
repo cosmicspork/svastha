@@ -110,8 +110,10 @@ test('summary: alphabetical dosed meds, a windowed immunization list, and a row 
   await expect(lisinopril).toContainText('10 mg')
 
   // --- codes are off the face, behind a short press ---
+  // Visibility, not text: the face also carries a print-only copy of the
+  // coding (see the print test below), which textContent would pick up.
   const trigger = lisinopril.getByTestId('summary-row-trigger')
-  await expect(trigger).not.toContainText('RxNorm')
+  await expect(lisinopril.getByTestId('summary-coding-print')).toBeHidden()
   await expect(trigger).toHaveAttribute('aria-expanded', 'false')
   await trigger.click()
   await expect(trigger).toHaveAttribute('aria-expanded', 'true')
@@ -124,7 +126,9 @@ test('summary: alphabetical dosed meds, a windowed immunization list, and a row 
   await expect(immunizations.getByTestId('summary-label')).toHaveText(['Influenza'])
   const olderToggle = page.getByTestId('immunizations-older-toggle')
   await expect(olderToggle).toContainText('1')
-  await expect(page.getByTestId('summary-section-earlier-immunizations')).toHaveCount(0)
+  // Rendered but not shown — the print stylesheet reveals it (see the print
+  // test below), so on screen it is hidden rather than absent.
+  await expect(page.getByTestId('summary-section-earlier-immunizations')).toBeHidden()
   await olderToggle.click()
   await expect(
     page.getByTestId('summary-section-earlier-immunizations').getByTestId('summary-label'),
@@ -172,4 +176,37 @@ test('summary: a row jumps to its own entry on the timeline', async ({ page }) =
   const highlighted = page.locator('[data-testid="spine-entry"][data-highlighted="true"]')
   await expect(highlighted).toHaveCount(1)
   await expect(highlighted).toContainText('Zolpidem')
+})
+
+test('summary: the printed page is the whole record, codes included', async ({ page }) => {
+  await onboardViaUI(page)
+  await seed(page)
+  await page.reload()
+  await unlock(page)
+  await openSummary(page)
+
+  const lisinopril = meds(page).filter({ hasText: 'Lisinopril' })
+  const olderImmunizations = page.getByTestId('summary-section-earlier-immunizations')
+
+  // On screen: codes are behind the panel and the older group is collapsed.
+  await expect(lisinopril.getByTestId('summary-coding-print')).toBeHidden()
+  await expect(olderImmunizations).toBeHidden()
+
+  await page.emulateMedia({ media: 'print' })
+
+  // On paper: the code is back on the row face — paper has no panel to open,
+  // and forcing every panel open turns a one-page handoff into several.
+  await expect(lisinopril.getByTestId('summary-coding-print')).toContainText('RxNorm 29046')
+  await expect(lisinopril.getByTestId('summary-row-panel')).toBeHidden()
+
+  // ...and the "older than a year" rows print even though the toggle that
+  // reveals them on screen does not.
+  await expect(olderImmunizations.getByTestId('summary-label')).toHaveText(['Tdap'])
+  await expect(page.getByTestId('immunizations-older-toggle')).toBeHidden()
+
+  // Chrome that means nothing on paper is gone.
+  await expect(page.getByTestId('summary-print')).toBeHidden()
+  await expect(page.getByTestId('summary-filter')).toBeHidden()
+
+  await page.emulateMedia({ media: null })
 })

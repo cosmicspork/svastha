@@ -205,6 +205,15 @@
                       {/if}
                     {/if}
                   </span>
+                  {#if row.coding && row.nameResolved}
+                    <!-- Print only (see ClinicianSummary's @media print): paper
+                         has no panel to open, and a one-line row with the code
+                         demoted beside it is a far shorter handoff than a page
+                         of forced-open panels. -->
+                    <span class="code data muted paper" data-testid="summary-coding-print"
+                      >{row.coding.system} {row.coding.code}</span
+                    >
+                  {/if}
                   {#if row.detail}
                     <span class="detail data">{row.detail}</span>
                   {/if}
@@ -438,6 +447,11 @@
      code on the face. */
   .code {
     font-size: var(--text-xs);
+  }
+
+  /* Carried in the DOM for the print stylesheet alone. */
+  .paper {
+    display: none;
   }
 
   .hint {

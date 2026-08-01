@@ -103,8 +103,9 @@ test('curate the clinician summary: mark a med past (persistent) and rename a co
   await expect(renamed).toHaveCount(1)
   // The source code is off the row's face now, but still there in the panel —
   // still open from openCurate, since the rename kept the same concept key.
+  // Visibility, not text: the face carries a print-only copy of the coding.
   const trigger = renamed.getByTestId('summary-row-trigger')
-  await expect(trigger).not.toContainText('RxNorm')
+  await expect(renamed.getByTestId('summary-coding-print')).toBeHidden()
   await expect(trigger).toHaveAttribute('aria-expanded', 'true')
   await expect(renamed.getByTestId('summary-coding')).toContainText('RxNorm')
   await expect(renamed.getByTestId('summary-coding')).toContainText('6809')
