@@ -16,6 +16,7 @@
     alwaysShow = false,
     emptyText = '',
     dictionaryEnabled = false,
+    coveredSystems = new Set<string>(),
     readonly = false,
     heading = 'h2',
     curateLabel = 'Edit',
@@ -34,6 +35,11 @@
     /** Whether the offline code dictionary (see lib/dictionary.ts) is enabled —
      * changes the hint shown under an unresolved row's code. */
     dictionaryEnabled?: boolean
+    /** The shortened system names the installed dictionary actually covers
+     * (`shortenSystem`'d, so they compare against `row.coding.system`). A code
+     * in a system outside this set can never be named by a dictionary update,
+     * and the hint says so rather than promising one. */
+    coveredSystems?: Set<string>
     /** True for a recipient's read-only render (doctor-share preview / Person
      * view), which has no Settings screen to point the "download it" hint at. */
     readonly?: boolean
@@ -131,16 +137,25 @@
     return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
   }
 
-  /** The hint under an unresolved row's code. Empty when read-only and the
-   * dictionary is off — there's no Settings screen to send a recipient to, so
-   * the code alone has to speak for itself. */
-  const unresolvedHint = $derived(
-    dictionaryEnabled
-      ? 'no name found — the dictionary may name it after an update'
-      : readonly
-        ? ''
-        : 'download the code dictionary in Settings to name coded entries',
-  )
+  /** The hint under an unresolved row's code, in three states:
+   *
+   * - dictionary off: point at Settings. Empty for a read-only recipient —
+   *   there's no Settings screen to send them to, so the code alone has to
+   *   speak for itself.
+   * - dictionary on, but nothing ships for this code's system (NDC, CPT —
+   *   see docs/ROADMAP.md): say so. "The dictionary may name it after an
+   *   update" would be a promise no update can keep.
+   * - dictionary on and the system covered: the code is genuinely absent from
+   *   this edition, and a later one may carry it. */
+  function unresolvedHint(row: SummaryRow): string {
+    if (!dictionaryEnabled) {
+      return readonly ? '' : 'download the code dictionary in Settings to name coded entries'
+    }
+    if (row.coding && !coveredSystems.has(row.coding.system)) {
+      return `no dictionary available for ${row.coding.system} codes`
+    }
+    return 'no name found — the dictionary may name it after an update'
+  }
 
   const panelId = (key: string): string => `sum-panel-${key.replace(/[^a-zA-Z0-9]+/g, '-')}`
 </script>
@@ -199,9 +214,9 @@
                         >{row.label} ·
                         <span class="code data">{row.coding?.system} {row.coding?.code}</span></span
                       >
-                      {#if unresolvedHint}
-                        <span class="hint" data-testid="summary-unnamed-hint">{unresolvedHint}</span
-                        >
+                      {@const hint = unresolvedHint(row)}
+                      {#if hint}
+                        <span class="hint" data-testid="summary-unnamed-hint">{hint}</span>
                       {/if}
                     {/if}
                   </span>

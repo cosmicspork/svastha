@@ -210,3 +210,98 @@ test('summary: the printed page is the whole record, codes included', async ({ p
 
   await page.emulateMedia({ media: null })
 })
+
+// The unnamed-row hint has three states, and getting them wrong tells the owner
+// to fix something they cannot fix — or that they already have.
+const NDC = 'http://hl7.org/fhir/sid/ndc'
+
+/** Seed one NDC-coded and one RxNorm-coded medication, both display-less, so
+ * neither resolves a name from the source. */
+async function seedUnnamed(page: Page): Promise<void> {
+  await page.evaluate(
+    async ({ ndc, rxnorm, at }) => {
+      const { logEvent } = await import('/src/lib/events.ts')
+      await logEvent([
+        { kind: 'medication_statement', code: { system: ndc, code: '8627007701' }, effective_at: at, value: null },
+        { kind: 'medication_statement', code: { system: rxnorm, code: '1719647' }, effective_at: at, value: null },
+      ])
+    },
+    { ndc: NDC, rxnorm: RXNORM, at: daysAgo(30) },
+  )
+}
+
+/** Mark the dictionary installed the way a real download leaves it: the enabled
+ * pref plus a stored manifest. Nothing is faked in the hint path itself — the
+ * component still reads the real store, rebuilt from disk by the real
+ * `refreshDictionaryStatus`. */
+async function installDictionaryCovering(page: Page, systems: string[]): Promise<void> {
+  await page.evaluate(async (systems) => {
+    const { put } = await import('/src/lib/db.ts')
+    const { refreshDictionaryStatus } = await import('/src/lib/dictionary.ts')
+    await put('prefs', true, 'dict-enabled')
+    await put(
+      'prefs',
+      {
+        version: '2026-07-27',
+        generated_at: '2026-07-27T00:00:00Z',
+        files: systems.map((system) => ({
+          system,
+          path: 'x.json',
+          bytes: 1,
+          sha256: 'x',
+          entries: 1,
+          label: system,
+          attribution: 'test',
+        })),
+      },
+      'dict-manifest',
+    )
+    await refreshDictionaryStatus()
+  }, systems)
+}
+
+function hintFor(page: Page, code: string) {
+  return page
+    .getByTestId('summary-section-medications')
+    .getByTestId('summary-row')
+    .filter({ hasText: code })
+    .getByTestId('summary-unnamed-hint')
+}
+
+test('summary: an unnamed row says the true thing about the dictionary', async ({ page }) => {
+  await onboardViaUI(page)
+  await seedUnnamed(page)
+  await page.reload()
+  await unlock(page)
+  await openSummary(page)
+
+  // 1. Dictionary off: point at Settings.
+  await expect(hintFor(page, '8627007701')).toContainText('download the code dictionary')
+
+  // 2. Dictionary installed, covering RxNorm but not NDC. The RxNorm code is
+  //    simply absent from this edition; a later one may carry it.
+  await installDictionaryCovering(page, [RXNORM])
+  await expect(hintFor(page, '1719647')).toContainText('may name it after an update')
+
+  // 3. ...but no dictionary ships for NDC at all, so promising an update would
+  //    be a promise nothing can keep.
+  await expect(hintFor(page, '8627007701')).toContainText('no dictionary available for NDC codes')
+})
+
+test('summary: an installed dictionary is not reported as missing on a cold start', async ({
+  page,
+}) => {
+  await onboardViaUI(page)
+  await seedUnnamed(page)
+  await installDictionaryCovering(page, [RXNORM])
+
+  // The bug: only Settings > Data ever hydrated the status store, so a reload
+  // straight to the summary read the default (disabled) and told an owner with
+  // a current dictionary to go and download one.
+  await page.reload()
+  await unlock(page)
+  await openSummary(page)
+
+  await expect(hintFor(page, '1719647')).not.toContainText('download the code dictionary')
+  await expect(hintFor(page, '1719647')).toContainText('may name it after an update')
+})

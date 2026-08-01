@@ -10,6 +10,7 @@
   import { ensureCurationSigned } from './lib/curation'
   import { route } from './lib/router.svelte'
   import { loadTheme, applyTheme } from './lib/theme'
+  import { refreshDictionaryStatus } from './lib/dictionary'
   import Onboard from './routes/Onboard.svelte'
   import Unlock from './routes/Unlock.svelte'
   import Home from './routes/Home.svelte'
@@ -55,6 +56,14 @@
     await initSvastha()
     if (!isShare) vaultExists = await hasVault()
     ready = true
+    // Hydrate the dictionary status store from disk once per session. It backs
+    // more than the Settings screen it was written for: the summary's unnamed-
+    // row hint reads `enabled` to decide between "the dictionary may name it
+    // after an update" and "download the code dictionary in Settings". Left
+    // unhydrated it defaults to disabled, so a vault with the dictionary
+    // installed and current was still telling its owner to go and download it.
+    // Not awaited above `ready`: nothing on first paint depends on it.
+    void refreshDictionaryStatus()
   })
 
   // Re-check after onboarding completes (initVault runs, then navigates here).

@@ -11,6 +11,7 @@
   } from '../lib/curation'
   import { buildSummary, type SummaryRow, type WindowedSection } from '../lib/summary'
   import { loadDictionaryIndex, dictionaryStatus } from '../lib/dictionary'
+  import { shortenSystem } from '../lib/codes'
   import { focusedEventId } from '../lib/spine-focus'
   import { navigate } from '../lib/router.svelte'
   import SummarySection from './SummarySection.svelte'
@@ -160,6 +161,18 @@
   const showOlderVitals = $derived(olderVitalsOpen || searching)
   const showOlderResults = $derived(olderResultsOpen || searching)
 
+  /** The systems the installed dictionary actually carries, shortened to match
+   * a row's `coding.system`. Drives the honest third hint state in
+   * SummarySection: a code in a system nothing ships for (NDC, CPT) is never
+   * going to be named by a dictionary update. */
+  const coveredSystems = $derived(
+    new Set(
+      $dictionaryStatus.fileStatuses
+        .filter((f) => f.state === 'verified')
+        .map((f) => shortenSystem(f.system)),
+    ),
+  )
+
   /** Jump to this concept on the timeline: focus the event the row stands for
    * (the spine scrolls it into view and pulses it), then navigate. */
   function viewOnTimeline(row: SummaryRow): void {
@@ -267,6 +280,7 @@
       alwaysShow={needle === ''}
       emptyText="None recorded"
       dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
       {readonly}
       {onviewtimeline}
     />
@@ -283,6 +297,7 @@
         alwaysShow={needle === ''}
         emptyText="None recorded"
         dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
         curateLabel="Resolve or rename"
         {readonly}
         {onviewtimeline}
@@ -306,6 +321,7 @@
             hueClass="cat-clinical"
             heading="h3"
             dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
             curateLabel="Reactivate or rename"
             {readonly}
             {onviewtimeline}
@@ -323,6 +339,7 @@
         alwaysShow={needle === ''}
         emptyText="None recorded"
         dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
         curateLabel="Mark past or rename"
         detailLabel="Dose"
         {readonly}
@@ -347,6 +364,7 @@
             hueClass="cat-med"
             heading="h3"
             dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
             curateLabel="Mark current or rename"
             detailLabel="Dose"
             {readonly}
@@ -369,6 +387,7 @@
           alwaysShow={immunizations.older.length > 0}
           emptyText={noneRecently}
           dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
           detailLabel="Doses"
           {readonly}
           {onviewtimeline}
@@ -394,6 +413,7 @@
               hueClass="cat-clinical"
               heading="h3"
               dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
               detailLabel="Doses"
               {readonly}
               {onviewtimeline}
@@ -412,6 +432,7 @@
           alwaysShow={vitals.older.length > 0}
           emptyText={noneRecently}
           dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
           {readonly}
           {onviewtimeline}
         />
@@ -436,6 +457,7 @@
               hueClass="cat-vital"
               heading="h3"
               dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
               {readonly}
               {onviewtimeline}
             />
@@ -453,6 +475,7 @@
           alwaysShow={results.older.length > 0}
           emptyText={noneRecently}
           dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
           {readonly}
           {onviewtimeline}
         />
@@ -477,6 +500,7 @@
               hueClass="cat-clinical"
               heading="h3"
               dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
               {readonly}
               {onviewtimeline}
             />
