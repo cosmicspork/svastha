@@ -27,6 +27,23 @@ harvest a PR's "## Deferred" notes into the list.
 - Goals, Care Teams, Functional Status, Medical Devices, Patient Instructions
 - FHIR DiagnosticReport / DocumentReference / CarePlan
 - RxNorm coding for manually logged medications
+- Prefer a *named* coding in a known terminology when a `CodeableConcept`
+  carries several — `fhir.rs` `best_coding` ranks LOINC → SNOMED → *first
+  coding in the array*, and `ccda.rs` `extract_code` takes the root `<code>`
+  even when it has no `displayName` and a `<translation>` does. A medication
+  concept that lists NDC first therefore imports as a display-less NDC code
+  while the sibling RxNorm coding carrying the name is discarded, and the row
+  can only ever render "Unnamed entry · NDC 8627007701". Fixes future imports
+  only: `code` is signed content, so a re-import under a corrected preference
+  produces new events beside the old ones rather than replacing them
+- Decide how *dispensed* medications enter the record — a portal FHIR export
+  frequently carries no `MedicationStatement` at all, only `MedicationRequest`
+  (an order — the same thing the Ordered Prescriptions exclusion refuses, see
+  below) and `MedicationDispense`. Dispensed is stronger evidence than ordered
+  and weaker than taken; whether either may become a `medication_statement`,
+  and under what provenance, is an owner decision, not an implementation gap.
+  Until it is made both stay in the "not mapped (v1)" skip and those
+  medications are simply absent from the vault
 - Canonicalize code system URIs at import — a C-CDA/FHIR source may code a
   concept by its HL7 OID (`urn:oid:2.16.840.1.113883.6.88`) rather than the
   canonical URL, so stored events resolve labels/dictionary only because the
@@ -35,6 +52,18 @@ harvest a PR's "## Deferred" notes into the list.
 
 ## Web
 
+- NDC in the offline dictionary — `public/dict` ships LOINC, RxNorm, ICD-10-CM,
+  CVX and SNOMED, so an NDC-coded event resolves a name at no layer: `codes.ts`
+  knows the system well enough to print "NDC", and nothing anywhere knows the
+  code. The openFDA NDC directory is public domain. This is the only fix that
+  names *already-imported* NDC rows, since signed content is never rewritten —
+  the alternative for existing events is the per-concept `name:` override
+- Full RxNorm rather than Current Prescribable Content — `rxnorm.json` is built
+  from the unauthenticated prescribable subset (74,934 RXCUIs), which omits
+  concepts that real exports carry: of four RXCUIs sampled from one vault,
+  861004 and 29046 resolve and 1719647 and 1665039 do not. The full release
+  needs a UMLS licence and login, which is why the subset was chosen — a
+  licensing decision before it is a build one
 - Web Worker for large-document parse (if UI jank appears)
 - Per-item curation on grouped spine entries
 - Long-press bloom shortcut
@@ -97,7 +126,10 @@ harvest a PR's "## Deferred" notes into the list.
   per vault; seeds are never co-held between adults (a seed co-holder is
   unrevocable forever). Caregivers are revocable grantee-proposers.
 - **Ordered-prescriptions import** — ordered is not taken; importing orders
-  would fabricate a medication history. Test-locked exclusion.
+  would fabricate a medication history. Test-locked exclusion (C-CDA section
+  66149-6). FHIR `MedicationRequest` is the same claim in the other format and
+  falls into the generic "not mapped (v1)" skip today; making that exclusion
+  explicit — or lifting it — is the open decision noted under Import.
 - **CPT names in the offline dictionary** — the AMA licenses codes and
   descriptors for royalties with no free tier and no equivalent of SNOMED's
   Global Patient Set; CPT falls through to the earlier display layers.
