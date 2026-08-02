@@ -193,6 +193,8 @@ pub fn app(
         .layer(DefaultBodyLimit::max(auth::MAX_BODY))
         // Outermost, so even rejections (401) carry CORS headers and the browser
         // can read them. Any origin is safe: auth is a per-request signature with
-        // no cookies, so a hostile origin gains nothing.
-        .layer(CorsLayer::permissive())
+        // no cookies, so a hostile origin gains nothing. The max-age lets the
+        // browser cache preflights per URL, so the app's custom svastha-* headers
+        // don't cost an OPTIONS round trip on every repeat write.
+        .layer(CorsLayer::permissive().max_age(std::time::Duration::from_secs(3600)))
 }
