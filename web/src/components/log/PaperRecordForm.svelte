@@ -188,7 +188,6 @@
     <input
       type="file"
       accept="image/*"
-      capture="environment"
       multiple
       onchange={onFilesPicked}
       data-testid="paper-file"
