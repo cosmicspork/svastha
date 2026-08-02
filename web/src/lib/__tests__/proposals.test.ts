@@ -11,6 +11,7 @@ import {
   upsertProposal,
   getProposal,
   setDraftStatus,
+  setDraftStatuses,
   removeProposal,
   refreshPendingProposals,
   pendingProposals,
@@ -194,6 +195,45 @@ describe('persistence + dedupe', () => {
     await upsertProposal(record({ id: 'm3' }))
     expect(await setDraftStatus('nope', 'ev-1', 'approved')).toBeUndefined()
     expect(await setDraftStatus('m3', 'nope', 'approved')).toBeUndefined()
+  })
+
+  it('setDraftStatuses flips drafts across records in one call and recomputes resolved per record', async () => {
+    await upsertProposal(
+      record({ id: 'm4', drafts: [{ event: draftEvent('ev-a') }, { event: draftEvent('ev-b') }] }),
+    )
+    await upsertProposal(record({ id: 'm5', drafts: [{ event: draftEvent('ev-c') }] }))
+
+    const changed = await setDraftStatuses([
+      { proposalId: 'm4', eventId: 'ev-a', status: 'approved' },
+      { proposalId: 'm4', eventId: 'ev-b', status: 'rejected' },
+      { proposalId: 'm5', eventId: 'ev-c', status: 'approved' },
+    ])
+
+    expect([...changed.keys()].sort()).toEqual(['m4', 'm5'])
+    expect(changed.get('m4')!.resolved).toBe(true)
+    expect((await getProposal('m4'))!.drafts.map((d) => d.status)).toEqual(['approved', 'rejected'])
+    expect((await getProposal('m5'))!.resolved).toBe(true)
+    // Both records are fully decided, so the pending mirror is empty.
+    expect(storeGet(pendingProposals)).toEqual([])
+  })
+
+  it('setDraftStatuses leaves a partially-decided record pending and mirrors the final state', async () => {
+    await upsertProposal(
+      record({ id: 'm6', drafts: [{ event: draftEvent('ev-a') }, { event: draftEvent('ev-b') }] }),
+    )
+    const changed = await setDraftStatuses([{ proposalId: 'm6', eventId: 'ev-a', status: 'approved' }])
+    expect(changed.get('m6')!.resolved).toBe(false)
+    expect(storeGet(pendingProposals).map((r) => r.id)).toEqual(['m6'])
+  })
+
+  it('setDraftStatuses skips unknown proposal and draft ids, returning only changed records', async () => {
+    await upsertProposal(record({ id: 'm7' }))
+    const changed = await setDraftStatuses([
+      { proposalId: 'nope', eventId: 'ev-1', status: 'approved' },
+      { proposalId: 'm7', eventId: 'nope', status: 'approved' },
+    ])
+    expect(changed.size).toBe(0)
+    expect((await getProposal('m7'))!.drafts[0].status).toBe('pending')
   })
 
   it('proposalsFrom indexes by proposer, removeProposal forgets one', async () => {

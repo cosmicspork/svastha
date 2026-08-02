@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { MIGRATIONS, openDb, deleteDb, get, put, del, getAll, getAllFromIndex, count } from '../db'
+import { MIGRATIONS, openDb, deleteDb, get, put, putAll, del, getAll, getAllFromIndex, count } from '../db'
 
 // deleteDb() (not a raw indexedDB.deleteDatabase call) so the module's
 // memoized connection is closed and cleared, not left dangling from the
@@ -115,6 +115,24 @@ describe('CRUD helpers', () => {
   it('round-trips an explicit-key store (keyvault)', async () => {
     await put('keyvault', { sealed_hex: 'ab' }, 'mnemonic')
     expect(await get('keyvault', 'mnemonic')).toEqual({ sealed_hex: 'ab' })
+  })
+
+  it('putAll lands a batch in one call, overwriting like put', async () => {
+    await put('events', { event: { id: 'a', kind: 'note', effective_at: '2026-01-01' } })
+    await putAll('events', [
+      { event: { id: 'a', kind: 'observation', effective_at: '2026-01-01' } },
+      { event: { id: 'b', kind: 'observation', effective_at: '2026-01-02' } },
+    ])
+    const all = await getAll<{ event: { id: string; kind: string } }>('events')
+    expect(all.map((e) => [e.event.id, e.event.kind]).sort()).toEqual([
+      ['a', 'observation'],
+      ['b', 'observation'],
+    ])
+  })
+
+  it('putAll with an empty batch is a no-op', async () => {
+    await putAll('events', [])
+    expect(await getAll('events')).toEqual([])
   })
 
   it('queries by index and range', async () => {

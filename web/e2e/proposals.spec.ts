@@ -424,11 +424,15 @@ test('paginates a large group and confirms approve-all via the sheet, including 
   await page.getByTestId('approve-all-confirm').click()
   await expect(page.getByTestId('proposals-empty')).toBeVisible({ timeout: 30_000 })
 
-  const results = await readAllProposalResults(page, deposited.proposerMnemonic)
-  const accepted = results.flatMap((r) => r.accepted)
-  const rejected = results.flatMap((r) => r.rejected)
-  expect(accepted.sort()).toEqual([...deposited.eventIds].sort())
-  expect(rejected).toEqual([])
+  // The inbox empties as soon as the decisions are recorded; the per-message
+  // proposal_result echoes deposit right after, so poll until all have landed.
+  await expect(async () => {
+    const results = await readAllProposalResults(page, deposited.proposerMnemonic)
+    const accepted = results.flatMap((r) => r.accepted)
+    const rejected = results.flatMap((r) => r.rejected)
+    expect(accepted.sort()).toEqual([...deposited.eventIds].sort())
+    expect(rejected).toEqual([])
+  }).toPass({ timeout: 10_000 })
 
   // A completed group is removed from the pending store. When that identity
   // proposes another large batch later, its new inbox should start at page one,
