@@ -1,10 +1,11 @@
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect } from '@playwright/test'
 import {
   onboardViaUI,
   connectRelayViaUI,
   restoreViaUI,
   openLog,
   waitForPushed,
+  syncNowAndWait,
   RELAY,
   PASSPHRASE,
 } from './helpers'
@@ -13,19 +14,6 @@ import {
 function localDatetimeInput(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
-}
-
-/** Click "Sync now" once, from wherever the app currently is, and land back
- * on Home. */
-async function syncNow(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    window.location.hash = '#/settings/sync'
-  })
-  await page.getByTestId('sync-now').click()
-  await page.waitForTimeout(300)
-  await page.evaluate(() => {
-    window.location.hash = '#/timeline'
-  })
 }
 
 test('logging an input before a symptom surfaces it in Patterns, and a tag persists across reload', async ({
@@ -139,7 +127,10 @@ test('curation LWW: two devices tagging the same event converge on the later wri
   })
 
   // After A syncs, LWW converges both devices on B's later write.
-  await syncNow(page)
+  await syncNowAndWait(page)
+  await page.evaluate(() => {
+    window.location.hash = '#/timeline'
+  })
   await expect(entryA.getByTestId('spine-entry-tag')).toHaveText('#y', { timeout: 10_000 })
   await expect(entryB.getByTestId('spine-entry-tag')).toHaveText('#y')
 

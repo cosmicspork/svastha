@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
-import { onboardViaUI, connectRelayViaUI, openLog, RELAY } from './helpers'
+import { onboardViaUI, connectRelayViaUI, openLog, syncUntil, RELAY } from './helpers'
 
 // On-demand README screenshot capture (docs/screenshots/), not a CI test:
 //   cd web && SCREENSHOTS=1 bunx playwright test screenshots.spec.ts
@@ -161,13 +161,10 @@ test('proposal inbox: an OCR draft beside its source page', async ({ page }) => 
     { relay: RELAY, words, sourceBlob },
   )
 
-  await expect(async () => {
-    await page.evaluate(() => (window.location.hash = '#/settings/sync'))
-    await page.getByTestId('sync-now').click()
-    await page.waitForTimeout(300)
+  await syncUntil(page, async () => {
     await page.evaluate(() => (window.location.hash = '#/proposals'))
     await expect(page.getByTestId('proposal-draft').first()).toBeVisible({ timeout: 2000 })
-  }).toPass({ timeout: 20_000 })
+  })
   await page.screenshot({ path: `${OUT}/proposal-inbox.png` })
 })
 
