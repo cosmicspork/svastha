@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.15.0](https://github.com/cosmicspork/svastha/compare/v0.14.0...v0.15.0) (2026-08-02)
+
+
+### Features
+
+* **web:** rework the summary page for visit-time lookup ([#184](https://github.com/cosmicspork/svastha/issues/184)) ([f3d572c](https://github.com/cosmicspork/svastha/commit/f3d572cefb0ced80268fc9d857f9979a271357da))
+
+
+### Performance Improvements
+
+* **web:** batch the proposal approve-all path ([#186](https://github.com/cosmicspork/svastha/issues/186)) ([162d338](https://github.com/cosmicspork/svastha/commit/162d3384dbe3fa9c534d5ca65a15e26ce16f5681))
+
 ## [0.14.0](https://github.com/cosmicspork/svastha/compare/v0.13.0...v0.14.0) (2026-07-31)
 
 
