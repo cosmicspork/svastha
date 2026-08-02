@@ -1,26 +1,29 @@
 import { test, expect, type Page } from '@playwright/test'
-import { onboardViaUI, connectRelayViaUI, restoreViaUI, logBP, logFood, waitForPushed, RELAY } from './helpers'
+import {
+  onboardViaUI,
+  connectRelayViaUI,
+  restoreViaUI,
+  logBP,
+  logFood,
+  waitForPushed,
+  syncUntil,
+  RELAY,
+} from './helpers'
 
 function entryWith(page: Page, text: string) {
   return page.getByTestId('spine-entry').filter({ hasText: text })
 }
 
-/** Click "Sync now" until `text` shows up on the spine. The pull is
- * asynchronous and the spine reads IndexedDB on mount, so each round trips
- * Settings -> pull -> Home; hash navigation avoids a reload (which would
- * lock the session). */
+/** Pull until `text` shows up on the spine. The spine reads IndexedDB on
+ * mount, so each round re-enters Timeline; hash navigation avoids a reload
+ * (which would lock the session). */
 async function syncUntilVisible(page: Page, text: string): Promise<void> {
-  await expect(async () => {
-    await page.evaluate(() => {
-      window.location.hash = '#/settings/sync'
-    })
-    await page.getByTestId('sync-now').click()
-    await page.waitForTimeout(300)
+  await syncUntil(page, async () => {
     await page.evaluate(() => {
       window.location.hash = '#/timeline'
     })
     await expect(entryWith(page, text)).toBeVisible({ timeout: 2000 })
-  }).toPass({ timeout: 20_000 })
+  })
 }
 
 test('events pushed to the relay restore on a fresh device from mnemonic + relay URL', async ({

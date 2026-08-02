@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
-import { onboardViaUI, connectRelayViaUI, logBP, logFood } from './helpers'
+import { onboardViaUI, connectRelayViaUI, logBP, logFood, syncNowAndWait } from './helpers'
 
 /** Visit "Your people", set a display name, and return this identity's exchange
  * code (`svastha1:{ed}:{x}:{label}`). */
@@ -17,14 +17,6 @@ async function waitForPushed(page: Page): Promise<void> {
     window.location.hash = '#/settings/sync'
   })
   await expect(page.getByTestId('sync-pending')).toHaveText('0')
-}
-
-async function syncNow(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    window.location.hash = '#/settings/sync'
-  })
-  await page.getByTestId('sync-now').click()
-  await page.waitForTimeout(300)
 }
 
 async function personEntriesVisible(page: Page, ownerEd: string, texts: string[]): Promise<void> {
@@ -106,8 +98,15 @@ test('devices & grants: enroll a grantee, then revoke-and-rotate cuts off future
   await waitForPushed(pageA)
 
   // B's next pull 404s (grant revoked): the share goes stale, keeps what already
-  // synced (120/80), and never receives the post-rotation entry.
-  await syncNow(pageB)
+  // synced (120/80), and never receives the post-rotation entry. The awaited
+  // pull makes the never-receives assertion below sound: the pull has finished.
+  await syncNowAndWait(pageB)
+  // Bounce off Home first: B is already on the person screen, and assigning
+  // the same hash would not remount it — the stale marker comes from the
+  // shared pull the mount kicks off.
+  await pageB.evaluate(() => {
+    window.location.hash = '#/'
+  })
   await pageB.evaluate((ed) => {
     window.location.hash = `#/person/${ed}`
   }, ownerEdA)

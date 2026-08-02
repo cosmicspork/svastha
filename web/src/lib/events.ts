@@ -1,7 +1,7 @@
 // Signing and persistence for quick-log drafts, plus the event queries the
 // timeline and recents chips read. Depends on the unlocked session (wasm
 // identity) — the pure builders live in ./drafts.ts.
-import { put, getAll, getAllFromIndex } from './db'
+import { put, putAll, getAll, getAllFromIndex } from './db'
 import { session } from './session.svelte'
 import type { Code } from './codes'
 import type { Draft, DraftTemplate, EventKind, EventValue } from './drafts'
@@ -77,26 +77,35 @@ export interface ProposedProvenance {
 }
 
 /**
- * Sign an approved (or edited-then-approved) proposal draft with the session
+ * Sign approved (or edited-then-approved) proposal drafts with the session
  * identity, stamping `proposed` so the owner's signature attests to the
  * proposal provenance. `proposed` is excluded from the content id (see
  * `spec/README.md`, "Proposal provenance"), so an approved fact keeps the same
  * id as the same fact logged directly — approving a duplicate is an idempotent
- * `put`. Stored and pushed exactly like a self-logged event: the same
- * `onEventsLogged` hook enqueues its `ev-` blob for sync.
+ * `put`. Stored and pushed exactly like self-logged events: the whole batch is
+ * signed first, written in one transaction, and handed to `onEventsLogged`
+ * once, so a bulk approval enqueues its `ev-` blobs as a single sync batch.
  */
+export async function approveProposedEvents(
+  batch: { content: ApprovableContent; proposed: ProposedProvenance }[],
+): Promise<StoredEvent[]> {
+  const identity = session.identity
+  if (!identity) throw new Error('Session is locked — cannot sign events.')
+  const stored = batch.map(
+    ({ content, proposed }) =>
+      JSON.parse(identity.sign_event(JSON.stringify({ ...content, proposed }))) as StoredEvent,
+  )
+  await putAll('events', stored)
+  if (stored.length > 0) onEventsLogged(stored)
+  return stored
+}
+
 export async function approveProposedEvent(
   content: ApprovableContent,
   proposed: ProposedProvenance,
 ): Promise<StoredEvent> {
-  const identity = session.identity
-  if (!identity) throw new Error('Session is locked — cannot sign events.')
-  const signed = JSON.parse(
-    identity.sign_event(JSON.stringify({ ...content, proposed })),
-  ) as StoredEvent
-  await put('events', signed)
-  onEventsLogged([signed])
-  return signed
+  const [stored] = await approveProposedEvents([{ content, proposed }])
+  return stored
 }
 
 export function allEvents(): Promise<StoredEvent[]> {

@@ -871,6 +871,12 @@ async fn cors_preflight_is_allowed() {
         .unwrap();
     assert!(resp.status().is_success());
     assert!(resp.headers().contains_key("access-control-allow-origin"));
+    // Preflights are cacheable: without a max-age, every cross-origin write
+    // pays an extra OPTIONS round trip (browsers default to ~5s).
+    assert_eq!(
+        resp.headers().get("access-control-max-age").unwrap(),
+        "3600"
+    );
 }
 
 /// Write a raw file straight into `owner`'s directory on `store_dir`,

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
-import { onboardViaUI, connectRelayViaUI, logBP, logFood, PASSPHRASE } from './helpers'
+import { onboardViaUI, connectRelayViaUI, logBP, logFood, syncNowAndWait, PASSPHRASE } from './helpers'
 
 /** Visit the "Your people" screen, set a display name, and return this
  * identity's exchange code. Leaves the page on that screen. */
@@ -19,15 +19,6 @@ async function waitForPushed(page: Page): Promise<void> {
     window.location.hash = '#/settings/sync'
   })
   await expect(page.getByTestId('sync-pending')).toHaveText('0')
-}
-
-/** Force a pull cycle via Settings' "Sync now". */
-async function syncNow(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    window.location.hash = '#/settings/sync'
-  })
-  await page.getByTestId('sync-now').click()
-  await page.waitForTimeout(300)
 }
 
 /** Bounce Home -> the person screen so it remounts and re-reads
@@ -128,7 +119,13 @@ test('spousal sharing: grant, accept, read-only timeline, then revoke goes stale
   await pageA.getByTestId('rotate-confirm-yes').click()
   await expect(pageA.getByTestId('rotate-confirm')).toHaveCount(0)
 
-  await syncNow(pageB)
+  await syncNowAndWait(pageB)
+  // Bounce off Home first: B is already on the person screen, and assigning
+  // the same hash would not remount it — the stale marker comes from the
+  // shared pull the mount kicks off.
+  await pageB.evaluate(() => {
+    window.location.hash = '#/'
+  })
   await pageB.evaluate((ed) => {
     window.location.hash = `#/person/${ed}`
   }, ownerEdA)

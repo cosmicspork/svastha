@@ -276,23 +276,47 @@ export async function upsertProposal(record: ProposalRecord): Promise<boolean> {
   return existing === undefined
 }
 
-/** Set one draft's decision (by its event content id, stable across reloads).
- * Recomputes `resolved`. Persists and refreshes the store. Returns the updated
- * record (or undefined if the id/draft is unknown). */
+/** Set draft decisions in bulk (by event content id, stable across reloads).
+ * Each touched record is read and written once and `resolved` recomputed;
+ * unknown proposal ids and draft ids are skipped. One store refresh at the
+ * end, however many drafts flip — what keeps a 20-draft approve-all from
+ * re-reading and re-rendering the inbox per draft. Returns only the records
+ * that actually changed, keyed by proposal id. */
+export async function setDraftStatuses(
+  updates: { proposalId: string; eventId: string; status: DraftStatus }[],
+): Promise<Map<string, ProposalRecord>> {
+  const byProposal = new Map<string, { eventId: string; status: DraftStatus }[]>()
+  for (const { proposalId, ...rest } of updates) {
+    byProposal.set(proposalId, [...(byProposal.get(proposalId) ?? []), rest])
+  }
+  const changed = new Map<string, ProposalRecord>()
+  for (const [proposalId, entries] of byProposal) {
+    const record = await getProposal(proposalId)
+    if (!record) continue
+    let applied = false
+    for (const { eventId, status } of entries) {
+      const draft = record.drafts.find((d) => d.event.id === eventId)
+      if (!draft) continue
+      draft.status = status
+      applied = true
+    }
+    if (!applied) continue
+    record.resolved = isResolved(record)
+    await put(STORE, record)
+    changed.set(proposalId, record)
+  }
+  await refreshPendingProposals()
+  return changed
+}
+
+/** Set one draft's decision. Persists and refreshes the store. Returns the
+ * updated record (or undefined if the id/draft is unknown). */
 export async function setDraftStatus(
   proposalId: string,
   eventId: string,
   status: DraftStatus,
 ): Promise<ProposalRecord | undefined> {
-  const record = await getProposal(proposalId)
-  if (!record) return undefined
-  const draft = record.drafts.find((d) => d.event.id === eventId)
-  if (!draft) return undefined
-  draft.status = status
-  record.resolved = isResolved(record)
-  await put(STORE, record)
-  await refreshPendingProposals()
-  return record
+  return (await setDraftStatuses([{ proposalId, eventId, status }])).get(proposalId)
 }
 
 /** Mark a resolved record's reply as sent (or record that the send failed). */

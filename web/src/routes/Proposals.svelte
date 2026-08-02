@@ -1,11 +1,16 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { fingerprint } from '../lib/exchange'
-  import { approveProposedEvent, type ApprovableContent } from '../lib/events'
+  import {
+    approveProposedEvent,
+    approveProposedEvents,
+    type ApprovableContent,
+  } from '../lib/events'
   import {
     pendingProposals,
     refreshPendingProposals,
     setDraftStatus,
+    setDraftStatuses,
     groupByProposer,
     getProposer,
     visibleDrafts,
@@ -137,25 +142,37 @@
 
   /** Batch approval per proposer: sign every still-pending draft across all of
    * that proposer's messages as-is, then resolve each message (which echoes one
-   * proposal_result per message). */
+   * proposal_result per message). All events are stored and enqueued before any
+   * draft status flips, so a failure mid-batch never marks a draft approved
+   * whose event was not signed — the same ordering the per-draft path has. */
   async function approveAll(records: ProposalRecord[]): Promise<void> {
     busy = true
     try {
+      const pending = records.flatMap((record) =>
+        record.drafts
+          .filter((draft) => draft.status === 'pending')
+          .map((draft) => ({ record, draft })),
+      )
+      await approveProposedEvents(
+        pending.map(({ record, draft }) => ({
+          content: {
+            kind: draft.event.kind,
+            code: draft.event.code,
+            effective_at: draft.event.effective_at,
+            value: draft.event.value,
+            provenance: draft.event.provenance,
+          },
+          proposed: proposedFor(record, draft),
+        })),
+      )
+      await setDraftStatuses(
+        pending.map(({ record, draft }) => ({
+          proposalId: record.id,
+          eventId: draft.event.id,
+          status: 'approved' as const,
+        })),
+      )
       for (const record of records) {
-        for (const draft of record.drafts) {
-          if (draft.status !== 'pending') continue
-          await approveProposedEvent(
-            {
-              kind: draft.event.kind,
-              code: draft.event.code,
-              effective_at: draft.event.effective_at,
-              value: draft.event.value,
-              provenance: draft.event.provenance,
-            },
-            proposedFor(record, draft),
-          )
-          await setDraftStatus(record.id, draft.event.id, 'approved')
-        }
         await resolveProposalIfDone(record.id)
       }
     } finally {

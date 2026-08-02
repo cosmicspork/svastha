@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test'
 import { fileURLToPath } from 'node:url'
-import { onboardViaUI, connectRelayViaUI, PASSPHRASE, RELAY } from './helpers'
+import { onboardViaUI, connectRelayViaUI, syncNowAndWait, syncUntil, PASSPHRASE, RELAY } from './helpers'
 
 const PNG = fileURLToPath(new URL('./fixtures/tiny.png', import.meta.url))
 
@@ -183,18 +183,6 @@ async function depositManyProposals(
   )
 }
 
-/** Click "Sync now" (which runs a full pull, including the mailbox) until
- * `check` passes — the pull and the store fan-out are async. */
-async function syncUntil(page: Page, check: () => Promise<void>): Promise<void> {
-  await expect(async () => {
-    await page.evaluate(() => (window.location.hash = '#/settings/sync'))
-    await page.getByTestId('sync-now').click()
-    await page.waitForTimeout(300)
-    await page.evaluate(() => (window.location.hash = '#/'))
-    await check()
-  }).toPass({ timeout: 20_000 })
-}
-
 /** Read the proposer's own mailbox and open the one `proposal_result` back to
  * it — the owner's decision echoed to the proposer. */
 async function readProposalResult(
@@ -344,10 +332,10 @@ test('proposals persist across reload and are not re-processed on re-pull', asyn
   })
 
   // A second pull of the same mailbox item must not duplicate the draft.
+  // Awaiting the pull itself (not a retry loop) is what makes this negative
+  // assertion sound: the re-pull has fully finished before the count check.
   await page.getByTestId('nav-back').click()
-  await page.evaluate(() => (window.location.hash = '#/settings/sync'))
-  await page.getByTestId('sync-now').click()
-  await page.waitForTimeout(500)
+  await syncNowAndWait(page)
   await page.evaluate(() => (window.location.hash = '#/proposals'))
   await expect(page.getByTestId('proposal-draft')).toHaveCount(1)
 
@@ -422,13 +410,20 @@ test('paginates a large group and confirms approve-all via the sheet, including 
   // that were never scrolled into view.
   await page.getByTestId('proposer-approve-all').click()
   await page.getByTestId('approve-all-confirm').click()
-  await expect(page.getByTestId('proposals-empty')).toBeVisible({ timeout: 30_000 })
+  // Batched approval (one signing pass, one store refresh) empties the inbox
+  // in well under a second locally; 10s is CI headroom, while a regression
+  // back to per-draft round trips would blow it.
+  await expect(page.getByTestId('proposals-empty')).toBeVisible({ timeout: 10_000 })
 
-  const results = await readAllProposalResults(page, deposited.proposerMnemonic)
-  const accepted = results.flatMap((r) => r.accepted)
-  const rejected = results.flatMap((r) => r.rejected)
-  expect(accepted.sort()).toEqual([...deposited.eventIds].sort())
-  expect(rejected).toEqual([])
+  // The inbox empties as soon as the decisions are recorded; the per-message
+  // proposal_result echoes deposit right after, so poll until all have landed.
+  await expect(async () => {
+    const results = await readAllProposalResults(page, deposited.proposerMnemonic)
+    const accepted = results.flatMap((r) => r.accepted)
+    const rejected = results.flatMap((r) => r.rejected)
+    expect(accepted.sort()).toEqual([...deposited.eventIds].sort())
+    expect(rejected).toEqual([])
+  }).toPass({ timeout: 10_000 })
 
   // A completed group is removed from the pending store. When that identity
   // proposes another large batch later, its new inbox should start at page one,

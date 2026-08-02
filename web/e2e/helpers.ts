@@ -72,6 +72,32 @@ export async function waitForPushed(page: Page): Promise<void> {
   await page.evaluate(() => (window.location.hash = '#/'))
 }
 
+/** Run one full pull — exactly what the Sync screen's "Sync now" button fires
+ * (`void pullAll()`) — and await its completion. Strictly stronger than
+ * clicking the button and sleeping: it resolves when the pull, including the
+ * mailbox pass, has actually finished. Also the only sound wait before a
+ * negative assertion ("nothing new appeared"), where a retry loop can't help. */
+export async function syncNowAndWait(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const { pullAll } = await import('/src/lib/sync.ts')
+    await pullAll()
+  })
+}
+
+/** Pull until `check` passes — for state that fans out asynchronously after
+ * the pull itself (store refreshes, background blob writes). Any navigation
+ * the check needs belongs inside `check`, so every retry re-mounts the view. */
+export async function syncUntil(
+  page: Page,
+  check: () => Promise<void>,
+  timeout = 20_000,
+): Promise<void> {
+  await expect(async () => {
+    await syncNowAndWait(page)
+    await check()
+  }).toPass({ timeout })
+}
+
 /** Drive the Restore tab: seed phrase, passphrase, and (optionally) a relay
  * URL to restore records from. Lands unlocked on Home. */
 export async function restoreViaUI(

@@ -177,6 +177,27 @@ export async function put(
 }
 
 /**
+ * Put a batch of records in a **single** `readwrite` transaction — one commit
+ * instead of one per record. The puts are issued synchronously: an `await`
+ * between requests would let the transaction auto-commit under the remaining
+ * ones. Only for stores with a `keyPath` (no out-of-line keys).
+ */
+export function putAll(storeName: string, values: unknown[]): Promise<void> {
+  if (values.length === 0) return Promise.resolve()
+  return openDb().then(
+    (db) =>
+      new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, 'readwrite')
+        const s = tx.objectStore(storeName)
+        for (const value of values) s.put(value)
+        tx.oncomplete = () => resolve()
+        tx.onerror = () => reject(tx.error)
+        tx.onabort = () => reject(tx.error ?? new Error('putAll aborted'))
+      }),
+  )
+}
+
+/**
  * Read-modify-write one record inside a **single** `readwrite` transaction.
  *
  * `get` then `put` as two calls is two transactions, so another tab (or another
