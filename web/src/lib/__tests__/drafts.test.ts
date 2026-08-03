@@ -8,6 +8,7 @@ import {
   foodDrafts,
   exerciseDrafts,
   noteDraft,
+  encounterDraft,
   moodDraft,
   gratitudeDrafts,
   paperRecordDrafts,
@@ -153,6 +154,33 @@ describe('paperRecordDrafts', () => {
     expect(drafts).toHaveLength(2)
     expect(drafts[0].value).toEqual({ attachment: { sha256: 'aa', mime: 'image/jpeg', size: 100 } })
     expect(drafts[1].value).toEqual({ attachment: { sha256: 'cc', mime: 'application/pdf', size: 4096 } })
+  })
+})
+
+describe('encounterDraft', () => {
+  it('folds the reason into the text of one encounter', () => {
+    const draft = encounterDraft('Dr. Sharma', 'cardiology follow-up', AT)
+    expect(draft.kind).toBe('encounter')
+    expect(draft.effective_at).toBe(AT)
+    expect(draft.value).toEqual({ text: 'Dr. Sharma — cardiology follow-up' })
+  })
+
+  it('carries the provider alone when no reason is given', () => {
+    expect(encounterDraft('Dr. Sharma', '', AT).value).toEqual({ text: 'Dr. Sharma' })
+    expect(encounterDraft('Dr. Sharma', '   ', AT).value).toEqual({ text: 'Dr. Sharma' })
+  })
+
+  it('trims both inputs', () => {
+    expect(encounterDraft('  Dr. Sharma  ', '  annual physical  ', AT).value).toEqual({
+      text: 'Dr. Sharma — annual physical',
+    })
+  })
+
+  // A manual visit records what the user typed and nothing more; any code here
+  // would be invented, so there must never be one.
+  it('never invents a code', () => {
+    expect(encounterDraft('Dr. Sharma', 'cardiology follow-up', AT).code).toBeUndefined()
+    expect(encounterDraft('Dr. Sharma', '', AT).code).toBeUndefined()
   })
 })
 
