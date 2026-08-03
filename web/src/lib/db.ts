@@ -207,15 +207,22 @@ export function putAll(storeName: string, values: unknown[]): Promise<void> {
  * it meant to update, and decline — with no window in which that decision goes
  * stale. See `answerScope.ts`'s `trackScopeDelivery`.
  *
- * `fn` must be **synchronous and side-effect-free**. It runs inside the
- * transaction's request callback; an `await` in there would let the transaction
- * auto-commit and the `put` would throw `TransactionInactiveError`. Deliberately
+ * `fn` must be **synchronous**. It runs inside the transaction's request
+ * callback; an `await` in there would let the transaction auto-commit and the
+ * `put` would throw `TransactionInactiveError`. It must not mutate `current` in
+ * place (return a new value instead), but it is called exactly once per
+ * `mutate`, so capturing what it decided into a local is sound. Deliberately
  * built on raw request callbacks rather than the promise helper above so there is
  * no microtask hop between the read and the write to reason about.
  *
  * Returning `undefined` from `fn` declines the write and leaves the stored value
  * untouched; `written` says which happened, and `value` is the stored value
  * afterwards either way.
+ *
+ * Works on both store shapes: an out-of-line-key store (keyvault, prefs,
+ * secrets) is written under `key`, while an in-line-key store (proposals,
+ * events, …) derives its key from the record — passing one explicitly there is a
+ * `DataError` that aborts the transaction.
  */
 export function mutate<T>(
   storeName: string,
@@ -244,7 +251,7 @@ export function mutate<T>(
             outcome = { written: false, value: read.result as T | undefined }
             return
           }
-          const write = s.put(next, key)
+          const write = s.keyPath === null ? s.put(next, key) : s.put(next)
           write.onsuccess = () => (outcome = { written: true, value: next })
         }
         tx.oncomplete = () =>

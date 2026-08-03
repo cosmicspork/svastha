@@ -12,7 +12,7 @@
 // client and identity; the UI (routes/Proposals.svelte) drives the per-draft
 // actions and the owner's signing.
 import { writable } from 'svelte/store'
-import { getAll, getAllFromIndex, get, put, del } from './db'
+import { getAll, getAllFromIndex, get, put, del, mutate } from './db'
 import type { EventKind, EventValue } from './drafts'
 import type { Code } from './codes'
 
@@ -268,20 +268,34 @@ export async function refreshPendingProposals(): Promise<void> {
  * is the "aren't re-processed on re-pull" guarantee, while a second pass over
  * the same source lands its new drafts. Returns `true` only when the record was
  * new — what a caller that counts arrivals wants to know.
+ *
+ * The merge runs **inside** the write transaction. Read-then-write as two
+ * transactions would let a decision commit in the gap, and the merge — computed
+ * from the pre-decision snapshot — would then write it back out: the periodic
+ * pull re-upserts every still-pending mailbox item, so that gap overlaps exactly
+ * the moment the owner is tapping Approve.
  */
 export async function upsertProposal(record: ProposalRecord): Promise<boolean> {
-  const existing = await getProposal(record.id)
-  await put(STORE, existing ? mergeProposal(existing, record) : record)
+  let existed = false
+  await mutate<ProposalRecord>(STORE, record.id, (existing) => {
+    existed = existing !== undefined
+    return existing ? mergeProposal(existing, record) : record
+  })
   await refreshPendingProposals()
-  return existing === undefined
+  return !existed
 }
 
 /** Set draft decisions in bulk (by event content id, stable across reloads).
- * Each touched record is read and written once and `resolved` recomputed;
- * unknown proposal ids and draft ids are skipped. One store refresh at the
- * end, however many drafts flip — what keeps a 20-draft approve-all from
- * re-reading and re-rendering the inbox per draft. Returns only the records
- * that actually changed, keyed by proposal id. */
+ * Each touched record is read, flipped, and written in **one** transaction and
+ * `resolved` recomputed; unknown proposal ids and draft ids are skipped. One
+ * store refresh at the end, however many drafts flip — what keeps a 20-draft
+ * approve-all from re-reading and re-rendering the inbox per draft. Returns
+ * only the records that actually changed, keyed by proposal id.
+ *
+ * The per-record transaction is the point: a concurrent {@link upsertProposal}
+ * from the pull loop is then ordered either wholly before this flip (and this
+ * flip re-reads its result) or wholly after (and its merge sees the decision),
+ * with no interleaving that can write a pre-decision snapshot back. */
 export async function setDraftStatuses(
   updates: { proposalId: string; eventId: string; status: DraftStatus }[],
 ): Promise<Map<string, ProposalRecord>> {
@@ -291,19 +305,19 @@ export async function setDraftStatuses(
   }
   const changed = new Map<string, ProposalRecord>()
   for (const [proposalId, entries] of byProposal) {
-    const record = await getProposal(proposalId)
-    if (!record) continue
-    let applied = false
-    for (const { eventId, status } of entries) {
-      const draft = record.drafts.find((d) => d.event.id === eventId)
-      if (!draft) continue
-      draft.status = status
-      applied = true
-    }
-    if (!applied) continue
-    record.resolved = isResolved(record)
-    await put(STORE, record)
-    changed.set(proposalId, record)
+    const wanted = new Map(entries.map((e) => [e.eventId, e.status]))
+    const { written, value } = await mutate<ProposalRecord>(STORE, proposalId, (record) => {
+      if (!record || !record.drafts.some((d) => wanted.has(d.event.id))) return undefined
+      const next = {
+        ...record,
+        drafts: record.drafts.map((d) =>
+          wanted.has(d.event.id) ? { ...d, status: wanted.get(d.event.id)! } : d,
+        ),
+      }
+      next.resolved = isResolved(next)
+      return next
+    })
+    if (written && value) changed.set(proposalId, value)
   }
   await refreshPendingProposals()
   return changed
@@ -319,13 +333,15 @@ export async function setDraftStatus(
   return (await setDraftStatuses([{ proposalId, eventId, status }])).get(proposalId)
 }
 
-/** Mark a resolved record's reply as sent (or record that the send failed). */
+/** Mark a resolved record's reply as sent (or record that the send failed).
+ * Same single-transaction read-modify-write as the two above: a send finishing
+ * alongside a decision must not carry the record's other fields back to what
+ * they were when the send started. */
 export async function markResultSent(proposalId: string, sent: boolean): Promise<void> {
-  const record = await getProposal(proposalId)
-  if (!record) return
-  record.resultSent = sent
-  await put(STORE, record)
-  await refreshPendingProposals()
+  const { written } = await mutate<ProposalRecord>(STORE, proposalId, (record) =>
+    record ? { ...record, resultSent: sent } : undefined,
+  )
+  if (written) await refreshPendingProposals()
 }
 
 /** Forget a resolved proposal locally (e.g. after the reply is sent and the

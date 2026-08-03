@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { MIGRATIONS, openDb, deleteDb, get, put, putAll, del, getAll, getAllFromIndex, count } from '../db'
+import { MIGRATIONS, openDb, deleteDb, get, put, putAll, mutate, del, getAll, getAllFromIndex, count } from '../db'
 
 // deleteDb() (not a raw indexedDB.deleteDatabase call) so the module's
 // memoized connection is closed and cleared, not left dangling from the
@@ -133,6 +133,78 @@ describe('CRUD helpers', () => {
   it('putAll with an empty batch is a no-op', async () => {
     await putAll('events', [])
     expect(await getAll('events')).toEqual([])
+  })
+
+  it('mutate inserts when nothing is stored and updates what is', async () => {
+    const first = await mutate<{ n: number }>('prefs', 'counter', (current) => ({
+      n: (current?.n ?? 0) + 1,
+    }))
+    expect(first).toEqual({ written: true, value: { n: 1 } })
+
+    const second = await mutate<{ n: number }>('prefs', 'counter', (current) => ({
+      n: (current?.n ?? 0) + 1,
+    }))
+    expect(second).toEqual({ written: true, value: { n: 2 } })
+    expect(await get('prefs', 'counter')).toEqual({ n: 2 })
+  })
+
+  // `prefs` takes an out-of-line key; `proposals` derives its key from the
+  // record. Handing the latter an explicit key is a DataError that aborts the
+  // transaction, so the helper has to tell the two shapes apart.
+  it('mutate writes an in-line-key store, keyed off the record', async () => {
+    await put('proposals', { id: 'm1', resultSent: false })
+    const { written, value } = await mutate<{ id: string; resultSent: boolean }>(
+      'proposals',
+      'm1',
+      (record) => ({ ...record!, resultSent: true }),
+    )
+    expect(written).toBe(true)
+    expect(value).toEqual({ id: 'm1', resultSent: true })
+    expect(await get('proposals', 'm1')).toEqual({ id: 'm1', resultSent: true })
+  })
+
+  it('mutate declines the write when the mutator returns undefined', async () => {
+    await put('prefs', { n: 7 }, 'counter')
+    expect(await mutate('prefs', 'counter', () => undefined)).toEqual({
+      written: false,
+      value: { n: 7 },
+    })
+    expect(await get('prefs', 'counter')).toEqual({ n: 7 })
+
+    // Declining on a key that holds nothing reports exactly that.
+    expect(await mutate('prefs', 'absent', () => undefined)).toEqual({
+      written: false,
+      value: undefined,
+    })
+  })
+
+  it('mutate rejects and writes nothing when the mutator throws', async () => {
+    await put('prefs', { n: 7 }, 'counter')
+    await expect(
+      mutate('prefs', 'counter', () => {
+        throw new Error('boom')
+      }),
+    ).rejects.toThrow('boom')
+    expect(await get('prefs', 'counter')).toEqual({ n: 7 })
+  })
+
+  // The reason the helper exists, pinned against the shape it replaces: three
+  // read-modify-writes issued together. Two transactions per update (get, then
+  // put) means all three read 0 and the last writer wins, landing 1 — the lost
+  // update. One transaction per update serializes them, landing 3.
+  it('mutate loses no update under concurrency, where a get-then-put pair does', async () => {
+    await put('prefs', 0, 'viaGetPut')
+    const viaGetPut = async () => {
+      const n = (await get<number>('prefs', 'viaGetPut')) ?? 0
+      await put('prefs', n + 1, 'viaGetPut')
+    }
+    await Promise.all([viaGetPut(), viaGetPut(), viaGetPut()])
+    expect(await get('prefs', 'viaGetPut')).toBe(1)
+
+    await put('prefs', 0, 'viaMutate')
+    const viaMutate = () => mutate<number>('prefs', 'viaMutate', (n) => (n ?? 0) + 1)
+    await Promise.all([viaMutate(), viaMutate(), viaMutate()])
+    expect(await get('prefs', 'viaMutate')).toBe(3)
   })
 
   it('queries by index and range', async () => {
