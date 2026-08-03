@@ -1,7 +1,7 @@
 // Unsigned event drafts and the pure per-form builders. No wasm, no session,
 // no storage — signing and persistence live in ./events.ts (logEvent), so
 // these builders stay unit testable in plain node.
-import type { Code } from './codes'
+import type { Code, VitalDef } from './codes'
 import {
   BP_SYSTOLIC,
   BP_DIASTOLIC,
@@ -212,6 +212,87 @@ export function encounterDraft(provider: string, reason: string, effectiveAt: st
   const name = provider.trim()
   const why = reason.trim()
   return { kind: 'encounter', effective_at: effectiveAt, value: text(why ? `${name} — ${why}` : name) }
+}
+
+// --- visit sections (vitals and meds taken alongside a visit) ---
+//
+// A visit's optional vitals/meds sections repeat VitalsForm's and MedForm's
+// row shapes (an "add another" list of them) so the same input patterns and
+// codes carry over; these helpers assemble the whole section's drafts,
+// sharing the visit's effective_at, so VisitForm's buildDrafts stays a thin
+// composition of encounter + note + vitals + meds.
+
+function validNumber(raw: string, decimals: number): boolean {
+  const v = raw.trim()
+  return decimals === 0 ? /^\d+$/.test(v) : /^\d+(\.\d+)?$/.test(v)
+}
+
+/** One vitals-section row: a BP pair when `vital.key === 'bp'`, otherwise a
+ * single reading in `single` — the same split VitalsForm makes. A row with
+ * no input is blank (contributes nothing); a row with some input that
+ * doesn't parse is malformed. */
+export interface VisitVitalRow {
+  vital: VitalDef
+  systolic: string
+  diastolic: string
+  single: string
+  unit: Code
+}
+
+/** Drafts for one row, `[]` if blank, or `null` if malformed. */
+function visitVitalRowDrafts(row: VisitVitalRow, effectiveAt: string): Draft[] | null {
+  if (row.vital.key === 'bp') {
+    if (!row.systolic.trim() && !row.diastolic.trim()) return []
+    if (!validNumber(row.systolic, 0) || !validNumber(row.diastolic, 0)) return null
+    return bpDrafts(row.systolic.trim(), row.diastolic.trim(), effectiveAt)
+  }
+  if (!row.single.trim()) return []
+  if (!validNumber(row.single, row.vital.decimals)) return null
+  return [vitalDraft(row.vital.loinc, row.single.trim(), row.unit, effectiveAt)]
+}
+
+/** All vitals-section rows for one visit, sharing `effectiveAt`. `null` if
+ * any row is malformed — a bad row blocks the whole visit save rather than
+ * silently dropping it, same as the standalone Vitals form refusing to save
+ * bad input. A blank row (the "add another" default) contributes nothing. */
+export function visitVitalsDrafts(rows: VisitVitalRow[], effectiveAt: string): Draft[] | null {
+  const drafts: Draft[] = []
+  for (const row of rows) {
+    const rowDrafts = visitVitalRowDrafts(row, effectiveAt)
+    if (rowDrafts === null) return null
+    drafts.push(...rowDrafts)
+  }
+  return drafts
+}
+
+/** One "now taking" medication row — MedForm's name/dose/unit fields. Never
+ * "prescribed": an order is not a taken medication, and the vault refuses to
+ * assert medication history it wasn't told. */
+export interface VisitMedRow {
+  name: string
+  dose: string
+  doseUnit: string
+}
+
+function visitMedRowDrafts(row: VisitMedRow, effectiveAt: string): Draft[] | null {
+  const name = row.name.trim()
+  if (!name) return []
+  const dose = row.dose.trim()
+  if (dose && !/^\d+(\.\d+)?$/.test(dose)) return null
+  return [medDraft(name, effectiveAt, dose || undefined, row.doseUnit)]
+}
+
+/** All meds-section rows for one visit, sharing `effectiveAt`. Same
+ * blank-contributes-nothing / malformed-blocks-save rules as
+ * `visitVitalsDrafts`. */
+export function visitMedsDrafts(rows: VisitMedRow[], effectiveAt: string): Draft[] | null {
+  const drafts: Draft[] = []
+  for (const row of rows) {
+    const rowDrafts = visitMedRowDrafts(row, effectiveAt)
+    if (rowDrafts === null) return null
+    drafts.push(...rowDrafts)
+  }
+  return drafts
 }
 
 // --- mindfulness ---

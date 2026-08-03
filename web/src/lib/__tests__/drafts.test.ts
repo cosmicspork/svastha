@@ -9,6 +9,8 @@ import {
   exerciseDrafts,
   noteDraft,
   encounterDraft,
+  visitVitalsDrafts,
+  visitMedsDrafts,
   moodDraft,
   gratitudeDrafts,
   paperRecordDrafts,
@@ -17,6 +19,7 @@ import {
   cycleEndDraft,
   fromTemplates,
   toTemplate,
+  type VisitVitalRow,
 } from '../drafts'
 import {
   BP_SYSTOLIC,
@@ -181,6 +184,83 @@ describe('encounterDraft', () => {
   it('never invents a code', () => {
     expect(encounterDraft('Dr. Sharma', 'cardiology follow-up', AT).code).toBeUndefined()
     expect(encounterDraft('Dr. Sharma', '', AT).code).toBeUndefined()
+  })
+})
+
+describe('visitVitalsDrafts', () => {
+  const bp = VITALS.find((v) => v.key === 'bp')!
+  const hr = VITALS.find((v) => v.key === 'hr')!
+  const weight = VITALS.find((v) => v.key === 'weight')!
+
+  function blankRow(vital = bp): VisitVitalRow {
+    return { vital, systolic: '', diastolic: '', single: '', unit: vital.units[0].unit }
+  }
+
+  it('emits nothing for an untouched row', () => {
+    expect(visitVitalsDrafts([blankRow()], AT)).toEqual([])
+  })
+
+  it('emits a BP pair for a filled bp row', () => {
+    const row: VisitVitalRow = { ...blankRow(), systolic: '118', diastolic: '76' }
+    const drafts = visitVitalsDrafts([row], AT)
+    expect(drafts).toEqual(bpDrafts('118', '76', AT))
+  })
+
+  it('emits one coded observation for a filled non-bp row', () => {
+    const row: VisitVitalRow = { ...blankRow(weight), single: '82.5' }
+    const drafts = visitVitalsDrafts([row], AT)
+    expect(drafts).toEqual([vitalDraft(weight.loinc, '82.5', weight.units[0].unit, AT)])
+  })
+
+  // A malformed row must block the whole visit save rather than silently
+  // dropping the bad reading — never a partial write.
+  it('returns null for a half-filled bp row', () => {
+    const row: VisitVitalRow = { ...blankRow(), systolic: '118' }
+    expect(visitVitalsDrafts([row], AT)).toBeNull()
+  })
+
+  it('returns null when a non-bp value does not parse as a number', () => {
+    const row: VisitVitalRow = { ...blankRow(hr), single: 'fast' }
+    expect(visitVitalsDrafts([row], AT)).toBeNull()
+  })
+
+  it('combines multiple rows sharing effective_at and drops untouched rows', () => {
+    const rows: VisitVitalRow[] = [
+      { ...blankRow(), systolic: '118', diastolic: '76' },
+      blankRow(hr),
+      { ...blankRow(weight), single: '150', unit: weight.units[1].unit },
+    ]
+    const drafts = visitVitalsDrafts(rows, AT)
+    expect(drafts).toHaveLength(3)
+    expect(drafts!.every((d) => d.effective_at === AT)).toBe(true)
+  })
+})
+
+describe('visitMedsDrafts', () => {
+  it('emits nothing for an untouched row', () => {
+    expect(visitMedsDrafts([{ name: '', dose: '', doseUnit: 'mg' }], AT)).toEqual([])
+  })
+
+  it('emits a medication_statement for a named row, folding an optional dose', () => {
+    const drafts = visitMedsDrafts([{ name: 'ibuprofen', dose: '400', doseUnit: 'mg' }], AT)
+    expect(drafts).toEqual([medDraft('ibuprofen', AT, '400', 'mg')])
+  })
+
+  // Same "malformed blocks the whole save" rule as visitVitalsDrafts.
+  it('returns null when a named row has an unparseable dose', () => {
+    expect(visitMedsDrafts([{ name: 'ibuprofen', dose: 'lots', doseUnit: 'mg' }], AT)).toBeNull()
+  })
+
+  it('combines multiple rows sharing effective_at', () => {
+    const drafts = visitMedsDrafts(
+      [
+        { name: 'ibuprofen', dose: '400', doseUnit: 'mg' },
+        { name: 'metformin', dose: '', doseUnit: 'mg' },
+      ],
+      AT,
+    )
+    expect(drafts).toHaveLength(2)
+    expect(drafts!.every((d) => d.effective_at === AT)).toBe(true)
   })
 })
 
