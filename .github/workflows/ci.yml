@@ -65,11 +65,20 @@ jobs:
         id: playwright-version
         run: echo "version=$(bunx playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
       - name: Cache Playwright browsers
+        id: playwright-cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ steps.playwright-version.outputs.version }}
-      - run: bunx playwright install --with-deps chromium
+      # --with-deps only on a cache miss: its apt step is at the mercy of the
+      # Azure mirrors (one 2026-08 run spent 10 minutes there on a cache HIT),
+      # and on a hit the runner image already carries chromium's system libs.
+      # The bare install is a near-instant no-op that self-heals a partial
+      # cache restore.
+      - if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: bunx playwright install --with-deps chromium
+      - if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: bunx playwright install chromium
       - name: Run e2e suite
         # --workers=1: a known FAB-click flake shows up under Playwright's
         # default parallelism, so this suite is intentionally serial.
