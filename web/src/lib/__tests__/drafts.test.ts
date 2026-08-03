@@ -9,8 +9,16 @@ import {
   exerciseDrafts,
   noteDraft,
   encounterDraft,
+  conditionDraft,
+  procedureDraft,
+  immunizationDraft,
+  allergyDraft,
   visitVitalsDrafts,
   visitMedsDrafts,
+  visitConditionsDrafts,
+  visitProceduresDrafts,
+  visitImmunizationsDrafts,
+  visitAllergiesDrafts,
   moodDraft,
   gratitudeDrafts,
   paperRecordDrafts,
@@ -184,6 +192,129 @@ describe('encounterDraft', () => {
   it('never invents a code', () => {
     expect(encounterDraft('Dr. Sharma', 'cardiology follow-up', AT).code).toBeUndefined()
     expect(encounterDraft('Dr. Sharma', '', AT).code).toBeUndefined()
+  })
+})
+
+describe('conditionDraft', () => {
+  it('emits an uncoded condition with the trimmed name', () => {
+    const draft = conditionDraft('  sinus infection  ', AT)
+    expect(draft.kind).toBe('condition')
+    expect(draft.effective_at).toBe(AT)
+    expect(draft.value).toEqual({ text: 'sinus infection' })
+    expect(draft.code).toBeUndefined()
+  })
+})
+
+describe('procedureDraft', () => {
+  it('emits an uncoded procedure with the trimmed name', () => {
+    const draft = procedureDraft('  mole removal  ', AT)
+    expect(draft.kind).toBe('procedure')
+    expect(draft.effective_at).toBe(AT)
+    expect(draft.value).toEqual({ text: 'mole removal' })
+    expect(draft.code).toBeUndefined()
+  })
+})
+
+describe('immunizationDraft', () => {
+  it('emits an uncoded immunization with the trimmed name', () => {
+    const draft = immunizationDraft('  flu shot  ', AT)
+    expect(draft.kind).toBe('immunization')
+    expect(draft.effective_at).toBe(AT)
+    expect(draft.value).toEqual({ text: 'flu shot' })
+    expect(draft.code).toBeUndefined()
+  })
+})
+
+describe('allergyDraft', () => {
+  it('folds the reaction into the text of one allergy_intolerance', () => {
+    const draft = allergyDraft('peanuts', 'hives', AT)
+    expect(draft.kind).toBe('allergy_intolerance')
+    expect(draft.effective_at).toBe(AT)
+    expect(draft.value).toEqual({ text: 'peanuts — hives' })
+  })
+
+  it('carries the substance alone when no reaction is given', () => {
+    expect(allergyDraft('peanuts', '', AT).value).toEqual({ text: 'peanuts' })
+    expect(allergyDraft('peanuts', '   ', AT).value).toEqual({ text: 'peanuts' })
+  })
+
+  it('trims both inputs', () => {
+    expect(allergyDraft('  peanuts  ', '  hives  ', AT).value).toEqual({ text: 'peanuts — hives' })
+  })
+
+  it('never invents a code', () => {
+    expect(allergyDraft('peanuts', 'hives', AT).code).toBeUndefined()
+    expect(allergyDraft('peanuts', '', AT).code).toBeUndefined()
+  })
+})
+
+describe('visitConditionsDrafts', () => {
+  it('emits nothing for an untouched row', () => {
+    expect(visitConditionsDrafts([{ name: '' }], AT)).toEqual([])
+  })
+
+  it('emits a condition for a named row', () => {
+    expect(visitConditionsDrafts([{ name: 'sinus infection' }], AT)).toEqual([
+      conditionDraft('sinus infection', AT),
+    ])
+  })
+
+  it('combines multiple rows sharing effective_at and drops blank ones', () => {
+    const drafts = visitConditionsDrafts([{ name: 'sinus infection' }, { name: '' }, { name: 'flu' }], AT)
+    expect(drafts).toHaveLength(2)
+    expect(drafts.every((d) => d.effective_at === AT)).toBe(true)
+  })
+})
+
+describe('visitProceduresDrafts', () => {
+  it('emits nothing for an untouched row', () => {
+    expect(visitProceduresDrafts([{ name: '' }], AT)).toEqual([])
+  })
+
+  it('emits a procedure for a named row', () => {
+    expect(visitProceduresDrafts([{ name: 'mole removal' }], AT)).toEqual([
+      procedureDraft('mole removal', AT),
+    ])
+  })
+})
+
+describe('visitImmunizationsDrafts', () => {
+  it('emits nothing for an untouched row', () => {
+    expect(visitImmunizationsDrafts([{ name: '' }], AT)).toEqual([])
+  })
+
+  it('emits an immunization for a named row', () => {
+    expect(visitImmunizationsDrafts([{ name: 'flu shot' }], AT)).toEqual([
+      immunizationDraft('flu shot', AT),
+    ])
+  })
+})
+
+describe('visitAllergiesDrafts', () => {
+  it('emits nothing for an untouched row', () => {
+    expect(visitAllergiesDrafts([{ substance: '', reaction: '' }], AT)).toEqual([])
+  })
+
+  it('emits nothing when only the reaction is filled without a substance', () => {
+    expect(visitAllergiesDrafts([{ substance: '', reaction: 'hives' }], AT)).toEqual([])
+  })
+
+  it('emits an allergy_intolerance for a substance, folding an optional reaction', () => {
+    const drafts = visitAllergiesDrafts([{ substance: 'peanuts', reaction: 'hives' }], AT)
+    expect(drafts).toEqual([allergyDraft('peanuts', 'hives', AT)])
+  })
+
+  it('combines multiple rows sharing effective_at and drops blank ones', () => {
+    const drafts = visitAllergiesDrafts(
+      [
+        { substance: 'peanuts', reaction: 'hives' },
+        { substance: '', reaction: '' },
+        { substance: 'penicillin', reaction: '' },
+      ],
+      AT,
+    )
+    expect(drafts).toHaveLength(2)
+    expect(drafts.every((d) => d.effective_at === AT)).toBe(true)
   })
 })
 

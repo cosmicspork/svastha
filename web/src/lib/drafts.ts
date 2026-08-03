@@ -214,6 +214,83 @@ export function encounterDraft(provider: string, reason: string, effectiveAt: st
   return { kind: 'encounter', effective_at: effectiveAt, value: text(why ? `${name} — ${why}` : name) }
 }
 
+// --- clinical history (diagnoses, procedures, immunizations, allergies) ---
+
+/** One `condition` with no code and a text value — e.g. "sinus infection".
+ * Coded (ICD-10) diagnoses are a roadmap item; free text is honest until
+ * then, same trade-off as encounterDraft and medDraft. */
+export function conditionDraft(name: string, effectiveAt: string): Draft {
+  return { kind: 'condition', effective_at: effectiveAt, value: text(name.trim()) }
+}
+
+/** One `procedure` with no code and a text value — e.g. "mole removal". */
+export function procedureDraft(name: string, effectiveAt: string): Draft {
+  return { kind: 'procedure', effective_at: effectiveAt, value: text(name.trim()) }
+}
+
+/** One `immunization` with no code and a text value — e.g. "flu shot". CVX
+ * coding is deferred with the rest of clinical history. */
+export function immunizationDraft(name: string, effectiveAt: string): Draft {
+  return { kind: 'immunization', effective_at: effectiveAt, value: text(name.trim()) }
+}
+
+/** One `allergy_intolerance` with no code and a text value like "peanuts —
+ * hives": the reaction folds into the text the same way encounterDraft folds
+ * a visit's reason, because a coded substance would drop the reaction and a
+ * quantity value can't hold either. Reaction is optional — just the
+ * substance when it's blank. */
+export function allergyDraft(substance: string, reaction: string, effectiveAt: string): Draft {
+  const what = substance.trim()
+  const why = reaction.trim()
+  return {
+    kind: 'allergy_intolerance',
+    effective_at: effectiveAt,
+    value: text(why ? `${what} — ${why}` : what),
+  }
+}
+
+// --- visit sections (diagnoses, procedures, immunizations, allergies) ---
+//
+// Same "add another" free-text row shape as the vitals/meds sections below,
+// but simpler: a bare name (or a substance with an optional reaction) has no
+// malformed case, so a blank row just contributes nothing — no null branch
+// to block the save.
+
+export interface VisitConditionRow {
+  name: string
+}
+
+export function visitConditionsDrafts(rows: VisitConditionRow[], effectiveAt: string): Draft[] {
+  return rows.filter((r) => r.name.trim()).map((r) => conditionDraft(r.name, effectiveAt))
+}
+
+export interface VisitProcedureRow {
+  name: string
+}
+
+export function visitProceduresDrafts(rows: VisitProcedureRow[], effectiveAt: string): Draft[] {
+  return rows.filter((r) => r.name.trim()).map((r) => procedureDraft(r.name, effectiveAt))
+}
+
+export interface VisitImmunizationRow {
+  name: string
+}
+
+export function visitImmunizationsDrafts(rows: VisitImmunizationRow[], effectiveAt: string): Draft[] {
+  return rows.filter((r) => r.name.trim()).map((r) => immunizationDraft(r.name, effectiveAt))
+}
+
+export interface VisitAllergyRow {
+  substance: string
+  reaction: string
+}
+
+export function visitAllergiesDrafts(rows: VisitAllergyRow[], effectiveAt: string): Draft[] {
+  return rows
+    .filter((r) => r.substance.trim())
+    .map((r) => allergyDraft(r.substance, r.reaction, effectiveAt))
+}
+
 // --- visit sections (vitals and meds taken alongside a visit) ---
 //
 // A visit's optional vitals/meds sections repeat VitalsForm's and MedForm's
