@@ -12,6 +12,7 @@ import {
   getProposal,
   setDraftStatus,
   setDraftStatuses,
+  markResultSent,
   removeProposal,
   refreshPendingProposals,
   pendingProposals,
@@ -249,6 +250,117 @@ describe('persistence + dedupe', () => {
     await setDraftStatus('m1', 'ev-1', 'approved') // now fully resolved
     await refreshPendingProposals()
     expect(storeGet(pendingProposals)).toEqual([])
+  })
+})
+
+// The periodic pull (sync.ts) re-upserts every still-pending mailbox item, so a
+// re-pull of a proposal the owner is deciding right now is the ordinary case,
+// not the exotic one. These fixtures are chosen to defeat the guarantee rather
+// than to satisfy it: the interleaving that matters is the one where the pull's
+// *read* falls between the decision's read and its write, because a
+// two-transaction read-modify-write then merges from a pre-decision snapshot and
+// writes the decision back out.
+//
+// `turns(n)` staggers the second operation by n microtask checkpoints. The
+// sweep is deterministic — fake-indexeddb has a single-threaded scheduler, so
+// each offset produces the same schedule every run — and every offset in it
+// clobbers the decision when these ops are two transactions each.
+describe('concurrent decisions vs. the pull loop', () => {
+  const turns = async (n: number) => {
+    for (let i = 0; i < n; i++) await Promise.resolve()
+  }
+  const OFFSETS = [0, 1, 2, 3, 4]
+
+  it('a committed decision survives a re-pull started in its gap, at every offset', async () => {
+    for (const n of OFFSETS) {
+      const id = `race-${n}`
+      await upsertProposal(record({ id }))
+
+      const approve = setDraftStatus(id, 'ev-1', 'approved')
+      await turns(n)
+      const rePull = upsertProposal(record({ id })) // same drafts, all pending
+      await Promise.all([approve, rePull])
+
+      expect((await getProposal(id))!.drafts[0].status, `offset ${n}`).toBe('approved')
+    }
+  })
+
+  it('the reverse ordering — re-pull first, decision second — holds too', async () => {
+    for (const n of OFFSETS) {
+      const id = `race-rev-${n}`
+      await upsertProposal(record({ id }))
+
+      const rePull = upsertProposal(record({ id }))
+      await turns(n)
+      const approve = setDraftStatus(id, 'ev-1', 'approved')
+      await Promise.all([approve, rePull])
+
+      expect((await getProposal(id))!.drafts[0].status, `offset ${n}`).toBe('approved')
+    }
+  })
+
+  // Atomicity must not cost the merge: a second pass that proposes something new
+  // still has to land, whichever side of the decision it is ordered on.
+  it("a racing pull's fresh drafts land without disturbing the decision", async () => {
+    for (const n of OFFSETS) {
+      const id = `race-merge-${n}`
+      await upsertProposal(record({ id, drafts: [{ event: draftEvent('ev-1') }] }))
+
+      const approve = setDraftStatus(id, 'ev-1', 'approved')
+      await turns(n)
+      const rePull = upsertProposal(
+        record({ id, drafts: [{ event: draftEvent('ev-1') }, { event: draftEvent('ev-2') }] }),
+      )
+      await Promise.all([approve, rePull])
+
+      const stored = (await getProposal(id))!
+      expect(
+        stored.drafts.map((d) => [d.event.id, d.status]),
+        `offset ${n}`,
+      ).toEqual([
+        ['ev-1', 'approved'],
+        ['ev-2', 'pending'],
+      ])
+      expect(stored.resolved, `offset ${n}`).toBe(false)
+    }
+  })
+
+  it('two decisions on different drafts of one record both land', async () => {
+    for (const n of OFFSETS) {
+      const id = `race-both-${n}`
+      await upsertProposal(
+        record({ id, drafts: [{ event: draftEvent('ev-1') }, { event: draftEvent('ev-2') }] }),
+      )
+
+      const first = setDraftStatus(id, 'ev-1', 'approved')
+      await turns(n)
+      const second = setDraftStatus(id, 'ev-2', 'rejected')
+      await Promise.all([first, second])
+
+      const stored = (await getProposal(id))!
+      expect(stored.drafts.map((d) => d.status), `offset ${n}`).toEqual(['approved', 'rejected'])
+      expect(stored.resolved, `offset ${n}`).toBe(true)
+    }
+  })
+
+  // The reply-sent flag and the decision are separate facts about one record;
+  // neither write may carry the other's field back to what it was when it started.
+  it('markResultSent and a concurrent decision both survive', async () => {
+    for (const n of OFFSETS) {
+      const id = `race-sent-${n}`
+      await upsertProposal(
+        record({ id, drafts: [{ event: draftEvent('ev-1') }, { event: draftEvent('ev-2') }] }),
+      )
+
+      const mark = markResultSent(id, true)
+      await turns(n)
+      const approve = setDraftStatus(id, 'ev-1', 'approved')
+      await Promise.all([mark, approve])
+
+      const stored = (await getProposal(id))!
+      expect(stored.resultSent, `offset ${n}`).toBe(true)
+      expect(stored.drafts[0].status, `offset ${n}`).toBe('approved')
+    }
   })
 })
 
