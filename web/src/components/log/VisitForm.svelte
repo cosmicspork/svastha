@@ -5,8 +5,16 @@
     noteDraft,
     visitVitalsDrafts,
     visitMedsDrafts,
+    visitConditionsDrafts,
+    visitProceduresDrafts,
+    visitImmunizationsDrafts,
+    visitAllergiesDrafts,
     type VisitVitalRow,
     type VisitMedRow,
+    type VisitConditionRow,
+    type VisitProcedureRow,
+    type VisitImmunizationRow,
+    type VisitAllergyRow,
     type Draft,
     type DraftTemplate,
   } from '../../lib/drafts'
@@ -60,6 +68,69 @@
     medRows = medRows.filter((_, idx) => idx !== i)
   }
 
+  // The four clinical-history sections are one free-text field each (two for
+  // allergies), so a blank row has no malformed case — unlike vitals/meds,
+  // their assemblers never return null and there is nothing to guard here.
+  function newConditionRow(): VisitConditionRow {
+    return { name: '' }
+  }
+
+  let conditionsOpen = $state(false)
+  let conditionRows = $state<VisitConditionRow[]>([newConditionRow()])
+
+  function addConditionRow() {
+    conditionRows = [...conditionRows, newConditionRow()]
+  }
+
+  function removeConditionRow(i: number) {
+    conditionRows = conditionRows.filter((_, idx) => idx !== i)
+  }
+
+  function newProcedureRow(): VisitProcedureRow {
+    return { name: '' }
+  }
+
+  let proceduresOpen = $state(false)
+  let procedureRows = $state<VisitProcedureRow[]>([newProcedureRow()])
+
+  function addProcedureRow() {
+    procedureRows = [...procedureRows, newProcedureRow()]
+  }
+
+  function removeProcedureRow(i: number) {
+    procedureRows = procedureRows.filter((_, idx) => idx !== i)
+  }
+
+  function newImmunizationRow(): VisitImmunizationRow {
+    return { name: '' }
+  }
+
+  let immunizationsOpen = $state(false)
+  let immunizationRows = $state<VisitImmunizationRow[]>([newImmunizationRow()])
+
+  function addImmunizationRow() {
+    immunizationRows = [...immunizationRows, newImmunizationRow()]
+  }
+
+  function removeImmunizationRow(i: number) {
+    immunizationRows = immunizationRows.filter((_, idx) => idx !== i)
+  }
+
+  function newAllergyRow(): VisitAllergyRow {
+    return { substance: '', reaction: '' }
+  }
+
+  let allergiesOpen = $state(false)
+  let allergyRows = $state<VisitAllergyRow[]>([newAllergyRow()])
+
+  function addAllergyRow() {
+    allergyRows = [...allergyRows, newAllergyRow()]
+  }
+
+  function removeAllergyRow(i: number) {
+    allergyRows = allergyRows.filter((_, idx) => idx !== i)
+  }
+
   function buildDrafts(effectiveAt: string): Draft[] | null {
     if (!provider.trim()) return null
     const drafts = [encounterDraft(provider, reason, effectiveAt)]
@@ -78,6 +149,11 @@
       drafts.push(...meds)
     }
 
+    if (conditionsOpen) drafts.push(...visitConditionsDrafts(conditionRows, effectiveAt))
+    if (proceduresOpen) drafts.push(...visitProceduresDrafts(procedureRows, effectiveAt))
+    if (immunizationsOpen) drafts.push(...visitImmunizationsDrafts(immunizationRows, effectiveAt))
+    if (allergiesOpen) drafts.push(...visitAllergiesDrafts(allergyRows, effectiveAt))
+
     return drafts
   }
 
@@ -95,6 +171,14 @@
     vitalRows = [newVitalRow()]
     medsOpen = false
     medRows = [newMedRow()]
+    conditionsOpen = false
+    conditionRows = [newConditionRow()]
+    proceduresOpen = false
+    procedureRows = [newProcedureRow()]
+    immunizationsOpen = false
+    immunizationRows = [newImmunizationRow()]
+    allergiesOpen = false
+    allergyRows = [newAllergyRow()]
   }
 
   function onPrefill(templates: DraftTemplate[]) {
@@ -310,6 +394,219 @@
 
       <button type="button" class="ghost" onclick={addMedRow} data-testid="visit-meds-add">
         Add another medication
+      </button>
+    {/if}
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <span class="section-label">Diagnoses <span class="optional">(optional)</span></span>
+      <button
+        type="button"
+        class="ghost collapse-toggle"
+        aria-expanded={conditionsOpen}
+        onclick={() => (conditionsOpen = !conditionsOpen)}
+        data-testid="visit-conditions-toggle"
+      >
+        {conditionsOpen ? 'Hide' : 'Add'}
+      </button>
+    </div>
+
+    {#if conditionsOpen}
+      {#each conditionRows as row, i (i)}
+        <div class="row" data-testid="visit-condition-row">
+          <label class="field">
+            Diagnosis
+            <input
+              bind:value={row.name}
+              autocomplete="off"
+              placeholder="sinus infection"
+              data-testid="visit-condition-{i}-name"
+            />
+          </label>
+
+          {#if conditionRows.length > 1}
+            <button
+              type="button"
+              class="ghost remove-row"
+              onclick={() => removeConditionRow(i)}
+              data-testid="visit-condition-{i}-remove"
+            >
+              Remove
+            </button>
+          {/if}
+        </div>
+      {/each}
+
+      <button
+        type="button"
+        class="ghost"
+        onclick={addConditionRow}
+        data-testid="visit-conditions-add"
+      >
+        Add another diagnosis
+      </button>
+    {/if}
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <span class="section-label">Procedures <span class="optional">(optional)</span></span>
+      <button
+        type="button"
+        class="ghost collapse-toggle"
+        aria-expanded={proceduresOpen}
+        onclick={() => (proceduresOpen = !proceduresOpen)}
+        data-testid="visit-procedures-toggle"
+      >
+        {proceduresOpen ? 'Hide' : 'Add'}
+      </button>
+    </div>
+
+    {#if proceduresOpen}
+      {#each procedureRows as row, i (i)}
+        <div class="row" data-testid="visit-procedure-row">
+          <label class="field">
+            Procedure
+            <input
+              bind:value={row.name}
+              autocomplete="off"
+              placeholder="mole removal"
+              data-testid="visit-procedure-{i}-name"
+            />
+          </label>
+
+          {#if procedureRows.length > 1}
+            <button
+              type="button"
+              class="ghost remove-row"
+              onclick={() => removeProcedureRow(i)}
+              data-testid="visit-procedure-{i}-remove"
+            >
+              Remove
+            </button>
+          {/if}
+        </div>
+      {/each}
+
+      <button
+        type="button"
+        class="ghost"
+        onclick={addProcedureRow}
+        data-testid="visit-procedures-add"
+      >
+        Add another procedure
+      </button>
+    {/if}
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <span class="section-label">Immunizations <span class="optional">(optional)</span></span>
+      <button
+        type="button"
+        class="ghost collapse-toggle"
+        aria-expanded={immunizationsOpen}
+        onclick={() => (immunizationsOpen = !immunizationsOpen)}
+        data-testid="visit-immunizations-toggle"
+      >
+        {immunizationsOpen ? 'Hide' : 'Add'}
+      </button>
+    </div>
+
+    {#if immunizationsOpen}
+      {#each immunizationRows as row, i (i)}
+        <div class="row" data-testid="visit-immunization-row">
+          <label class="field">
+            Immunization
+            <input
+              bind:value={row.name}
+              autocomplete="off"
+              placeholder="flu shot"
+              data-testid="visit-immunization-{i}-name"
+            />
+          </label>
+
+          {#if immunizationRows.length > 1}
+            <button
+              type="button"
+              class="ghost remove-row"
+              onclick={() => removeImmunizationRow(i)}
+              data-testid="visit-immunization-{i}-remove"
+            >
+              Remove
+            </button>
+          {/if}
+        </div>
+      {/each}
+
+      <button
+        type="button"
+        class="ghost"
+        onclick={addImmunizationRow}
+        data-testid="visit-immunizations-add"
+      >
+        Add another immunization
+      </button>
+    {/if}
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <span class="section-label">Allergies <span class="optional">(optional)</span></span>
+      <button
+        type="button"
+        class="ghost collapse-toggle"
+        aria-expanded={allergiesOpen}
+        onclick={() => (allergiesOpen = !allergiesOpen)}
+        data-testid="visit-allergies-toggle"
+      >
+        {allergiesOpen ? 'Hide' : 'Add'}
+      </button>
+    </div>
+
+    {#if allergiesOpen}
+      {#each allergyRows as row, i (i)}
+        <div class="row" data-testid="visit-allergy-row">
+          <label class="field">
+            Substance
+            <input
+              bind:value={row.substance}
+              autocomplete="off"
+              placeholder="peanuts"
+              data-testid="visit-allergy-{i}-substance"
+            />
+          </label>
+          <label class="field">
+            Reaction <span class="optional">(optional)</span>
+            <input
+              bind:value={row.reaction}
+              autocomplete="off"
+              placeholder="hives"
+              data-testid="visit-allergy-{i}-reaction"
+            />
+          </label>
+
+          {#if allergyRows.length > 1}
+            <button
+              type="button"
+              class="ghost remove-row"
+              onclick={() => removeAllergyRow(i)}
+              data-testid="visit-allergy-{i}-remove"
+            >
+              Remove
+            </button>
+          {/if}
+        </div>
+      {/each}
+
+      <button
+        type="button"
+        class="ghost"
+        onclick={addAllergyRow}
+        data-testid="visit-allergies-add"
+      >
+        Add another allergy
       </button>
     {/if}
   </div>
