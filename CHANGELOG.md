@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.16.0](https://github.com/cosmicspork/svastha/compare/v0.15.0...v0.16.0) (2026-08-03)
+
+
+### Features
+
+* record a visit ([#189](https://github.com/cosmicspork/svastha/issues/189)) ([9b15256](https://github.com/cosmicspork/svastha/commit/9b152566cc3fea60c9610d1c733267c82a5bb06a))
+* **web:** clinical sections complete the visit form ([#191](https://github.com/cosmicspork/svastha/issues/191)) ([474f9c3](https://github.com/cosmicspork/svastha/commit/474f9c30d6bbb1a885a5bd135793c4cd30ad1b2f))
+* **web:** vitals and medication sections on the visit form ([#190](https://github.com/cosmicspork/svastha/issues/190)) ([af550d3](https://github.com/cosmicspork/svastha/commit/af550d37fb248be06364bf2eb32d8eaf273b6206))
+
+
+### Bug Fixes
+
+* **web:** let iOS choose photo library or camera for paper records ([#187](https://github.com/cosmicspork/svastha/issues/187)) ([38c0e0a](https://github.com/cosmicspork/svastha/commit/38c0e0aedfe3f66c7ad94ff67fe51eea9c1ebca9))
+
 ## [0.15.0](https://github.com/cosmicspork/svastha/compare/v0.14.0...v0.15.0) (2026-08-02)
 
 
