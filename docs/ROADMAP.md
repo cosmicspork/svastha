@@ -26,7 +26,6 @@ harvest a PR's "## Deferred" notes into the list.
 - Deeper NOTE sections (H&P, ED, Consult, Nursing, OR, Discharge)
 - Goals, Care Teams, Functional Status, Medical Devices, Patient Instructions
 - FHIR DiagnosticReport / DocumentReference / CarePlan
-- RxNorm coding for manually logged medications
 - Prefer a *named* coding in a known terminology when a `CodeableConcept`
   carries several — `fhir.rs` `best_coding` ranks LOINC → SNOMED → *first
   coding in the array*, and `ccda.rs` `extract_code` takes the root `<code>`
@@ -64,6 +63,17 @@ harvest a PR's "## Deferred" notes into the list.
   861004 and 29046 resolve and 1719647 and 1665039 do not. The full release
   needs a UMLS licence and login, which is why the subset was chosen — a
   licensing decision before it is a build one
+- Coded pickers for manual entry — search-as-you-type over the offline
+  dictionary (RxNorm meds, SNOMED/ICD-10-CM conditions, CVX immunizations,
+  LOINC labs + values), free text always allowed; subsumes "RxNorm coding for
+  manually logged medications". Codes attach only at entry — signed content is
+  never rewritten, so this is forward-only. CPT-coded procedures stay excluded
+  (licensing); RxNorm coverage is the prescribable subset until the UMLS-licence
+  decision
+- Visit-card nesting — extend C2 so a manually recorded visit's same-timestamp
+  vitals/meds/clinical rows can render inside the encounter entry as one card
+- Provider recents on the visit form — chip suggestions from previously logged
+  providers; a provider entity is deliberately out of scope
 - Web Worker for large-document parse (if UI jank appears)
 - Per-item curation on grouped spine entries
 - Long-press bloom shortcut

@@ -23,4 +23,5 @@ export const LOG_KINDS: LogKind[] = [
   { kind: 'note', label: 'Note', category: 'note' },
   { kind: 'paper', label: 'Paper record', category: 'note', glyph: '⛶' },
   { kind: 'cycle', label: 'Cycle', category: 'cycle' },
+  { kind: 'visit', label: 'Visit', category: 'clinical' },
 ]

@@ -199,6 +199,21 @@ export function paperRecordDrafts(
   return drafts
 }
 
+// --- visits ---
+
+/** One `encounter` with no code and a text value like "Dr. Sharma — cardiology
+ * follow-up". The reason folds into the text for the same reason a dose folds
+ * into medDraft's: a made-up encounter-type code would lie about what we know,
+ * and a coded value would drop the provider's name. A visit note is a separate
+ * `document` sharing this `effective_at` (see noteDraft) — the timeline's
+ * same-timestamp grouping and C2 note-nesting associate the two, so there is no
+ * link field to invent. */
+export function encounterDraft(provider: string, reason: string, effectiveAt: string): Draft {
+  const name = provider.trim()
+  const why = reason.trim()
+  return { kind: 'encounter', effective_at: effectiveAt, value: text(why ? `${name} — ${why}` : name) }
+}
+
 // --- mindfulness ---
 
 /** A 1–5 mood score as a unitless quantity (an ordinal scale, not a
