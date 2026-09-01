@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { buildSummary } from '../summary'
+import { buildSummary, shelveMedications } from '../summary'
 import type { StoredEvent } from '../events'
 import type { EventKind, EventValue } from '../drafts'
+import type { ConceptStatus, Regimen } from '../curation'
 import { SNOMED, LOINC, RXNORM, BP_SYSTOLIC, BP_DIASTOLIC, CYCLE_START, CYCLE_END, type Code } from '../codes'
 
 let nextId = 0
@@ -531,5 +532,163 @@ describe('buildSummary: empty and hidden', () => {
     ]
     const { problems } = buildSummary(events, { hiddenIds: new Set(['drop']) })
     expect(problems.map((p) => p.label)).toEqual(['Hypertension'])
+  })
+})
+
+describe('buildSummary: regimen curation', () => {
+  const AMOX: Code = { system: RXNORM, code: '723', display: 'Amoxicillin' }
+  const medKey = `medication_statement|${RXNORM}|723`
+  const amox = () => ev({ kind: 'medication_statement', code: AMOX, effective_at: '2024-01-01T00:00:00+00:00' })
+
+  it('leaves the row without a regimen when none is curated', () => {
+    expect(buildSummary([amox()]).medications[0].regimen).toBeUndefined()
+  })
+
+  it('carries the curated regimen on the row, keyed on the concept', () => {
+    const regimen = new Map([[medKey, { schedule: 'Twice daily', route: 'mouth' as const, as_needed: true }]])
+    const { medications } = buildSummary([amox()], { regimen })
+    expect(medications[0].regimen).toEqual({ schedule: 'Twice daily', route: 'mouth', as_needed: true })
+  })
+
+  it('a curated dose outranks the recorded dose quantity', () => {
+    const dosed = ev({
+      kind: 'medication_statement',
+      code: AMOX,
+      value: q('500', 'mg'),
+      effective_at: '2024-01-01T00:00:00+00:00',
+    })
+    expect(buildSummary([dosed]).medications[0].detail).toBe('500 mg')
+    const regimen = new Map([[medKey, { dose: '2 tablets' }]])
+    expect(buildSummary([dosed], { regimen }).medications[0].detail).toBe('2 tablets')
+  })
+
+  it('falls back to the recorded quantity when the regimen carries no dose', () => {
+    const dosed = ev({
+      kind: 'medication_statement',
+      code: AMOX,
+      value: q('500', 'mg'),
+      effective_at: '2024-01-01T00:00:00+00:00',
+    })
+    const regimen = new Map([[medKey, { schedule: 'Twice daily' }]])
+    expect(buildSummary([dosed], { regimen }).medications[0].detail).toBe('500 mg')
+  })
+
+  it('is inert for a concept with no events — no phantom row appears', () => {
+    const regimen = new Map([['medication_statement|rxnorm|999999', { dose: '10 mg' }]])
+    const { medications, problems } = buildSummary([amox()], { regimen })
+    expect(medications).toHaveLength(1)
+    expect(medications[0].key).toBe(medKey)
+    expect(medications[0].regimen).toBeUndefined()
+    expect(problems).toHaveLength(0)
+  })
+})
+
+describe('shelveMedications', () => {
+  const AMOX: Code = { system: RXNORM, code: '723', display: 'Amoxicillin' }
+  const LISI: Code = { system: RXNORM, code: '29046', display: 'Lisinopril' }
+  const METF: Code = { system: RXNORM, code: '6809', display: 'Metformin' }
+  const ZOLP: Code = { system: RXNORM, code: '39786', display: 'Zolpidem' }
+
+  const key = (code: Code) => `medication_statement|${code.system}|${code.code}`
+  const med = (code: Code) =>
+    ev({ kind: 'medication_statement', code, effective_at: '2024-01-01T00:00:00+00:00' })
+
+  /** Build the medication rows through the real fold, then shelve them — the
+   * page's own pipeline, so the shelves are tested against rows `buildSummary`
+   * actually produces (byLabel-sorted, status/regimen applied). */
+  function shelve(
+    codes: Code[],
+    opts: { regimen?: Map<string, Regimen>; status?: Map<string, ConceptStatus> } = {},
+  ) {
+    return shelveMedications(buildSummary(codes.map(med), { now: NOW, ...opts }).medications)
+  }
+
+  it('files each current med on its curated route, in REGIMEN_ROUTES order', () => {
+    // Seeded in an order that is neither route order nor name order, so a shelf
+    // list that merely echoed the input would fail.
+    const regimen = new Map<string, Regimen>([
+      [key(AMOX), { route: 'skin' }],
+      [key(LISI), { route: 'mouth' }],
+      [key(METF), { route: 'injection' }],
+      [key(ZOLP), { route: 'nose' }],
+    ])
+    const { shelves, unrouted, past } = shelve([METF, ZOLP, AMOX, LISI], { regimen })
+    expect(shelves.map((s) => s.route)).toEqual(['mouth', 'nose', 'skin', 'injection'])
+    expect(shelves.map((s) => s.rows.map((r) => r.label))).toEqual([
+      ['Lisinopril'],
+      ['Zolpidem'],
+      ['Amoxicillin'],
+      ['Metformin'],
+    ])
+    expect(unrouted).toEqual([])
+    expect(past).toEqual([])
+  })
+
+  it('omits shelves nothing is filed on', () => {
+    const regimen = new Map<string, Regimen>([[key(LISI), { route: 'eyes' }]])
+    const { shelves } = shelve([LISI], { regimen })
+    expect(shelves).toHaveLength(1)
+    expect(shelves[0].route).toBe('eyes')
+  })
+
+  it('puts route-less current meds in `unrouted`, not on an "other" shelf', () => {
+    // 'other' is a route someone chose, not a bin for the unfiled: a med nobody
+    // has routed must stay visibly unrouted.
+    const regimen = new Map<string, Regimen>([[key(AMOX), { schedule: 'Twice daily' }]])
+    const { unrouted, shelves } = shelve([AMOX, LISI], { regimen })
+    expect(unrouted.map((r) => r.label)).toEqual(['Amoxicillin', 'Lisinopril'])
+    expect(shelves).toEqual([])
+  })
+
+  it('sends inactive meds to `past`, off their shelf', () => {
+    const regimen = new Map<string, Regimen>([
+      [key(LISI), { route: 'mouth' }],
+      [key(METF), { route: 'mouth' }],
+    ])
+    const status = new Map<string, ConceptStatus>([[key(METF), 'inactive']])
+    const { shelves, past } = shelve([LISI, METF], { regimen, status })
+    expect(past.map((r) => r.label)).toEqual(['Metformin'])
+    expect(shelves).toEqual([{ route: 'mouth', rows: [expect.objectContaining({ label: 'Lisinopril' })] }])
+  })
+
+  it('keeps an as-needed med current — PRN is a chip, not a status', () => {
+    const regimen = new Map<string, Regimen>([[key(ZOLP), { route: 'mouth', as_needed: true }]])
+    const { shelves, past, unrouted } = shelve([ZOLP], { regimen })
+    expect(past).toEqual([])
+    expect(unrouted).toEqual([])
+    expect(shelves[0].rows.map((r) => r.label)).toEqual(['Zolpidem'])
+  })
+
+  it('files an as-needed med as past once it is marked inactive', () => {
+    // The adversarial pair to the case above: `as_needed` must not out-vote an
+    // explicit inactive status either.
+    const regimen = new Map<string, Regimen>([[key(ZOLP), { route: 'mouth', as_needed: true }]])
+    const status = new Map<string, ConceptStatus>([[key(ZOLP), 'inactive']])
+    const { shelves, past } = shelve([ZOLP], { regimen, status })
+    expect(shelves).toEqual([])
+    expect(past.map((r) => r.label)).toEqual(['Zolpidem'])
+  })
+
+  it('preserves the incoming order within a shelf', () => {
+    const regimen = new Map<string, Regimen>([
+      [key(AMOX), { route: 'mouth' }],
+      [key(LISI), { route: 'mouth' }],
+      [key(METF), { route: 'mouth' }],
+    ])
+    const { shelves } = shelve([METF, AMOX, LISI], { regimen })
+    // buildSummary sorts byLabel, so alphabetical is what "incoming" means here.
+    expect(shelves[0].rows.map((r) => r.label)).toEqual(['Amoxicillin', 'Lisinopril', 'Metformin'])
+    // And a shelf built from a hand-ordered array is not re-sorted.
+    const rows = shelves[0].rows
+    const reversed = shelveMedications([...rows].reverse())
+    expect(reversed.shelves[0].rows.map((r) => r.label)).toEqual([
+      'Metformin',
+      'Lisinopril',
+      'Amoxicillin',
+    ])
+  })
+
+  it('returns empty buckets for an empty list', () => {
+    expect(shelveMedications([])).toEqual({ unrouted: [], shelves: [], past: [] })
   })
 })

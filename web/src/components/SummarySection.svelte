@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { SummaryRow } from '../lib/summary'
+  import { REGIMEN_ROUTE_LABELS } from '../lib/curation'
   import {
     startSwipe,
     trackSwipe,
@@ -19,6 +20,7 @@
     coveredSystems = new Set<string>(),
     readonly = false,
     heading = 'h2',
+    headingHidden = false,
     curateLabel = 'Edit',
     detailLabel = 'Value',
     onrowtap,
@@ -46,6 +48,11 @@
     /** The section heading level. A sub-group (Current/Past, Active/Resolved)
      * renders `h3` under the parent's `h2`; standalone sections keep `h2`. */
     heading?: 'h2' | 'h3'
+    /** Hide the heading visually while keeping it in the accessibility tree.
+     * The medications page's catch-all shelf is deliberately unlabelled on
+     * screen — it is the rows that have *no* label — but a screen reader still
+     * needs the group named, and the testid derives from `title` either way. */
+    headingHidden?: boolean
     /** What the curate action is called on this section's rows ("Mark past or
      * rename"), used on the swipe-right label and the panel button. */
     curateLabel?: string
@@ -158,11 +165,25 @@
   }
 
   const panelId = (key: string): string => `sum-panel-${key.replace(/[^a-zA-Z0-9]+/g, '-')}`
+
+  /** The quiet second line under a medication's name: how it is taken and who
+   * prescribed it. Empty (and so unrendered) when neither was recorded — the
+   * row must not grow a blank line to say nothing. */
+  function regimenSubLine(row: SummaryRow): string {
+    const r = row.regimen
+    if (!r) return ''
+    return [r.schedule, r.prescriber].filter(Boolean).join(' · ')
+  }
 </script>
 
 {#if rows.length > 0 || alwaysShow}
   <section class="section" data-testid="summary-section-{title.toLowerCase().replace(/\s+/g, '-')}">
-    <svelte:element this={heading} class="section-head" class:sub={heading === 'h3'}>
+    <svelte:element
+      this={heading}
+      class="section-head"
+      class:sub={heading === 'h3'}
+      class:visually-hidden={headingHidden}
+    >
       <span class="dot {hueClass}" aria-hidden="true"></span>
       {title}
     </svelte:element>
@@ -219,7 +240,15 @@
                         <span class="hint" data-testid="summary-unnamed-hint">{hint}</span>
                       {/if}
                     {/if}
+                    {#if regimenSubLine(row)}
+                      <span class="subline muted" data-testid="summary-regimen-subline"
+                        >{regimenSubLine(row)}</span
+                      >
+                    {/if}
                   </span>
+                  {#if row.regimen?.as_needed}
+                    <span class="prn" data-testid="summary-prn-chip">As needed</span>
+                  {/if}
                   {#if row.coding && row.nameResolved}
                     <!-- Print only (see ClinicianSummary's @media print): paper
                          has no panel to open, and a one-line row with the code
@@ -262,6 +291,57 @@
                       <dt>{detailLabel}</dt>
                       <dd class="data">{row.detail}</dd>
                     </div>
+                  {/if}
+                  {#if row.regimen}
+                    {@const r = row.regimen}
+                    <!-- The owner's curated regimen (curation.ts's `regimen:`).
+                         Each field renders only when it was actually recorded:
+                         a blank "Prescriber —" row would read as a claim that
+                         nobody prescribed it. The rows stay flat siblings
+                         because a `dl` groups with divs of dt/dd, so a wrapper
+                         around them would not be conforming. -->
+                    {#if r.schedule}
+                      <div class="prow" data-testid="summary-regimen-schedule">
+                        <dt>Schedule</dt>
+                        <dd>{r.schedule}</dd>
+                      </div>
+                    {/if}
+                    {#if r.route}
+                      <div class="prow" data-testid="summary-regimen-route">
+                        <dt>Route</dt>
+                        <dd>{REGIMEN_ROUTE_LABELS[r.route]}</dd>
+                      </div>
+                    {/if}
+                    {#if r.as_needed}
+                      <div class="prow" data-testid="summary-regimen-as-needed">
+                        <dt>As needed</dt>
+                        <dd>Yes</dd>
+                      </div>
+                    {/if}
+                    {#if r.prescriber}
+                      <div class="prow" data-testid="summary-regimen-prescriber">
+                        <dt>Prescriber</dt>
+                        <dd>{r.prescriber}</dd>
+                      </div>
+                    {/if}
+                    {#if r.started}
+                      <div class="prow" data-testid="summary-regimen-started">
+                        <dt>Started</dt>
+                        <dd>{fmtDate(r.started)}</dd>
+                      </div>
+                    {/if}
+                    {#if r.stopped}
+                      <div class="prow" data-testid="summary-regimen-stopped">
+                        <dt>Stopped</dt>
+                        <dd>{fmtDate(r.stopped)}</dd>
+                      </div>
+                    {/if}
+                    {#if r.instructions}
+                      <div class="prow" data-testid="summary-regimen-instructions">
+                        <dt>Instructions</dt>
+                        <dd>{r.instructions}</dd>
+                      </div>
+                    {/if}
                   {/if}
                   <div class="prow">
                     <dt>Recorded</dt>
@@ -472,6 +552,34 @@
   .hint {
     font-size: var(--text-xs);
     color: var(--flare);
+  }
+
+  .subline {
+    font-size: var(--text-xs);
+    overflow-wrap: anywhere;
+  }
+
+  /* "As needed" is a chip, not a shelf: it qualifies a current medication
+     rather than moving it, so it rides the row face where the eye already is. */
+  .prn {
+    flex: none;
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--muted);
+    font-size: var(--text-xs);
+    white-space: nowrap;
+  }
+
+  /* Off-screen but in the accessibility tree — see `headingHidden`. */
+  .section-head.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
   }
 
   .detail {

@@ -308,7 +308,7 @@ test('doctor share carries verified curation: current-only by default, past on o
   await metformin.getByTestId('summary-row-trigger').click()
   await metformin.getByTestId('summary-row-curate').click()
   await ownerPage.getByTestId('action-name-input').fill('BP + sugar combo')
-  await ownerPage.getByTestId('action-save-name').click()
+  await ownerPage.getByTestId('action-save').click()
   await expect(currentMeds(ownerPage).filter({ hasText: 'BP + sugar combo' })).toHaveCount(1)
 
   // Connect the relay now (after curating) and open the share screen.
@@ -402,6 +402,132 @@ test('doctor share carries the imported source document, openable by a cold reci
 
   await doctorPage.context().close()
 })
+
+// PR3 of the medications arc: the owner's `regimen:` curation is the third
+// namespace to cross the vault boundary, and the only one whose value is prose
+// about a drug. This walks the whole chain in the real UI — curate three meds,
+// preview, share, open cold — and pins the two things that can go wrong
+// silently: the sheet must actually LOAD `regimen:` records (narrowing them for
+// the bundle is not fetching them), and a past med excluded from the scope must
+// leave no regimen behind to hint that it exists.
+test('doctor share carries the curated regimen, and never a past med’s', async ({ browser }) => {
+  const ownerContext = await browser.newContext()
+  const ownerPage = await ownerContext.newPage()
+  await onboardViaUI(ownerPage)
+
+  await ownerPage.evaluate(
+    async ({ rxnorm }) => {
+      const { logEvent } = await import('/src/lib/events.ts')
+      await logEvent([
+        { kind: 'medication_statement', code: { system: rxnorm, code: '6809', display: 'Metformin' }, effective_at: '2024-02-01T00:00:00+00:00', value: null },
+        { kind: 'medication_statement', code: { system: rxnorm, code: '5640', display: 'Ibuprofen' }, effective_at: '2024-03-01T00:00:00+00:00', value: null },
+        { kind: 'medication_statement', code: { system: rxnorm, code: '11289', display: 'Warfarin' }, effective_at: '2024-04-01T00:00:00+00:00', value: null },
+      ])
+    },
+    { rxnorm: RXNORM },
+  )
+
+  await ownerPage.reload()
+  await unlock(ownerPage)
+  await openSummary(ownerPage)
+
+  // A scheduled med: schedule + prescriber make the row's sub-line, the rest
+  // fill its panel.
+  await openRowSheet(ownerPage, currentMeds(ownerPage).filter({ hasText: 'Metformin' }))
+  await ownerPage.getByTestId('action-dose-input').fill('500 mg')
+  await ownerPage.getByTestId('action-schedule-input').fill('twice a day')
+  await ownerPage.getByTestId('action-route-select').selectOption('mouth')
+  await ownerPage.getByTestId('action-prescriber-input').fill('Dr. Ada Lovelace')
+  await ownerPage.getByTestId('action-instructions-input').fill('with food')
+  await ownerPage.getByTestId('action-save').click()
+  await expect(ownerPage.getByTestId('row-action-sheet')).toHaveCount(0)
+
+  // A PRN med: as-needed is a chip and its own sub-group, not a past med.
+  await openRowSheet(ownerPage, currentMeds(ownerPage).filter({ hasText: 'Ibuprofen' }))
+  await ownerPage.getByTestId('action-schedule-input').fill('up to 3 times a day')
+  await ownerPage.getByTestId('action-as-needed').check()
+  await ownerPage.getByTestId('action-save').click()
+  await expect(
+    ownerPage.getByTestId('summary-section-as-needed').getByTestId('summary-row').filter({ hasText: 'Ibuprofen' }),
+  ).toHaveCount(1)
+
+  // A med the owner then marks past. Its regimen names a prescriber that must
+  // never appear anywhere in a default (current-only) share.
+  await openRowSheet(ownerPage, currentMeds(ownerPage).filter({ hasText: 'Warfarin' }))
+  await ownerPage.getByTestId('action-schedule-input').fill('5 mg every evening')
+  await ownerPage.getByTestId('action-prescriber-input').fill('Dr. Pastonly')
+  await ownerPage.getByTestId('action-save').click()
+  await openRowSheet(ownerPage, currentMeds(ownerPage).filter({ hasText: 'Warfarin' }))
+  await ownerPage.getByTestId('action-toggle-status').click()
+  await expect(currentMeds(ownerPage).filter({ hasText: 'Warfarin' })).toHaveCount(0)
+
+  await connectRelayViaUI(ownerPage)
+  await ownerPage.evaluate(() => (window.location.hash = '#/share/doctor'))
+  await ownerPage.getByTestId('new-doctor-link').click()
+
+  // The owner's preview is the load-bearing check on the sheet's curation READ:
+  // it renders from `curationForBundle(scopedEvents, curationRecords)`, so if
+  // the sheet never fetched `regimen:` records this sub-line is simply absent.
+  await ownerPage.getByTestId('share-preview-toggle').click()
+  const preview = ownerPage.getByTestId('share-preview')
+  await expect(preview.getByTestId('summary-regimen-subline').first()).toBeVisible()
+  const previewMeds = (await preview.getByTestId('summary-section-medications').innerText()).trim()
+  const previewPrn = (await preview.getByTestId('summary-section-as-needed').innerText()).trim()
+  expect(previewMeds).toContain('twice a day · Dr. Ada Lovelace')
+  expect(previewPrn).toContain('As needed')
+  await expect(preview.getByTestId('clinician-summary')).not.toContainText('Dr. Pastonly')
+
+  await ownerPage.getByTestId('share-create').click()
+  await expect(ownerPage.getByTestId('share-link')).toBeVisible()
+  const link = (await ownerPage.getByTestId('share-link').innerText()).trim()
+
+  const doc = await openAsRecipient(browser, link)
+  const meds = doc.getByTestId('summary-section-medications')
+  const prn = doc.getByTestId('summary-section-as-needed')
+
+  // The sub-line and the PRN sub-group + chip, rendered from the bundle's
+  // verified curation by the same read-only component the owner previewed.
+  await expect(meds.getByTestId('summary-regimen-subline')).toHaveText('twice a day · Dr. Ada Lovelace')
+  await expect(prn.getByTestId('summary-row').filter({ hasText: 'Ibuprofen' })).toHaveCount(1)
+  await expect(prn.getByTestId('summary-prn-chip')).toBeVisible()
+
+  // The panel fields the sub-line has no room for.
+  const metRow = meds.getByTestId('summary-row').filter({ hasText: 'Metformin' })
+  await metRow.getByTestId('summary-row-trigger').click()
+  await expect(metRow.getByTestId('summary-regimen-route')).toContainText('By mouth')
+  await expect(metRow.getByTestId('summary-regimen-prescriber')).toContainText('Dr. Ada Lovelace')
+  await expect(metRow.getByTestId('summary-regimen-instructions')).toContainText('with food')
+
+  // No trace of the past med: not the drug, not its schedule, not its
+  // prescriber. A regimen carried for an out-of-scope concept would announce a
+  // medication the owner chose not to share.
+  const whole = doc.getByTestId('clinician-summary')
+  await expect(whole).not.toContainText('Warfarin')
+  await expect(whole).not.toContainText('Dr. Pastonly')
+  await expect(whole).not.toContainText('5 mg every evening')
+  // Everything that did cross verified — no dropped-curation warning.
+  await expect(doc.getByTestId('share-curation-warning')).toHaveCount(0)
+
+  // What the owner previewed is what the recipient got, character for
+  // character, for the two med groups the regimen shows up in.
+  expect((await meds.innerText()).trim()).toBe(previewMeds)
+  expect((await prn.innerText()).trim()).toBe(previewPrn)
+
+  await doc.context().close()
+  await ownerContext.close()
+})
+
+/** Open one summary row's curation sheet. The curate button lives in the row's
+ * expand panel, and a row may already be expanded from an earlier visit, so key
+ * off the trigger's `aria-expanded` rather than clicking it blind — an
+ * unconditional click on an open row would collapse it. */
+async function openRowSheet(page: Page, row: ReturnType<Page['getByTestId']>): Promise<void> {
+  const trigger = row.getByTestId('summary-row-trigger')
+  if ((await trigger.getAttribute('aria-expanded')) !== 'true') await trigger.click()
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true')
+  await row.getByTestId('summary-row-curate').click()
+  await expect(page.getByTestId('row-action-sheet')).toBeVisible()
+}
 
 async function unlock(page: Page): Promise<void> {
   await page.getByTestId('unlock-passphrase').fill(PASSPHRASE)

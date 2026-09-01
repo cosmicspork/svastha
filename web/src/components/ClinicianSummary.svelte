@@ -5,9 +5,9 @@
     allCurationByPrefix,
     allStatuses,
     allNames,
-    setStatus,
-    setName,
+    allRegimens,
     type ConceptStatus,
+    type Regimen,
   } from '../lib/curation'
   import { buildSummary, type SummaryRow, type WindowedSection } from '../lib/summary'
   import { loadDictionaryIndex, dictionaryStatus } from '../lib/dictionary'
@@ -15,23 +15,26 @@
   import { focusedEventId } from '../lib/spine-focus'
   import { navigate } from '../lib/router.svelte'
   import SummarySection from './SummarySection.svelte'
-  import Sheet from './Sheet.svelte'
+  import RowActionSheet from './RowActionSheet.svelte'
 
   // Same contract as Spine.svelte: `readonly` (the person screen, or a doctor
   // share opened cold) supplies its own already-loaded events and skips the
   // own-vault fetch and all local curation reads. A read-only view never reads
   // the local `cur-*` store (curation is owner-only in v1 — see
   // docs/ARCHITECTURE.md, "Curation overlay"), but a doctor-share recipient MAY
-  // be handed the owner's `status:`/`name:` overlay for the shared concepts,
-  // already verified, via `status`/`names` — so it renders the same Current/Past
-  // and Active/Resolved grouping and name overrides the owner sees, just inert
-  // (no action sheet). Person-view (no maps) shows a single current/active
-  // group, as before.
+  // be handed the owner's `status:`/`name:`/`regimen:` overlay for the shared
+  // concepts, already verified, via `status`/`names`/`regimen` — so it renders
+  // the same Current/Past and Active/Resolved grouping, name overrides, and
+  // regimen detail the owner sees, just inert (no action sheet). Person-view
+  // (no maps) shows a single current/active group, as before. A grant-based
+  // person view still passes none of them: only a doctor-share bundle carries
+  // curation out of the vault.
   let {
     events: providedEvents,
     readonly = false,
     status: providedStatus,
     names: providedNames,
+    regimen: providedRegimen,
     heading,
     timelineHref,
   }: {
@@ -39,6 +42,10 @@
     readonly?: boolean
     status?: Map<string, ConceptStatus>
     names?: Map<string, string>
+    /** The verified `regimen:` overlay a doctor-share bundle carried, in
+     * read-only mode. Drives the same sub-line, "As needed" chip/sub-group and
+     * panel rows the owner sees — the recipient just cannot edit them. */
+    regimen?: Map<string, Regimen>
     /** When set, the summary owns its page title and renders it inline with the
      * Print action (the own Summary page). Left unset where the host already
      * has an h1 (the shared-person screen), so the Print action sits alone. */
@@ -54,6 +61,7 @@
   let hiddenIds = $state<Set<string>>(new Set())
   let statusMap = $state<Map<string, ConceptStatus>>(new Map())
   let nameMap = $state<Map<string, string>>(new Map())
+  let regimenMap = $state<Map<string, Regimen>>(new Map())
   let loaded = $state(false)
 
   const events = $derived(readonly ? (providedEvents ?? []) : ownEvents)
@@ -62,6 +70,7 @@
   // loaded curation.
   const effectiveStatus = $derived(readonly ? (providedStatus ?? new Map()) : statusMap)
   const effectiveNames = $derived(readonly ? (providedNames ?? new Map()) : nameMap)
+  const effectiveRegimen = $derived(readonly ? (providedRegimen ?? new Map()) : regimenMap)
 
   // The offline code dictionary (see lib/dictionary.ts): empty unless enabled.
   // Hydrated once and re-hydrated when the Settings toggle bumps the version.
@@ -86,6 +95,7 @@
       dictionary,
       status: effectiveStatus,
       names: effectiveNames,
+      regimen: effectiveRegimen,
     }),
   )
 
@@ -113,6 +123,12 @@
   // render.
   const currentMeds = $derived(keep(summary.medications.filter((r) => r.status === 'active')))
   const pastMeds = $derived(keep(summary.medications.filter((r) => r.status === 'inactive')))
+  // "As needed" is a sub-group of *current*, not a third status: a PRN med is
+  // one you are still on. Splitting it out keeps the scheduled list — the one a
+  // clinician reads as "what they take every day" — from being padded by meds
+  // taken twice a year.
+  const scheduledMeds = $derived(currentMeds.filter((r) => r.regimen?.as_needed !== true))
+  const prnMeds = $derived(currentMeds.filter((r) => r.regimen?.as_needed === true))
   const activeProblems = $derived(keep(summary.problems.filter((r) => r.status === 'active')))
   const resolvedProblems = $derived(keep(summary.problems.filter((r) => r.status === 'inactive')))
   const allergies = $derived(keep(summary.allergies))
@@ -186,10 +202,8 @@
   // (meds vs. problems drives the status wording). Null when closed.
   type Section = 'med' | 'problem'
   let action = $state<{ row: SummaryRow; section: Section } | null>(null)
-  let nameField = $state('')
 
   function openAction(row: SummaryRow, section: Section) {
-    nameField = nameMap.get(row.key) ?? ''
     action = { row, section }
   }
 
@@ -197,24 +211,11 @@
     action = null
   }
 
-  /** Re-read the status/name overlay after a write so the derived summary
-   * re-splits and re-labels — the same way the dictionary effect re-hydrates. */
+  /** Re-read the status/name/regimen overlay after a write so the derived
+   * summary re-splits, re-labels, and re-doses — the same way the dictionary
+   * effect re-hydrates. */
   async function reloadCuration() {
-    ;[statusMap, nameMap] = await Promise.all([allStatuses(), allNames()])
-  }
-
-  async function toggleStatus(row: SummaryRow) {
-    await setStatus(row.key, row.status === 'active' ? 'inactive' : 'active')
-    await reloadCuration()
-    closeAction()
-  }
-
-  async function saveName(row: SummaryRow) {
-    // An empty field clears the override (stored as an empty display, not a
-    // delete — see curation.ts's `setName`), falling back to the resolved name.
-    await setName(row.key, nameField)
-    await reloadCuration()
-    closeAction()
+    ;[statusMap, nameMap, regimenMap] = await Promise.all([allStatuses(), allNames(), allRegimens()])
   }
 
   /** date-part only, parsed as local midnight to avoid a timezone shift on a
@@ -334,9 +335,9 @@
     <div class="split-group">
       <SummarySection
         title="Medications"
-        rows={currentMeds}
+        rows={scheduledMeds}
         hueClass="cat-med"
-        alwaysShow={needle === ''}
+        alwaysShow={needle === '' && prnMeds.length === 0}
         emptyText="None recorded"
         dictionaryEnabled={$dictionaryStatus.enabled}
           {coveredSystems}
@@ -346,6 +347,21 @@
         {onviewtimeline}
         onrowtap={readonly ? undefined : (row) => openAction(row, 'med')}
       />
+      {#if prnMeds.length > 0}
+        <SummarySection
+          title="As needed"
+          rows={prnMeds}
+          hueClass="cat-med"
+          heading="h3"
+          dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
+          curateLabel="Mark past or rename"
+          detailLabel="Dose"
+          {readonly}
+          {onviewtimeline}
+          onrowtap={readonly ? undefined : (row) => openAction(row, 'med')}
+        />
+      {/if}
       {#if pastMeds.length > 0}
         <button
           type="button"
@@ -372,6 +388,18 @@
             onrowtap={readonly ? undefined : (row) => openAction(row, 'med')}
           />
         {/if}
+      {/if}
+      <!-- Owner-only: the medications page reads this device's curation, which
+           a recipient's copy of this component has no route to. -->
+      {#if !readonly}
+        <button
+          type="button"
+          class="ghost all-meds"
+          onclick={() => navigate('#/medications')}
+          data-testid="all-medications-link"
+        >
+          All medications ›
+        </button>
       {/if}
     </div>
 
@@ -557,34 +585,14 @@
   </div>
 
   {#if action && !readonly}
-    {@const row = action.row}
-    {@const isMed = action.section === 'med'}
-    <Sheet onclose={closeAction}>
-      <div class="action-sheet" data-testid="row-action-sheet">
-        <h2 class="action-title">{row.label}</h2>
-
-        <button type="button" class="tonal action" onclick={() => toggleStatus(row)} data-testid="action-toggle-status">
-          {#if row.status === 'active'}
-            {isMed ? 'Mark as past' : 'Mark as resolved'}
-          {:else}
-            {isMed ? 'Mark as current' : 'Mark as active'}
-          {/if}
-        </button>
-
-        <label class="name-field">
-          <span class="name-label">Edit name</span>
-          <input type="text" bind:value={nameField} placeholder={row.label} data-testid="action-name-input" />
-          <span class="name-hint muted">Clear the field to remove a custom name.</span>
-        </label>
-
-        <div class="action-buttons">
-          <button type="button" class="ghost" onclick={closeAction} data-testid="action-cancel">Cancel</button>
-          <button type="button" class="primary" onclick={() => saveName(row)} data-testid="action-save-name">
-            Save name
-          </button>
-        </div>
-      </div>
-    </Sheet>
+    <RowActionSheet
+      row={action.row}
+      section={action.section}
+      name={nameMap.get(action.row.key) ?? ''}
+      regimen={regimenMap.get(action.row.key)}
+      onclose={closeAction}
+      onsaved={reloadCuration}
+    />
   {/if}
 {/if}
 
@@ -655,41 +663,11 @@
     margin-bottom: var(--space-2);
   }
 
-  .action-sheet {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-4);
-  }
-
-  .action-title {
-    font-family: var(--font-display);
-    font-size: var(--text-lg);
-    margin: 0;
-    overflow-wrap: anywhere;
-  }
-
-  .action.tonal {
-    width: 100%;
-  }
-
-  .name-field {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-  }
-
-  .name-label {
+  .all-meds {
+    min-height: 36px;
+    padding: var(--space-1) var(--space-2);
     font-size: var(--text-sm);
-  }
-
-  .name-hint {
-    font-size: var(--text-xs);
-  }
-
-  .action-buttons {
-    display: flex;
-    justify-content: flex-end;
-    gap: var(--space-2);
+    color: var(--action);
   }
 
   .coverage {
@@ -760,7 +738,13 @@
      unbroken block, and none of the app chrome (nav, the log FAB, the view
      toggle, the print button itself, tag chips). The :global rules reach the
      chrome that lives outside this component; they only apply while the summary
-     view — and thus this component — is mounted. */
+     view — and thus this component — is mounted.
+
+     TWIN: routes/Medications.svelte carries a near-identical block, and the two
+     must change together. Svelte styles are component-scoped, so a shared
+     stylesheet would have to give up the `.summary`-scoped :global rules that
+     keep these from leaking onto every other screen. Duplication is the cheaper
+     honesty. */
   @media print {
     :global(body) {
       background: #fff;
@@ -777,7 +761,8 @@
     }
     .print-btn,
     .filter-row,
-    .collapse-toggle {
+    .collapse-toggle,
+    .all-meds {
       display: none;
     }
     /* Codes live in the expanded panel on screen, where they're one tap away.

@@ -48,6 +48,9 @@ harvest a PR's "## Deferred" notes into the list.
   canonical URL, so stored events resolve labels/dictionary only because the
   PWA now folds known OIDs at render time (`codes.ts` `canonicalSystem`). Doing
   it once at import would make stored events self-describing.
+- Seed `regimen:` from spreadsheet/med-list import — schedule, route,
+  prescriber, and course dates are typed by hand today, one medication at a
+  time
 
 ## Web
 
@@ -126,6 +129,9 @@ harvest a PR's "## Deferred" notes into the list.
   retries on backoff indefinitely)
 - Within-pass `sent_at` ordering for `pause_ocr`/`resume_ocr` like
   `set_answer_scope` (a reversed pair leaves reading on)
+- Node ingests `regimen:` curation for RAG — `ingest_curation` allowlists only
+  `status:`/`name:` today, so a med's schedule, route, and instructions are
+  invisible to an answer
 
 ## Intentionally not doing
 

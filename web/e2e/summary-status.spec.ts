@@ -97,7 +97,7 @@ test('curate the clinician summary: mark a med past (persistent) and rename a co
 
   await openCurate(currentMeds(page).filter({ hasText: 'Metformin' }))
   await page.getByTestId('action-name-input').fill('BP + sugar combo')
-  await page.getByTestId('action-save-name').click()
+  await page.getByTestId('action-save').click()
 
   const renamed = currentMeds(page).filter({ hasText: 'BP + sugar combo' })
   await expect(renamed).toHaveCount(1)
@@ -114,4 +114,99 @@ test('curate the clinician summary: mark a med past (persistent) and rename a co
   await unlock(page)
   await openSummary(page)
   await expect(currentMeds(page).filter({ hasText: 'BP + sugar combo' })).toHaveCount(1)
+})
+
+/** The `regimen:` curation keys currently in the vault — the diff-before-write
+ * guard is only observable at this layer. */
+async function regimenKeys(page: Page): Promise<string[]> {
+  return page.evaluate(async () => {
+    const { allCurationByPrefix } = await import('/src/lib/curation.ts')
+    return (await allCurationByPrefix('regimen:')).map((r: { key: string }) => r.key)
+  })
+}
+
+test('edit a medication regimen from the action sheet', async ({ page }) => {
+  await onboardViaUI(page)
+  await seedCodedMeds(page)
+  await page.reload()
+  await unlock(page)
+  await openSummary(page)
+
+  // A name-only save must not mint a regimen record: the sheet writes each
+  // namespace only when its own value changed. Without that guard every rename
+  // would push a fresh mutable `cur-` blob for a regimen nobody edited.
+  await openCurate(currentMeds(page).filter({ hasText: 'Metformin' }))
+  await page.getByTestId('action-name-input').fill('Metformin XR')
+  await page.getByTestId('action-save').click()
+  await expect(currentMeds(page).filter({ hasText: 'Metformin XR' })).toHaveCount(1)
+  expect(await regimenKeys(page)).toEqual([])
+
+  // --- fill a regimen ---
+  // Either current group: ticking "as needed" moves the row from Medications to
+  // the "As needed" sub-group beside it — same current status, different
+  // heading — and clearing the field moves it back.
+  const lisinopril = () =>
+    page
+      .getByTestId('summary-section-medications')
+      .or(page.getByTestId('summary-section-as-needed'))
+      .getByTestId('summary-row')
+      .filter({ hasText: 'Lisinopril' })
+  await openCurate(lisinopril())
+  await page.getByTestId('action-dose-input').fill('2 tablets')
+  await page.getByTestId('action-schedule-input').fill('Every morning')
+  await page.getByTestId('action-route-select').selectOption('mouth')
+  await page.getByTestId('action-as-needed').check()
+  await page.getByTestId('action-prescriber-input').fill('Dr. Rivera')
+  await page.getByTestId('action-started-input').fill('2024-03-01')
+  await page.getByTestId('action-stopped-input').fill('2024-09-01')
+  await page.getByTestId('action-instructions-input').fill('Take with food')
+  await page.getByTestId('action-save').click()
+
+  expect(await regimenKeys(page)).toHaveLength(1)
+
+  // The curated dose leads the row (it outranks a recorded dose quantity), and
+  // the panel — still open from openCurate — carries the rest.
+  await expect(lisinopril()).toContainText('2 tablets')
+  await expect(lisinopril().getByTestId('summary-regimen-schedule')).toContainText('Every morning')
+  await expect(lisinopril().getByTestId('summary-regimen-route')).toContainText('By mouth')
+  await expect(lisinopril().getByTestId('summary-regimen-as-needed')).toContainText('Yes')
+  await expect(lisinopril().getByTestId('summary-regimen-prescriber')).toContainText('Dr. Rivera')
+  await expect(lisinopril().getByTestId('summary-regimen-started')).toContainText('2024')
+  await expect(lisinopril().getByTestId('summary-regimen-stopped')).toContainText('2024')
+  await expect(lisinopril().getByTestId('summary-regimen-instructions')).toContainText('Take with food')
+
+  // --- persists across a reload, and the sheet reopens seeded ---
+  await page.reload()
+  await unlock(page)
+  await openSummary(page)
+  await openCurate(lisinopril())
+  await expect(page.getByTestId('action-dose-input')).toHaveValue('2 tablets')
+  await expect(page.getByTestId('action-route-select')).toHaveValue('mouth')
+  await expect(page.getByTestId('action-as-needed')).toBeChecked()
+  await expect(page.getByTestId('action-started-input')).toHaveValue('2024-03-01')
+
+  // Saving an untouched sheet is not an edit either.
+  const before = await regimenKeys(page)
+  await page.getByTestId('action-save').click()
+  expect(await regimenKeys(page)).toEqual(before)
+
+  // --- clearing every field removes the panel rows ---
+  await openCurate(lisinopril())
+  for (const field of [
+    'action-dose-input',
+    'action-schedule-input',
+    'action-prescriber-input',
+    'action-started-input',
+    'action-stopped-input',
+    'action-instructions-input',
+  ]) {
+    await page.getByTestId(field).fill('')
+  }
+  await page.getByTestId('action-route-select').selectOption('')
+  await page.getByTestId('action-as-needed').uncheck()
+  await page.getByTestId('action-save').click()
+
+  await expect(lisinopril().getByTestId('summary-regimen-schedule')).toHaveCount(0)
+  await expect(lisinopril().getByTestId('summary-regimen-route')).toHaveCount(0)
+  await expect(lisinopril().getByTestId('summary-regimen-instructions')).toHaveCount(0)
 })

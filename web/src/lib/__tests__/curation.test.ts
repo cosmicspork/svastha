@@ -15,6 +15,11 @@ import {
   getName,
   allStatuses,
   allNames,
+  getRegimen,
+  allRegimens,
+  normalizeRegimen,
+  regimenMapFrom,
+  regimenChanged,
   type CurationRecord,
   type SignedCurationRecord,
   type CurationSigner,
@@ -405,5 +410,193 @@ describe('migrateFavoritesToCuration', () => {
   it('is a no-op with no legacy favorites', async () => {
     await migrateFavoritesToCuration(signAs(AUTHOR_A))
     expect(await allCurationByPrefix('fav:')).toHaveLength(0)
+  })
+})
+
+// Same seeding constraint as the status/name helpers above: `setRegimen` goes
+// through `setCuration`, whose `session.svelte` import needs the Svelte
+// runtime, so the store is seeded with `writeCuration` and a stub signer. The
+// write wrapper is covered end-to-end by summary-status.spec.ts.
+describe('regimen read helpers', () => {
+  const CONCEPT = 'medication_statement|http://www.nlm.nih.gov/research/umls/rxnorm|29046'
+  const sign = signAs(AUTHOR_A)
+
+  it('getRegimen defaults to undefined, round-trips a value and trims its text', async () => {
+    expect(await getRegimen(CONCEPT)).toBeUndefined()
+    await writeCuration(
+      `regimen:${CONCEPT}`,
+      {
+        dose: '  10 mg  ',
+        schedule: ' Every morning ',
+        route: 'mouth',
+        as_needed: true,
+        prescriber: '  Dr. Rivera ',
+        started: '2024-01-01',
+        stopped: '2024-06-30',
+        instructions: ' Take with food ',
+      },
+      sign,
+    )
+    expect(await getRegimen(CONCEPT)).toEqual({
+      dose: '10 mg',
+      schedule: 'Every morning',
+      route: 'mouth',
+      as_needed: true,
+      prescriber: 'Dr. Rivera',
+      started: '2024-01-01',
+      stopped: '2024-06-30',
+      instructions: 'Take with food',
+    })
+  })
+
+  it('reads a cleared regimen (the empty value, not a delete) as no regimen', async () => {
+    await writeCuration(`regimen:${CONCEPT}`, { dose: '10 mg' }, sign)
+    await writeCuration(`regimen:${CONCEPT}`, {}, sign)
+    expect(await getRegimen(CONCEPT)).toBeUndefined()
+    // The record itself survives — the sync model has no delete.
+    expect(await getCuration(`regimen:${CONCEPT}`)).toBeDefined()
+  })
+
+  it('allRegimens keys on the bare concept and drops cleared records', async () => {
+    await writeCuration(`regimen:${CONCEPT}`, { schedule: 'Nightly' }, sign)
+    await writeCuration('regimen:medication_statement||aspirin', {}, sign)
+    expect(await allRegimens()).toEqual(new Map([[CONCEPT, { schedule: 'Nightly' }]]))
+  })
+})
+
+// Adversarial fixtures: every input here is chosen to get PAST the shape check,
+// not to satisfy it. A `regimen:` value can arrive from a second device running
+// a newer build, and (from PR3 on) from a doctor-share bundle, so the guard has
+// to hold against values no version of this app would ever write.
+describe('normalizeRegimen (tolerant shape-check)', () => {
+  it('rejects non-object values outright', () => {
+    for (const value of ['mouth', 42, true, null, undefined, ['mouth'], [{ dose: '10 mg' }]]) {
+      expect(normalizeRegimen(value)).toBeUndefined()
+    }
+  })
+
+  it('drops a route outside the closed set', () => {
+    expect(normalizeRegimen({ route: 'intravenous' })).toBeUndefined()
+    expect(normalizeRegimen({ route: 'MOUTH' })).toBeUndefined()
+    expect(normalizeRegimen({ route: ['mouth'] })).toBeUndefined()
+    // A bad route does not poison the fields around it.
+    expect(normalizeRegimen({ route: 'intravenous', dose: '10 mg' })).toEqual({ dose: '10 mg' })
+  })
+
+  it('accepts as_needed only when it is literally true', () => {
+    for (const as_needed of ['yes', 'true', 1, {}, []]) {
+      expect(normalizeRegimen({ as_needed })).toBeUndefined()
+    }
+    expect(normalizeRegimen({ as_needed: false })).toBeUndefined()
+    expect(normalizeRegimen({ as_needed: true })).toEqual({ as_needed: true })
+  })
+
+  it('drops dates that are not a real ISO YYYY-MM-DD calendar date', () => {
+    for (const started of [
+      '2026-13-99',
+      '2026-02-31', // shape-valid, but no such day
+      '2026-1-1',
+      '01/02/2026',
+      '2026-01-01T00:00:00Z',
+      20260101,
+    ]) {
+      expect(normalizeRegimen({ started })).toBeUndefined()
+    }
+    expect(normalizeRegimen({ started: '2024-02-29' })).toEqual({ started: '2024-02-29' })
+    expect(normalizeRegimen({ stopped: '2026-12-31' })).toEqual({ stopped: '2026-12-31' })
+  })
+
+  it('drops wrong-typed text fields and whitespace-only ones', () => {
+    expect(normalizeRegimen({ dose: 10, schedule: { text: 'daily' }, prescriber: '   ' })).toBeUndefined()
+  })
+
+  it('ignores unknown fields entirely (a newer build\'s extra key)', () => {
+    expect(normalizeRegimen({ dose: '10 mg', frequency_hz: 3, constructor: 'nope' })).toEqual({
+      dose: '10 mg',
+    })
+  })
+
+  it('returns undefined for the all-empty value — the clearing convention', () => {
+    expect(normalizeRegimen({})).toBeUndefined()
+    expect(normalizeRegimen({ dose: '', schedule: '', route: '', as_needed: false })).toBeUndefined()
+  })
+})
+
+describe('regimenMapFrom', () => {
+  const A = 'medication_statement|rxnorm|1'
+  const B = 'medication_statement|rxnorm|2'
+
+  function rec(key: string, value: unknown): CurationRecord {
+    return { key, value, updated_at: 1, author: AUTHOR_A }
+  }
+
+  it('strips the prefix, skips other namespaces, and drops empty/garbage values', () => {
+    const map = regimenMapFrom([
+      rec(`regimen:${A}`, { schedule: 'Nightly', route: 'mouth' }),
+      rec(`regimen:${B}`, {}),
+      rec('regimen:medication_statement|rxnorm|3', 'not an object'),
+      rec(`status:${A}`, { status: 'inactive' }),
+      rec(`name:${A}`, { display: 'Custom' }),
+      rec('tag:evt-1', { tags: ['x'] }),
+    ])
+    expect(map).toEqual(new Map([[A, { schedule: 'Nightly', route: 'mouth' }]]))
+  })
+})
+
+describe('regimenChanged (the sheet\'s diff-before-write guard)', () => {
+  it('sees no change when only whitespace, key order, or a dropped field differs', () => {
+    expect(regimenChanged(undefined, undefined)).toBe(false)
+    expect(regimenChanged(undefined, {})).toBe(false)
+    expect(regimenChanged({ dose: '10 mg' }, { dose: '  10 mg  ' })).toBe(false)
+    expect(
+      regimenChanged({ dose: '10 mg', schedule: 'Nightly' }, { schedule: 'Nightly', dose: '10 mg' }),
+    ).toBe(false)
+    // A field the reader would drop anyway is not a change.
+    expect(regimenChanged({ dose: '10 mg' }, { dose: '10 mg', prescriber: '   ' })).toBe(false)
+    expect(regimenChanged({ dose: '10 mg' }, { dose: '10 mg', as_needed: false })).toBe(false)
+  })
+
+  it('sees a change on any real edit, including a clear', () => {
+    expect(regimenChanged(undefined, { dose: '10 mg' })).toBe(true)
+    expect(regimenChanged({ dose: '10 mg' }, undefined)).toBe(true)
+    expect(regimenChanged({ dose: '10 mg' }, {})).toBe(true)
+    expect(regimenChanged({ dose: '10 mg' }, { dose: '20 mg' })).toBe(true)
+    expect(regimenChanged({ dose: '10 mg' }, { dose: '10 mg', as_needed: true })).toBe(true)
+    expect(regimenChanged({ route: 'mouth' }, { route: 'nose' })).toBe(true)
+  })
+})
+
+// The `cur-` codec is namespace-agnostic by design, which is exactly what lets
+// a new namespace exist with no change to `core` or the sync layer. Pinned here
+// against a `regimen:` key so that claim has a test behind it.
+describe('curationCodec with a regimen: key', () => {
+  async function blobIdFor(key: string): Promise<string> {
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key))
+    const hex = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('')
+    return `cur-${hex}`
+  }
+
+  const KEY = 'regimen:medication_statement|rxnorm|29046'
+
+  it('adopts a verified regimen record and lets the newest write win (LWW)', async () => {
+    const blobId = await blobIdFor(KEY)
+    const older = signed({ key: KEY, value: { dose: '10 mg' }, updated_at: 500 })
+    const newer = signed({ key: KEY, value: { dose: '20 mg' }, updated_at: 900 })
+
+    await curationCodec.remoteApply(blobId, new TextEncoder().encode(JSON.stringify(older)))
+    await curationCodec.remoteApply(blobId, new TextEncoder().encode(JSON.stringify(newer)))
+    expect(await getCuration(KEY)).toEqual(newer)
+
+    // An older remote loses and does not overwrite the adopted value.
+    await curationCodec.remoteApply(blobId, new TextEncoder().encode(JSON.stringify(older)))
+    expect(await getCuration(KEY)).toEqual(newer)
+  })
+
+  it('DROPS a regimen record whose signature does not verify', async () => {
+    mockVerify.mockReturnValue(false)
+    const blobId = await blobIdFor(KEY)
+    const tampered = signed({ key: KEY, value: { dose: '999 mg' }, updated_at: 500 })
+    await curationCodec.remoteApply(blobId, new TextEncoder().encode(JSON.stringify(tampered)))
+    expect(await getCuration(KEY)).toBeUndefined()
   })
 })

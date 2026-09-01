@@ -305,3 +305,74 @@ test('summary: an installed dictionary is not reported as missing on a cold star
   await expect(hintFor(page, '1719647')).not.toContainText('download the code dictionary')
   await expect(hintFor(page, '1719647')).toContainText('may name it after an update')
 })
+
+/** Curate a medication concept's regimen straight through the signing path;
+ * the sheet's own field-by-field behavior is summary-status.spec.ts's job. */
+async function setRegimenFor(
+  page: Page,
+  code: string,
+  regimen: { route?: string; as_needed?: boolean; schedule?: string; prescriber?: string },
+): Promise<void> {
+  await page.evaluate(
+    async ({ rxnorm, code, regimen }) => {
+      const { setRegimen } = await import('/src/lib/curation.ts')
+      await setRegimen(`medication_statement|${rxnorm}|${code}`, regimen)
+    },
+    { rxnorm: RXNORM, code, regimen },
+  )
+}
+
+test('summary: a regimen adds a sub-line, and as-needed meds split into their own sub-group', async ({
+  page,
+}) => {
+  await onboardViaUI(page)
+  await seed(page)
+  // Zolpidem is as-needed; Lisinopril is scheduled. Both are current.
+  await setRegimenFor(page, '39786', { as_needed: true, schedule: 'At bedtime' })
+  await setRegimenFor(page, '29046', { schedule: 'Every morning', prescriber: 'Dr. Rivera' })
+  await page.reload()
+  await unlock(page)
+  await openSummary(page)
+
+  // The scheduled group loses the PRN med; "As needed" is a sub-group of
+  // current, so nothing has moved to Past.
+  await expect(meds(page).getByTestId('summary-label')).toHaveText(['amoxicillin', 'Lisinopril'])
+  const prn = page.getByTestId('summary-section-as-needed')
+  await expect(prn.getByTestId('summary-label')).toHaveText(['Zolpidem'])
+  await expect(prn.getByTestId('summary-row').getByTestId('summary-prn-chip')).toContainText(
+    'As needed',
+  )
+  await expect(page.getByTestId('meds-past-toggle')).toHaveCount(0)
+
+  // The sub-line is schedule and prescriber, joined — and absent where neither
+  // was recorded rather than rendered blank.
+  await expect(
+    meds(page).filter({ hasText: 'Lisinopril' }).getByTestId('summary-regimen-subline'),
+  ).toHaveText('Every morning · Dr. Rivera')
+  await expect(
+    meds(page).filter({ hasText: 'amoxicillin' }).getByTestId('summary-regimen-subline'),
+  ).toHaveCount(0)
+})
+
+test('summary: "All medications" leads to the medications page', async ({ page }) => {
+  await onboardViaUI(page)
+  await seed(page)
+  await page.reload()
+  await unlock(page)
+  await openSummary(page)
+
+  await page.getByTestId('all-medications-link').click()
+  await expect(page).toHaveURL(/#\/medications$/)
+  await expect(page.getByTestId('medications-page')).toBeVisible()
+})
+
+test('home: the medications glance card opens the medications page', async ({ page }) => {
+  await onboardViaUI(page)
+  await seed(page)
+  await page.reload()
+  await unlock(page)
+
+  await page.getByTestId('glance-meds').click()
+  await expect(page).toHaveURL(/#\/medications$/)
+  await expect(page.getByTestId('medications-page')).toBeVisible()
+})
