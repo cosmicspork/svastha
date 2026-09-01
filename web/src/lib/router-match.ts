@@ -14,6 +14,7 @@ const KNOWN_PATTERNS = [
   '/',
   '/timeline',
   '/summary',
+  '/medications',
   '/search',
   '/log/:kind',
   '/onboard',

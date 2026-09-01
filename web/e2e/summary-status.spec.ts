@@ -142,7 +142,15 @@ test('edit a medication regimen from the action sheet', async ({ page }) => {
   expect(await regimenKeys(page)).toEqual([])
 
   // --- fill a regimen ---
-  const lisinopril = () => currentMeds(page).filter({ hasText: 'Lisinopril' })
+  // Either current group: ticking "as needed" moves the row from Medications to
+  // the "As needed" sub-group beside it — same current status, different
+  // heading — and clearing the field moves it back.
+  const lisinopril = () =>
+    page
+      .getByTestId('summary-section-medications')
+      .or(page.getByTestId('summary-section-as-needed'))
+      .getByTestId('summary-row')
+      .filter({ hasText: 'Lisinopril' })
   await openCurate(lisinopril())
   await page.getByTestId('action-dose-input').fill('2 tablets')
   await page.getByTestId('action-schedule-input').fill('Every morning')

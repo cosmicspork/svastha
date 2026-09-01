@@ -53,6 +53,7 @@ describe('matchRoute', () => {
     expect(matchRoute('#/share/doctor')).toEqual({ path: '/share/doctor', params: {} })
     expect(matchRoute('#/timeline')).toEqual({ path: '/timeline', params: {} })
     expect(matchRoute('#/summary')).toEqual({ path: '/summary', params: {} })
+    expect(matchRoute('#/medications')).toEqual({ path: '/medications', params: {} })
     expect(matchRoute('#/search')).toEqual({ path: '/search', params: {} })
     expect(matchRoute('#/import')).toEqual({ path: '/import', params: {} })
     expect(matchRoute('#/correlate')).toEqual({ path: '/correlate', params: {} })

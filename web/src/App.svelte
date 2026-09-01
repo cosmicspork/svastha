@@ -29,6 +29,7 @@
   import SharePeople from './routes/share/People.svelte'
   import ShareDoctor from './routes/share/Doctor.svelte'
   import Proposals from './routes/Proposals.svelte'
+  import Medications from './routes/Medications.svelte'
   import Import from './routes/Import.svelte'
   import Correlate from './routes/Correlate.svelte'
   import Bloom from './components/Bloom.svelte'
@@ -182,6 +183,8 @@
       <Import />
     {:else if route.path === '/correlate'}
       <Correlate />
+    {:else if route.path === '/medications'}
+      <Medications />
     {:else}
       <Home />
     {/if}

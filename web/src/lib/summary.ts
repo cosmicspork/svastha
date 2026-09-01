@@ -17,7 +17,7 @@ import { buildCodeNameIndex, resolveDisplay } from './code-names'
 import { quantityOf, renderQuantity } from './timeline'
 import { cycleStats, type CycleStats } from './cycle'
 import type { StoredEvent } from './events'
-import type { ConceptStatus, Regimen } from './curation'
+import { REGIMEN_ROUTES, type ConceptStatus, type Regimen, type RegimenRoute } from './curation'
 import { isoToMillis } from './time'
 
 /** The cycle section's shape: exactly {@link cycleStats}' non-null result. */
@@ -106,6 +106,62 @@ export interface ClinicianSummary {
    * exactly when cycle was opted into the scope — no separate flag to keep in
    * sync, and no way for the preview to claim data the share won't carry. */
   cycle?: CycleSummary
+}
+
+/** One route's current medications, in the order they arrived. */
+export interface MedShelf {
+  route: RegimenRoute
+  rows: SummaryRow[]
+}
+
+/** The medications page's grouping of {@link ClinicianSummary.medications}. */
+export interface MedShelves {
+  /** Current meds with no curated route. They lead the page rather than
+   * trailing it: a route is only ever set by hand, so an unrouted med is the
+   * one asking for attention, not the leftover. */
+  unrouted: SummaryRow[]
+  /** Non-empty shelves only, in {@link REGIMEN_ROUTES} order. */
+  shelves: MedShelf[]
+  past: SummaryRow[]
+}
+
+/**
+ * Group medication rows into the page's route shelves.
+ *
+ * Shelving reads `regimen.route` and nothing else — route and form are never
+ * parsed out of a drug name (see `medicationDose`'s stance on strengths), so a
+ * med nobody has filed stays honestly unfiled instead of being guessed onto a
+ * shelf.
+ *
+ * Order in equals order out within every bucket: rows arrive `byLabel`-sorted
+ * from `buildSummary`, so each shelf is alphabetical without re-sorting here.
+ * "As needed" is a property of a current med, never a bucket of its own — a PRN
+ * med stays on its route shelf and out of `past`.
+ */
+export function shelveMedications(rows: SummaryRow[]): MedShelves {
+  const unrouted: SummaryRow[] = []
+  const past: SummaryRow[] = []
+  const byRoute = new Map<RegimenRoute, SummaryRow[]>()
+  for (const row of rows) {
+    if (row.status === 'inactive') {
+      past.push(row)
+      continue
+    }
+    const route = row.regimen?.route
+    if (route === undefined) {
+      unrouted.push(row)
+      continue
+    }
+    const shelf = byRoute.get(route)
+    if (shelf) shelf.push(row)
+    else byRoute.set(route, [row])
+  }
+  const shelves: MedShelf[] = []
+  for (const route of REGIMEN_ROUTES) {
+    const shelfRows = byRoute.get(route)
+    if (shelfRows) shelves.push({ route, rows: shelfRows })
+  }
+  return { unrouted, shelves, past }
 }
 
 type Ev = StoredEvent['event']
