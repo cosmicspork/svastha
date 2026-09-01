@@ -143,12 +143,16 @@ export interface ShareBundle {
   events: StoredEvent[]
   attachments?: Record<string, string>
   documents?: Record<string, { name: string; bytes: string }>
-  /** The owner's `status:`/`name:` concept curation for the concepts these
-   * events fold into — signed records the recipient verifies-or-drops against
-   * `signer`, exactly as it does the events. Only these two namespaces cross
-   * the vault boundary (never tags/hides/notes/favorites), and only for
+  /** The owner's `status:`/`name:`/`regimen:` concept curation for the concepts
+   * these events fold into — signed records the recipient verifies-or-drops
+   * against `signer`, exactly as it does the events. Only those namespaces
+   * cross the vault boundary (never tags/hides/notes/favorites), and only for
    * concepts actually in `events`. Omitted when the scope carries none; an old
-   * recipient ignores the unknown field. See {@link curationForBundle}. */
+   * recipient ignores the unknown field — and, since the array is namespace-
+   * tagged by each record's own key, an old recipient handed a newer bundle
+   * verifies its `regimen:` records fine and then ignores them (its reducers
+   * filter by prefix), which is why adding a namespace here does not move
+   * `ShareBundle.v`. See {@link curationForBundle}. */
   curation?: SignedCurationRecord[]
 }
 
@@ -176,15 +180,32 @@ export function referencedDocumentShas(events: StoredEvent[]): string[] {
   return [...shas].sort()
 }
 
-/** The concept `status:`/`name:` curation records to carry alongside a bundle's
- * events: only those two namespaces, and only for a concept some event in the
+/** The only curation namespaces a share bundle may carry. All three are
+ * *concept*-keyed, which is what makes the in-bundle-concept check below
+ * meaningful: the suffix after the prefix is a concept key that either folds
+ * out of an event in this bundle or does not exist here at all. Event-keyed and
+ * device-local namespaces (`tag:`, `hide:`, `note:`, `fav:`) are deliberately
+ * absent — they are the owner's private working state, not clinical content.
+ *
+ * The caller must actually *load* records for each of these (see
+ * DoctorShareSheet's curation read): this list narrows what is carried, it does
+ * not fetch anything, so a namespace listed here but never loaded ships
+ * nothing. */
+const BUNDLE_CURATION_PREFIXES = ['status:', 'name:', 'regimen:'] as const
+
+/** The concept `status:`/`name:`/`regimen:` curation records to carry alongside
+ * a bundle's events: only those namespaces
+ * ({@link BUNDLE_CURATION_PREFIXES}), and only for a concept some event in the
  * bundle folds into. Tags, hides, notes, and favorites never leave the vault
  * this way (they are the owner's private working state), and a record for an
  * excluded concept is dropped so the carriage can't leak the shape of what was
- * left out. Unsigned records (a not-yet-migrated pre-signing write) are skipped
- * too — a recipient outside the vault can only trust a signature, so an
- * unsignable record has nothing to carry. Pure over the record list the sheet
- * loads, mirroring the other bundle builders. */
+ * left out — which is also why the meds-scope filter (`applyMedScope`) must run
+ * on `events` *before* this: a past med excluded from the bundle then has no
+ * concept here, so its regimen fails the same check and cannot betray that the
+ * medication exists. Unsigned records (a not-yet-migrated pre-signing write)
+ * are skipped too — a recipient outside the vault can only trust a signature,
+ * so an unsignable record has nothing to carry. Pure over the record list the
+ * sheet loads, mirroring the other bundle builders. */
 export function curationForBundle(
   events: StoredEvent[],
   records: SignedCurationRecord[],
@@ -192,7 +213,7 @@ export function curationForBundle(
   const concepts = conceptKeysForEvents(events)
   const carried: SignedCurationRecord[] = []
   for (const r of records) {
-    const prefix = r.key.startsWith('status:') ? 'status:' : r.key.startsWith('name:') ? 'name:' : null
+    const prefix = BUNDLE_CURATION_PREFIXES.find((p) => r.key.startsWith(p))
     if (!prefix) continue
     if (typeof r.signature !== 'string' || r.signature.length === 0) continue
     if (concepts.has(r.key.slice(prefix.length))) carried.push(r)
@@ -224,7 +245,8 @@ export function applyMedScope(
  * every event's `author` (and every carried curation record's `author`) to the
  * one signer named by the bundle. `attachments` (sha256 → base64 plaintext
  * bytes), `documents` (sha256 → name + base64 plaintext bytes), and `curation`
- * (signed `status:`/`name:` records) are inlined only when non-empty. */
+ * (signed `status:`/`name:`/`regimen:` records) are inlined only when
+ * non-empty. */
 export function buildBundle(
   events: StoredEvent[],
   signerEd25519Hex: string,
@@ -339,8 +361,8 @@ export async function createDoctorShare(params: {
   relay: RelayClient
   identity: WasmIdentity
   events: StoredEvent[]
-  /** The signed `status:`/`name:` records to carry — already narrowed to the
-   * concepts in `events` (see {@link curationForBundle}). */
+  /** The signed `status:`/`name:`/`regimen:` records to carry — already
+   * narrowed to the concepts in `events` (see {@link curationForBundle}). */
   curation?: SignedCurationRecord[]
   scopeDescription: string
   expiryDays: number

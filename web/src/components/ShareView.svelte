@@ -8,7 +8,7 @@
   import { initSvastha } from '../lib/svastha'
   import { loadShare, type ShareLoadResult } from '../lib/shareRecipient'
   import { inspectFileShare, openWithPassphrase } from '../lib/fileShare'
-  import { statusMapFrom, nameMapFrom } from '../lib/curation'
+  import { statusMapFrom, nameMapFrom, regimenMapFrom } from '../lib/curation'
   import { fingerprint } from '../lib/exchange'
   import { base64ToBytes } from '../lib/base64'
   import { buildTimeline, type TimelineEntry, type AttachmentRef } from '../lib/timeline'
@@ -147,11 +147,16 @@
     }
   }
 
-  // The verified `status:`/`name:` overlay the share carried, folded into the
-  // concept maps the summary renders from — so a recipient sees the owner's
-  // real Current/Past split and name overrides, not a flat all-active list.
+  // The verified `status:`/`name:`/`regimen:` overlay the share carried, folded
+  // into the concept maps the summary renders from — so a recipient sees the
+  // owner's real Current/Past split, name overrides, and how each medication is
+  // actually taken, not a flat all-active list. Each reducer prefix-filters the
+  // one array, so a namespace this build does not know is simply skipped.
   const statusMap = $derived(result?.status === 'ok' ? statusMapFrom(result.bundle.curation) : new Map())
   const nameMap = $derived(result?.status === 'ok' ? nameMapFrom(result.bundle.curation) : new Map())
+  const regimenMap = $derived(
+    result?.status === 'ok' ? regimenMapFrom(result.bundle.curation) : new Map(),
+  )
 
   function loadSharedBytes(sha256: string): Promise<Uint8Array | null> {
     const b64 = result?.status === 'ok' ? result.bundle.attachments[sha256] : undefined
@@ -280,7 +285,8 @@
       {#if bundle.droppedCuration > 0}
         <p class="warn" data-testid="share-curation-warning">
           {bundle.droppedCuration}
-          status or name {bundle.droppedCuration === 1 ? 'label' : 'labels'} could not be verified and {bundle.droppedCuration ===
+          {bundle.droppedCuration === 1 ? 'detail' : 'details'} the sender added — a current/past mark, a
+          renamed entry, or how a medication is taken — could not be verified and {bundle.droppedCuration ===
           1
             ? 'was'
             : 'were'} left out.
@@ -288,7 +294,13 @@
       {/if}
     </header>
 
-    <ClinicianSummary events={bundle.events} readonly status={statusMap} names={nameMap} />
+    <ClinicianSummary
+      events={bundle.events}
+      readonly
+      status={statusMap}
+      names={nameMap}
+      regimen={regimenMap}
+    />
 
     {#if paperEntries.length > 0}
       <section class="documents" data-testid="share-documents">

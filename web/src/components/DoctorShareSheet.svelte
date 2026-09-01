@@ -12,6 +12,7 @@
     allCurationByPrefix,
     statusMapFrom,
     nameMapFrom,
+    regimenMapFrom,
     type SignedCurationRecord,
   } from '../lib/curation'
   import {
@@ -133,12 +134,16 @@
   // The scoped subset the bundle actually carries: the category/date filter,
   // then the meds-scope filter (past meds dropped unless opted in).
   const scopedEvents = $derived(applyMedScope(filtered, statuses, includePastMeds))
-  // The status/name records that ride along: narrowed to the concepts present
-  // in `scopedEvents`, so nothing about an excluded concept leaks.
+  // The status/name/regimen records that ride along: narrowed to the concepts
+  // present in `scopedEvents`, so nothing about an excluded concept leaks.
+  // Note the order — `scopedEvents` is already past-meds-filtered, so a past
+  // med's regimen is dropped here with its events rather than hinting at a
+  // medication the share left out.
   const carriedCuration = $derived(curationForBundle(scopedEvents, curationRecords))
   // The preview shows exactly the overlay the recipient will get.
   const previewStatus = $derived(statusMapFrom(carriedCuration))
   const previewNames = $derived(nameMapFrom(carriedCuration))
+  const previewRegimen = $derived(regimenMapFrom(carriedCuration))
   // Whether the meds-scope toggle is relevant: only when medications are in the
   // selection (and there is at least one past med to include or exclude).
   const hasPastMeds = $derived(
@@ -281,10 +286,15 @@
   onMount(async () => {
     ;[events, curationRecords] = await Promise.all([
       allEvents(),
-      // status: and name: are the only namespaces a share carries; load both.
-      Promise.all([allCurationByPrefix('status:'), allCurationByPrefix('name:')]).then(
-        ([s, n]) => [...s, ...n] as SignedCurationRecord[],
-      ),
+      // Every namespace a share may carry must be loaded here: `curationForBundle`
+      // narrows this list, it does not fetch, so a namespace missing from this
+      // read is silently carried as nothing. Keep it in step with
+      // doctorShare.ts's `BUNDLE_CURATION_PREFIXES`.
+      Promise.all([
+        allCurationByPrefix('status:'),
+        allCurationByPrefix('name:'),
+        allCurationByPrefix('regimen:'),
+      ]).then(([s, n, r]) => [...s, ...n, ...r] as SignedCurationRecord[]),
     ])
   })
 </script>
@@ -570,7 +580,13 @@
       {#if showPreview}
         <div class="preview" data-testid="share-preview">
           {#key scopedEvents}
-            <ClinicianSummary events={scopedEvents} readonly status={previewStatus} names={previewNames} />
+            <ClinicianSummary
+              events={scopedEvents}
+              readonly
+              status={previewStatus}
+              names={previewNames}
+              regimen={previewRegimen}
+            />
           {/key}
         </div>
       {/if}

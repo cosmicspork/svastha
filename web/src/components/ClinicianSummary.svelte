@@ -22,17 +22,19 @@
   // own-vault fetch and all local curation reads. A read-only view never reads
   // the local `cur-*` store (curation is owner-only in v1 — see
   // docs/ARCHITECTURE.md, "Curation overlay"), but a doctor-share recipient MAY
-  // be handed the owner's `status:`/`name:` overlay for the shared concepts,
-  // already verified, via `status`/`names` — so it renders the same Current/Past
-  // and Active/Resolved grouping and name overrides the owner sees, just inert
-  // (no action sheet). Person-view (no maps) shows a single current/active
-  // group, as before. The `regimen:` overlay is owner-only: it has no prop
-  // because nothing outside the vault carries it yet.
+  // be handed the owner's `status:`/`name:`/`regimen:` overlay for the shared
+  // concepts, already verified, via `status`/`names`/`regimen` — so it renders
+  // the same Current/Past and Active/Resolved grouping, name overrides, and
+  // regimen detail the owner sees, just inert (no action sheet). Person-view
+  // (no maps) shows a single current/active group, as before. A grant-based
+  // person view still passes none of them: only a doctor-share bundle carries
+  // curation out of the vault.
   let {
     events: providedEvents,
     readonly = false,
     status: providedStatus,
     names: providedNames,
+    regimen: providedRegimen,
     heading,
     timelineHref,
   }: {
@@ -40,6 +42,10 @@
     readonly?: boolean
     status?: Map<string, ConceptStatus>
     names?: Map<string, string>
+    /** The verified `regimen:` overlay a doctor-share bundle carried, in
+     * read-only mode. Drives the same sub-line, "As needed" chip/sub-group and
+     * panel rows the owner sees — the recipient just cannot edit them. */
+    regimen?: Map<string, Regimen>
     /** When set, the summary owns its page title and renders it inline with the
      * Print action (the own Summary page). Left unset where the host already
      * has an h1 (the shared-person screen), so the Print action sits alone. */
@@ -64,6 +70,7 @@
   // loaded curation.
   const effectiveStatus = $derived(readonly ? (providedStatus ?? new Map()) : statusMap)
   const effectiveNames = $derived(readonly ? (providedNames ?? new Map()) : nameMap)
+  const effectiveRegimen = $derived(readonly ? (providedRegimen ?? new Map()) : regimenMap)
 
   // The offline code dictionary (see lib/dictionary.ts): empty unless enabled.
   // Hydrated once and re-hydrated when the Settings toggle bumps the version.
@@ -88,9 +95,7 @@
       dictionary,
       status: effectiveStatus,
       names: effectiveNames,
-      // Owner-only for now: regimen does not cross into a doctor share yet, so
-      // a read-only render has none to show.
-      regimen: readonly ? undefined : regimenMap,
+      regimen: effectiveRegimen,
     }),
   )
 

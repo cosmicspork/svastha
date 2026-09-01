@@ -361,11 +361,12 @@ describe('curationForBundle', () => {
   const kMet = conceptKey(metformin.event)
   const kCond = conceptKey(cond.event)
 
-  it('carries only status:/name: records for concepts present in the bundle', () => {
+  it('carries only status:/name:/regimen: records for concepts present in the bundle', () => {
     const records: SignedCurationRecord[] = [
       rec(`status:${kLis}`, { status: 'inactive' }),
       rec(`name:${kMet}`, { display: 'BP + sugar combo' }),
       rec(`status:${kCond}`, { status: 'inactive' }),
+      rec(`regimen:${kMet}`, { dose: '500 mg', schedule: 'twice a day', route: 'mouth' }),
       rec(`status:medication_statement|${RXNORM}|99999`, { status: 'inactive' }), // concept not in bundle
       rec(`tag:m1`, { tags: ['a'] }), // never carried, even for an included event
       rec(`hide:m1`, { hidden: true }), // never carried
@@ -373,7 +374,51 @@ describe('curationForBundle', () => {
     ]
     const carried = curationForBundle(events, records)
     expect(carried.map((r) => r.key).sort()).toEqual(
-      [`status:${kLis}`, `name:${kMet}`, `status:${kCond}`].sort(),
+      [`status:${kLis}`, `name:${kMet}`, `status:${kCond}`, `regimen:${kMet}`].sort(),
+    )
+  })
+
+  it('drops an unsigned regimen record, exactly as it does an unsigned status', () => {
+    const unsigned = rec(`regimen:${kMet}`, { schedule: 'nightly' }, '')
+    expect(curationForBundle(events, [unsigned])).toEqual([])
+  })
+
+  it('drops a regimen for a concept the bundle does not carry — the shape-leak guard', () => {
+    // A regimen names a real medication in prose ("Warfarin 5 mg, nightly").
+    // Carrying one for a concept the scope excluded would tell the recipient the
+    // medication exists at all, which is precisely what the scope decided not to.
+    const outside = rec(`regimen:medication_statement|${RXNORM}|99999`, {
+      dose: '5 mg',
+      prescriber: 'Dr. Who',
+    })
+    expect(curationForBundle(events, [outside])).toEqual([])
+  })
+
+  it('never carries a tag/hide/note, whatever else rides along', () => {
+    const records: SignedCurationRecord[] = [
+      rec(`tag:m2`, { tags: ['x'] }),
+      rec(`hide:m2`, { hidden: true }),
+      rec(`note:m2`, { text: 'private' }),
+      rec(`fav:med:abc`, { label: 'x' }),
+      rec(`regimen:${kMet}`, { schedule: 'nightly' }),
+    ]
+    expect(curationForBundle(events, records).map((r) => r.key)).toEqual([`regimen:${kMet}`])
+  })
+
+  // The composition the sheet actually runs (applyMedScope → curationForBundle).
+  // Ordering is the whole guarantee: scope first, then narrow curation to what
+  // survived. Reverse them and the past med's regimen rides along.
+  it('drops a past med\u2019s regimen when past meds are excluded', () => {
+    const statuses = new Map<string, ConceptStatus>([[kLis, 'inactive']])
+    const regimens = [rec(`regimen:${kLis}`, { dose: '10 mg' }), rec(`regimen:${kMet}`, { dose: '500 mg' })]
+
+    const scoped = applyMedScope(events, statuses, false)
+    expect(curationForBundle(scoped, regimens).map((r) => r.key)).toEqual([`regimen:${kMet}`])
+
+    // Opting past meds in brings it back — the same records, a different scope.
+    const withPast = applyMedScope(events, statuses, true)
+    expect(curationForBundle(withPast, regimens).map((r) => r.key).sort()).toEqual(
+      [`regimen:${kLis}`, `regimen:${kMet}`].sort(),
     )
   })
 

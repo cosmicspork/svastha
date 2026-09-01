@@ -55,7 +55,7 @@ import {
 } from '../shareRecipient'
 import { WasmDataKey, verify_curation } from '../svastha'
 import type { StoredEvent } from '../events'
-import type { SignedCurationRecord } from '../curation'
+import { regimenMapFrom, type SignedCurationRecord } from '../curation'
 
 const mockVerifyCuration = vi.mocked(verify_curation)
 
@@ -300,6 +300,116 @@ describe('verifyBundleCuration (verify-or-drop against the bundle signer)', () =
 
   it('reports zero of each for an empty list', () => {
     expect(verifyBundleCuration([], signerHex)).toEqual({ records: [], dropped: 0 })
+  })
+})
+
+// `regimen:` is the third namespace a bundle may carry, and the one whose value
+// is rich enough to be dangerous: verification proves a record is *authentic*,
+// never that its value is well-formed. These pin both halves — the same
+// verify-or-drop the other namespaces get, and the tolerance that keeps a
+// verified-but-garbage value from reaching a renderer unchecked.
+describe('verifyBundleCuration over regimen: records', () => {
+  const signerHex = '3b'.repeat(32)
+  const conceptKey = 'medication_statement|http://www.nlm.nih.gov/research/umls/rxnorm|6809'
+  const good: SignedCurationRecord = {
+    key: `regimen:${conceptKey}`,
+    value: { dose: '500 mg', schedule: 'twice a day', route: 'mouth', as_needed: true },
+    updated_at: 1,
+    author: signerHex,
+    signature: 'sig',
+  }
+
+  beforeEach(() => {
+    mockVerifyCuration.mockReset()
+    // Mirror core: a record verifies iff it byte-matches the one we signed.
+    // Any mutation of key, value, or metadata therefore fails, exactly as a
+    // real Ed25519 check over the canonical record would.
+    mockVerifyCuration.mockImplementation((json: string) => json === JSON.stringify(good))
+  })
+
+  it('keeps a valid regimen record — the namespace check is not a gate here', () => {
+    expect(verifyBundleCuration([good], signerHex)).toEqual({ records: [good], dropped: 0 })
+  })
+
+  it('drops and counts a regimen whose value was tampered with in transit', () => {
+    const tampered: SignedCurationRecord = {
+      ...good,
+      value: { ...(good.value as object), dose: '5000 mg' },
+    }
+    const result = verifyBundleCuration([tampered, good], signerHex)
+    expect(result.records).toEqual([good])
+    expect(result.dropped).toBe(1)
+  })
+
+  it('drops a regimen authored by a key other than the bundle signer', () => {
+    const foreign: SignedCurationRecord = { ...good, author: 'f'.repeat(64) }
+    const result = verifyBundleCuration([foreign], signerHex)
+    expect(result.records).toEqual([])
+    expect(result.dropped).toBe(1)
+    // Rejected on the author mismatch, before the signature is even consulted.
+    expect(mockVerifyCuration).not.toHaveBeenCalled()
+  })
+
+  it('lets a verified-but-garbage value through, and regimenMapFrom normalizes it without throwing', () => {
+    // The adversarial case the signature cannot catch: the owner's own key
+    // signed a value the *renderer* must not trust. A hostile (or just newer)
+    // writer can put anything here — wrong types, an out-of-enum route, a
+    // non-object — and it verifies. The reducer is the last line of defense.
+    const garbage: SignedCurationRecord = {
+      key: `regimen:${conceptKey}`,
+      value: {
+        dose: 42,
+        schedule: { evil: true },
+        route: 'intravenous', // not in REGIMEN_ROUTES — a route the UI cannot label
+        as_needed: 'yes', // truthy string, not the boolean the chip gates on
+        started: '2026-13-99',
+        prescriber: ['Dr', 'Who'],
+        instructions: null,
+      },
+      updated_at: 2,
+      author: signerHex,
+      signature: 'sig',
+    }
+    const nonObject: SignedCurationRecord = {
+      key: `regimen:${conceptKey}|other`,
+      value: 'not an object at all',
+      updated_at: 3,
+      author: signerHex,
+      signature: 'sig',
+    }
+    mockVerifyCuration.mockReturnValue(true) // both are authentically signed
+
+    const verified = verifyBundleCuration([garbage, nonObject], signerHex)
+    expect(verified.dropped).toBe(0)
+
+    // The renderer's actual entry point — nothing here throws, and nothing
+    // out-of-enum or wrong-typed survives to reach a template.
+    const map = regimenMapFrom(verified.records)
+    expect(map.get(conceptKey)).toBeUndefined() // nothing in it survived
+    expect(map.size).toBe(0)
+  })
+
+  it('strips only the bad fields from a partly-garbage verified value', () => {
+    // The sharper version of the case above: enough survives that the record
+    // still renders, so a field the reducer failed to drop WOULD reach the
+    // template. Out-of-enum route and non-boolean as_needed must not.
+    const mixed: SignedCurationRecord = {
+      key: `regimen:${conceptKey}`,
+      value: {
+        schedule: '  twice a day  ',
+        route: 'intravenous',
+        as_needed: 'yes',
+        started: '2026-13-99',
+        prescriber: 7,
+      },
+      updated_at: 4,
+      author: signerHex,
+      signature: 'sig',
+    }
+    mockVerifyCuration.mockReturnValue(true)
+
+    const map = regimenMapFrom(verifyBundleCuration([mixed], signerHex).records)
+    expect(map.get(conceptKey)).toEqual({ schedule: 'twice a day' })
   })
 })
 
