@@ -1,7 +1,7 @@
 // The curation overlay: the system's only mutable state, layered over the
 // otherwise append-only event log (see docs/ARCHITECTURE.md, "Event model").
 // Tags, notes, hides, favorite draft templates, and the concept-level
-// `status:`/`name:` overrides all live here as signed curation records,
+// `status:`/`name:`/`regimen:` overrides all live here as signed curation records,
 // LWW-merged and synced through their own `cur-*` blob namespace — see
 // docs/ARCHITECTURE.md's "Curation overlay" section for the full design
 // (mutable-blob mapping, the signing rationale, owner-only v1 scope).
@@ -304,15 +304,18 @@ export async function allTags(): Promise<string[]> {
   return [...tags].sort((a, b) => a.localeCompare(b))
 }
 
-// --- helpers: concept status / name ---
+// --- helpers: concept status / name / regimen ---
 //
 // Unlike tag/note/hide (keyed on an `event_id`), these curate a *folded
 // clinical concept* — every event sharing a `${kind}|${system}|${code}` (the
 // summary's `keyFor`). `status:` marks the concept current/past (meds) or
 // active/resolved (problems); `name:` is the owner's display-name override,
 // the highest-priority layer of the render-time name chain (see
-// code-names.ts). Neither touches a signed event: both are curation, resolved
-// at render time exactly like a borrowed display.
+// code-names.ts); `regimen:` carries how a medication is actually taken
+// (schedule, route, prescriber, course dates, instructions) — facts no
+// imported `medication_statement` event holds. None of them touches a signed
+// event: all three are curation, resolved at render time exactly like a
+// borrowed display.
 
 /** A folded concept's curated lifecycle. `'active'` (the unstatused default)
  * renders as "current" for meds / "active" for problems; `'inactive'` as
@@ -382,6 +385,162 @@ export async function allStatuses(): Promise<Map<string, ConceptStatus>> {
  * dropped, so a caller sees only real overrides. */
 export async function allNames(): Promise<Map<string, string>> {
   return nameMapFrom(await allCurationByPrefix('name:'))
+}
+
+/** The routes a medication can be filed under. A closed set (rather than free
+ * text) because it is what the medications page shelves on, and a shelf per
+ * spelling of "by mouth" is not a shelf. */
+export const REGIMEN_ROUTES = ['mouth', 'nose', 'eyes', 'skin', 'inhaled', 'injection', 'other'] as const
+
+export type RegimenRoute = (typeof REGIMEN_ROUTES)[number]
+
+export const REGIMEN_ROUTE_LABELS: Record<RegimenRoute, string> = {
+  mouth: 'By mouth',
+  nose: 'Nose',
+  eyes: 'Eyes',
+  skin: 'Skin',
+  inhaled: 'Inhaled',
+  injection: 'Injection',
+  other: 'Other',
+}
+
+/** How a medication concept is actually taken — the facts an imported
+ * `medication_statement` does not carry. Every field is optional and honest
+ * free text apart from `route` (a closed set) and the dates: nothing here is
+ * parsed, inferred, or defaulted, so an empty field means "not recorded", never
+ * "none". */
+export interface Regimen {
+  dose?: string
+  schedule?: string
+  route?: RegimenRoute
+  as_needed?: boolean
+  prescriber?: string
+  /** ISO `YYYY-MM-DD`. */
+  started?: string
+  /** ISO `YYYY-MM-DD`. */
+  stopped?: string
+  instructions?: string
+}
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
+
+/** ISO `YYYY-MM-DD` *and* a real calendar date: the round trip rejects
+ * `2026-13-99` and `2026-02-31`, which the shape alone accepts. A date that
+ * cannot exist is not a course date, and silently keeping one would put it on
+ * the summary as if it were. */
+function isCalendarDate(value: string): boolean {
+  if (!ISO_DATE.test(value)) return false
+  const parsed = new Date(`${value}T00:00:00Z`)
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
+}
+
+function trimmedString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed === '' ? undefined : trimmed
+}
+
+/**
+ * Tolerant shape-check on read, shared by every path that turns a stored or
+ * bundle-supplied `regimen:` value into a {@link Regimen}: unknown or
+ * wrong-typed fields are dropped, not repaired, and the whole value normalizes
+ * to `undefined` when nothing survives.
+ *
+ * Never throws. The same value can arrive from a second device running a newer
+ * build or (later) from a doctor-share bundle, so garbage has to normalize away
+ * rather than crash a render — the tolerance `isCurationRecord` and
+ * `nameMapFrom` already apply at their own layers.
+ *
+ * `undefined` for the all-empty value is also the clearing convention: clearing
+ * a regimen writes an empty object (the sync model has no delete — see
+ * `setName`), and reducers drop it here.
+ */
+export function normalizeRegimen(value: unknown): Regimen | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const v = value as Record<string, unknown>
+  const regimen: Regimen = {}
+
+  const dose = trimmedString(v.dose)
+  if (dose) regimen.dose = dose
+  const schedule = trimmedString(v.schedule)
+  if (schedule) regimen.schedule = schedule
+  const route = trimmedString(v.route)
+  if (route && (REGIMEN_ROUTES as readonly string[]).includes(route)) {
+    regimen.route = route as RegimenRoute
+  }
+  if (v.as_needed === true) regimen.as_needed = true
+  const prescriber = trimmedString(v.prescriber)
+  if (prescriber) regimen.prescriber = prescriber
+  const started = trimmedString(v.started)
+  if (started && isCalendarDate(started)) regimen.started = started
+  const stopped = trimmedString(v.stopped)
+  if (stopped && isCalendarDate(stopped)) regimen.stopped = stopped
+  const instructions = trimmedString(v.instructions)
+  if (instructions) regimen.instructions = instructions
+
+  return Object.keys(regimen).length === 0 ? undefined : regimen
+}
+
+const REGIMEN_FIELDS = [
+  'dose',
+  'schedule',
+  'route',
+  'as_needed',
+  'prescriber',
+  'started',
+  'stopped',
+  'instructions',
+] as const
+
+/**
+ * Whether two regimens differ once normalized — the diff-before-write test the
+ * edit sheet applies before calling {@link setRegimen}.
+ *
+ * Without it, saving the sheet for an unrelated reason (a rename, a typo fixed
+ * and un-fixed) would mint a fresh LWW record with a new `updated_at` on every
+ * medication the owner ever opened: a mutable `cur-` blob re-pushed to the
+ * relay and re-merged on every other device, for no change at all.
+ */
+export function regimenChanged(before: Regimen | undefined, after: Regimen | undefined): boolean {
+  const a = normalizeRegimen(before)
+  const b = normalizeRegimen(after)
+  if (!a || !b) return a !== b
+  return REGIMEN_FIELDS.some((field) => a[field] !== b[field])
+}
+
+/** The owner's regimen for a concept, or `undefined` when there is none (or
+ * what is stored no longer normalizes to anything). */
+export async function getRegimen(conceptKey: string): Promise<Regimen | undefined> {
+  const record = await getCuration(`regimen:${conceptKey}`)
+  return normalizeRegimen(record?.value)
+}
+
+/** Writes the normalized value, so the stored record never carries untrimmed
+ * text or a field the readers would drop anyway. An all-empty regimen is
+ * stored as `{}` — the clear (see {@link normalizeRegimen}). */
+export async function setRegimen(conceptKey: string, regimen: Regimen): Promise<void> {
+  await setCuration(`regimen:${conceptKey}`, normalizeRegimen(regimen) ?? {})
+}
+
+/** Build the concept -> regimen map from a set of curation records (the
+ * `regimen:` ones). Cleared and unsalvageable values are dropped, so a caller
+ * sees only real regimens. The pure analogue of {@link allRegimens} — same
+ * split as {@link statusMapFrom}/{@link nameMapFrom}, and likewise tolerant of
+ * a mixed-namespace array. */
+export function regimenMapFrom(records: CurationRecord[]): Map<string, Regimen> {
+  const map = new Map<string, Regimen>()
+  for (const r of records) {
+    if (!r.key.startsWith('regimen:')) continue
+    const regimen = normalizeRegimen(r.value)
+    if (regimen) map.set(r.key.slice('regimen:'.length), regimen)
+  }
+  return map
+}
+
+/** Concept -> regimen, for the whole summary (see summary.ts's `buildSummary`,
+ * which takes this map). */
+export async function allRegimens(): Promise<Map<string, Regimen>> {
+  return regimenMapFrom(await allCurationByPrefix('regimen:'))
 }
 
 // --- favorites migration ---

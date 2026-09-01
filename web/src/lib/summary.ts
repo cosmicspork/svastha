@@ -17,7 +17,7 @@ import { buildCodeNameIndex, resolveDisplay } from './code-names'
 import { quantityOf, renderQuantity } from './timeline'
 import { cycleStats, type CycleStats } from './cycle'
 import type { StoredEvent } from './events'
-import type { ConceptStatus } from './curation'
+import type { ConceptStatus, Regimen } from './curation'
 import { isoToMillis } from './time'
 
 /** The cycle section's shape: exactly {@link cycleStats}' non-null result. */
@@ -60,9 +60,10 @@ export interface SummaryRow {
    * which are real labels even though they're not a resolved coded name. */
   nameResolved: boolean
   /** Formatted value / dose / dose count / '' — the measurement or context the
-   * label doesn't already carry. For a medication this is the recorded dose
-   * quantity (see `medicationDose`); the strength baked into a drug name stays
-   * in the label, never re-derived here. */
+   * label doesn't already carry. For a medication this is the owner's curated
+   * regimen dose if there is one, else the recorded dose quantity (see
+   * `medicationDose`); the strength baked into a drug name stays in the label,
+   * never re-derived here. */
   detail: string
   /** Representative `effective_at` (earliest onset for problems, latest mention
    * elsewhere), or null when every folded event was undated. */
@@ -81,6 +82,10 @@ export interface SummaryRow {
    * inert elsewhere. A read-only (recipient) render leaves it `'active'` — the
    * owner's curation is owner-only in v1. */
   status: ConceptStatus
+  /** The owner's curated regimen for this concept (see curation.ts's `regimen:`
+   * namespace), absent when there is none. Only medication rows are expected to
+   * carry one; elsewhere it is inert data the view simply never renders. */
+  regimen?: Regimen
 }
 
 export interface ClinicianSummary {
@@ -232,12 +237,14 @@ function splitByWindow(rows: SummaryRow[], cutoffMillis: number): WindowedSectio
   return { recent, older }
 }
 
-/** Curation layered over the folded concepts: the owner's per-concept status
- * and display-name overrides (see curation.ts's `status:`/`name:` namespaces),
- * keyed on the same `${kind}|${system}|${code}` as {@link keyFor}. */
+/** Curation layered over the folded concepts: the owner's per-concept status,
+ * display-name overrides, and medication regimens (see curation.ts's
+ * `status:`/`name:`/`regimen:` namespaces), keyed on the same
+ * `${kind}|${system}|${code}` as {@link keyFor}. */
 interface Curation {
   status: Map<string, ConceptStatus>
   names: Map<string, string>
+  regimen: Map<string, Regimen>
 }
 
 /** Fold a set of same-kind events into one row per clinical concept. */
@@ -278,6 +285,7 @@ function foldSection(
       eventIds: group.map((e) => e.id),
       focusId: (rep ?? ls).id,
       status: curation.status.get(key) ?? 'active',
+      regimen: curation.regimen.get(key),
     })
   }
   return rows
@@ -383,13 +391,14 @@ export function buildSummary(
     hiddenIds?: Set<string>
     resultLimit?: number
     dictionary?: Map<string, string>
-    /** The owner's per-concept status/name curation (see curation.ts), loaded
+    /** The owner's per-concept status/name/regimen curation (see curation.ts), loaded
      * by ClinicianSummary the same way the dictionary is and passed in. Empty
      * by default — and left empty for a read-only (recipient) render, whose
      * rows all stay `'active'` with no name overrides. Keeps `buildSummary`
      * pure (no db/session/wasm). */
     status?: Map<string, ConceptStatus>
     names?: Map<string, string>
+    regimen?: Map<string, Regimen>
     /** "Now" for the recency window, injectable so the split is testable
      * without freezing the clock. */
     now?: number
@@ -408,7 +417,11 @@ export function buildSummary(
     windowMonths = RECENT_WINDOW_MONTHS,
   } = opts
   const cutoff = windowStartMillis(now, windowMonths)
-  const curation: Curation = { status: opts.status ?? new Map(), names: opts.names ?? new Map() }
+  const curation: Curation = {
+    status: opts.status ?? new Map(),
+    names: opts.names ?? new Map(),
+    regimen: opts.regimen ?? new Map(),
+  }
   // Subtract hides before grouping; dropped silently — a clinical summary
   // shouldn't advertise redactions with a "hidden entry" placeholder. The name
   // index is built from this same visible set, so a hidden event's display
@@ -438,7 +451,10 @@ export function buildSummary(
     medications: foldSection(
       meds,
       'latest',
-      (_ls, group) => medicationDose(group),
+      // A curated dose outranks the quantity-derived one: the owner typed what
+      // they actually take, while `medicationDose` reports what some source
+      // document once recorded.
+      (ls, group) => curation.regimen.get(keyFor(ls))?.dose ?? medicationDose(group),
       nameIndex,
       dictionary,
       curation,
