@@ -180,7 +180,16 @@ author }` — plus a `signature`:
   defaulting to active) and `name:{kind}|{system}|{code}` (`{ display }` — the
   owner's display-name override, the top of the render-time name chain above
   the event's own display, the vault name index, and the dictionary; a cleared
-  override is an empty display, not a delete, since the sync model has none).
+  override is an empty display, not a delete, since the sync model has none),
+  plus `regimen:{kind}|{system}|{code}` (`{ dose?, schedule?, route?,
+  as_needed?, prescriber?, started?, stopped?, instructions? }` — how a
+  medication is actually taken, which no imported `medication_statement`
+  carries; `route` is one of `mouth | nose | eyes | skin | inhaled | injection
+  | other`, the dates are ISO `YYYY-MM-DD`, everything else is the owner's own
+  free text, and a cleared regimen is the all-empty value, not a delete).
+  Readers shape-check a regimen tolerantly — an unknown or wrong-typed field is
+  dropped, never repaired — so a value written by a newer build normalizes
+  rather than crashing a render.
   `core` is namespace-agnostic — the key is an opaque string to the contract,
   so new namespaces need no contract change.
 - `value` is namespace-defined and opaque to both the signature and the merge
@@ -259,7 +268,10 @@ their own working state, not something to project onto someone reading their
 shared record. The one exception is the *doctor share*, which bundles the
 owner's `status:`/`name:` records for the shared concepts inside the sealed
 bundle (not via a `cur-*` pull) so the clinician summary reads correctly; tags,
-hides, notes, and favorites still never leave the vault.
+hides, notes, favorites, and `regimen:` still never leave the vault. Regimen is
+owner-only today — it renders on the owner's own summary and nowhere else; a
+later change carries it in doctor-share bundles, and this paragraph is the
+place to say so when it does.
 
 **Favorites migration.** Favorited quick-log templates used to live in a
 single device-local `prefs` key; they now live under `fav:` curation records
@@ -526,7 +538,7 @@ by prefix:
 | `vault.key` | the vault **keyring** — each epoch key wrapped to the owner's own X25519 key, serialized into one blob (a legacy single wrapped key still reads as an epoch-0 keyring). See "Key epochs" in `spec/README.md`. |
 | `doc-{sha256_hex}` | one imported source document's verbatim bytes (name + base64 bytes, JSON), keyed by its own content hash |
 | `att-{sha256_hex}` | one captured document's bytes (mime + base64 bytes, JSON — a photographed paper record or an attached PDF), keyed by the plaintext content hash the event's `attachment` value carries |
-| `cur-{sha256_hex(key)}` | one sealed `SignedCurationRecord` (JSON — tag/note/hide/favorite, see the Event model's "Curation overlay" subsection), keyed by the hash of its own app-level `key`. Unlike `ev-`/`doc-`/`att-`, this blob is **mutable**: a write `PUT`s over the existing id rather than minting a new one. |
+| `cur-{sha256_hex(key)}` | one sealed `SignedCurationRecord` (JSON — a tag, note, hide, favorite, or a concept-level status/name/regimen record; see the Event model's "Curation overlay" subsection), keyed by the hash of its own app-level `key`. Unlike `ev-`/`doc-`/`att-`, this blob is **mutable**: a write `PUT`s over the existing id rather than minting a new one. |
 
 **AAD = blob id (plus epoch marker).** Every blob sealed under an epoch key uses
 its blob id as the AEAD associated data, so the relay — which controls the routing

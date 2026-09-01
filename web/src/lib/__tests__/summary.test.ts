@@ -533,3 +533,51 @@ describe('buildSummary: empty and hidden', () => {
     expect(problems.map((p) => p.label)).toEqual(['Hypertension'])
   })
 })
+
+describe('buildSummary: regimen curation', () => {
+  const AMOX: Code = { system: RXNORM, code: '723', display: 'Amoxicillin' }
+  const medKey = `medication_statement|${RXNORM}|723`
+  const amox = () => ev({ kind: 'medication_statement', code: AMOX, effective_at: '2024-01-01T00:00:00+00:00' })
+
+  it('leaves the row without a regimen when none is curated', () => {
+    expect(buildSummary([amox()]).medications[0].regimen).toBeUndefined()
+  })
+
+  it('carries the curated regimen on the row, keyed on the concept', () => {
+    const regimen = new Map([[medKey, { schedule: 'Twice daily', route: 'mouth' as const, as_needed: true }]])
+    const { medications } = buildSummary([amox()], { regimen })
+    expect(medications[0].regimen).toEqual({ schedule: 'Twice daily', route: 'mouth', as_needed: true })
+  })
+
+  it('a curated dose outranks the recorded dose quantity', () => {
+    const dosed = ev({
+      kind: 'medication_statement',
+      code: AMOX,
+      value: q('500', 'mg'),
+      effective_at: '2024-01-01T00:00:00+00:00',
+    })
+    expect(buildSummary([dosed]).medications[0].detail).toBe('500 mg')
+    const regimen = new Map([[medKey, { dose: '2 tablets' }]])
+    expect(buildSummary([dosed], { regimen }).medications[0].detail).toBe('2 tablets')
+  })
+
+  it('falls back to the recorded quantity when the regimen carries no dose', () => {
+    const dosed = ev({
+      kind: 'medication_statement',
+      code: AMOX,
+      value: q('500', 'mg'),
+      effective_at: '2024-01-01T00:00:00+00:00',
+    })
+    const regimen = new Map([[medKey, { schedule: 'Twice daily' }]])
+    expect(buildSummary([dosed], { regimen }).medications[0].detail).toBe('500 mg')
+  })
+
+  it('is inert for a concept with no events — no phantom row appears', () => {
+    const regimen = new Map([['medication_statement|rxnorm|999999', { dose: '10 mg' }]])
+    const { medications, problems } = buildSummary([amox()], { regimen })
+    expect(medications).toHaveLength(1)
+    expect(medications[0].key).toBe(medKey)
+    expect(medications[0].regimen).toBeUndefined()
+    expect(problems).toHaveLength(0)
+  })
+})

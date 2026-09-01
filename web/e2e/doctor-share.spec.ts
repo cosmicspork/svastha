@@ -308,7 +308,7 @@ test('doctor share carries verified curation: current-only by default, past on o
   await metformin.getByTestId('summary-row-trigger').click()
   await metformin.getByTestId('summary-row-curate').click()
   await ownerPage.getByTestId('action-name-input').fill('BP + sugar combo')
-  await ownerPage.getByTestId('action-save-name').click()
+  await ownerPage.getByTestId('action-save').click()
   await expect(currentMeds(ownerPage).filter({ hasText: 'BP + sugar combo' })).toHaveCount(1)
 
   // Connect the relay now (after curating) and open the share screen.

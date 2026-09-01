@@ -5,9 +5,16 @@
     allCurationByPrefix,
     allStatuses,
     allNames,
+    allRegimens,
     setStatus,
     setName,
+    regimenChanged,
+    setRegimen,
+    normalizeRegimen,
+    REGIMEN_ROUTES,
+    REGIMEN_ROUTE_LABELS,
     type ConceptStatus,
+    type Regimen,
   } from '../lib/curation'
   import { buildSummary, type SummaryRow, type WindowedSection } from '../lib/summary'
   import { loadDictionaryIndex, dictionaryStatus } from '../lib/dictionary'
@@ -26,7 +33,8 @@
   // already verified, via `status`/`names` — so it renders the same Current/Past
   // and Active/Resolved grouping and name overrides the owner sees, just inert
   // (no action sheet). Person-view (no maps) shows a single current/active
-  // group, as before.
+  // group, as before. The `regimen:` overlay is owner-only: it has no prop
+  // because nothing outside the vault carries it yet.
   let {
     events: providedEvents,
     readonly = false,
@@ -54,6 +62,7 @@
   let hiddenIds = $state<Set<string>>(new Set())
   let statusMap = $state<Map<string, ConceptStatus>>(new Map())
   let nameMap = $state<Map<string, string>>(new Map())
+  let regimenMap = $state<Map<string, Regimen>>(new Map())
   let loaded = $state(false)
 
   const events = $derived(readonly ? (providedEvents ?? []) : ownEvents)
@@ -86,6 +95,9 @@
       dictionary,
       status: effectiveStatus,
       names: effectiveNames,
+      // Owner-only for now: regimen does not cross into a doctor share yet, so
+      // a read-only render has none to show.
+      regimen: readonly ? undefined : regimenMap,
     }),
   )
 
@@ -188,8 +200,43 @@
   let action = $state<{ row: SummaryRow; section: Section } | null>(null)
   let nameField = $state('')
 
+  /** The regimen fields, as the form holds them: all strings (an unset route is
+   * `''`, not a missing key) plus the as-needed boolean, so every input can bind
+   * directly. `regimenFromFields` turns them back into a {@link Regimen}. */
+  let regimenFields = $state({
+    dose: '',
+    schedule: '',
+    route: '',
+    as_needed: false,
+    prescriber: '',
+    started: '',
+    stopped: '',
+    instructions: '',
+  })
+
+  function seedRegimenFields(regimen: Regimen | undefined) {
+    regimenFields = {
+      dose: regimen?.dose ?? '',
+      schedule: regimen?.schedule ?? '',
+      route: regimen?.route ?? '',
+      as_needed: regimen?.as_needed === true,
+      prescriber: regimen?.prescriber ?? '',
+      started: regimen?.started ?? '',
+      stopped: regimen?.stopped ?? '',
+      instructions: regimen?.instructions ?? '',
+    }
+  }
+
+  /** The form's fields as a normalized regimen (`undefined` when the owner left
+   * or made it empty — the clear). Normalizing here means the comparison in
+   * `save` and the value written to curation are the same shape. */
+  function regimenFromFields(): Regimen | undefined {
+    return normalizeRegimen(regimenFields)
+  }
+
   function openAction(row: SummaryRow, section: Section) {
     nameField = nameMap.get(row.key) ?? ''
+    seedRegimenFields(regimenMap.get(row.key))
     action = { row, section }
   }
 
@@ -197,10 +244,11 @@
     action = null
   }
 
-  /** Re-read the status/name overlay after a write so the derived summary
-   * re-splits and re-labels — the same way the dictionary effect re-hydrates. */
+  /** Re-read the status/name/regimen overlay after a write so the derived
+   * summary re-splits, re-labels, and re-doses — the same way the dictionary
+   * effect re-hydrates. */
   async function reloadCuration() {
-    ;[statusMap, nameMap] = await Promise.all([allStatuses(), allNames()])
+    ;[statusMap, nameMap, regimenMap] = await Promise.all([allStatuses(), allNames(), allRegimens()])
   }
 
   async function toggleStatus(row: SummaryRow) {
@@ -209,10 +257,17 @@
     closeAction()
   }
 
-  async function saveName(row: SummaryRow) {
+  /** Save the sheet: the name override and (meds only) the regimen, each
+   * written only when it actually changed. Both are mutable `cur-` blobs that
+   * re-sync on every write, so an unchanged field must not be re-stamped. */
+  async function save(row: SummaryRow, isMed: boolean) {
     // An empty field clears the override (stored as an empty display, not a
     // delete — see curation.ts's `setName`), falling back to the resolved name.
-    await setName(row.key, nameField)
+    if (nameField.trim() !== (nameMap.get(row.key) ?? '')) await setName(row.key, nameField)
+    if (isMed) {
+      const next = regimenFromFields()
+      if (regimenChanged(regimenMap.get(row.key), next)) await setRegimen(row.key, next ?? {})
+    }
     await reloadCuration()
     closeAction()
   }
@@ -577,10 +632,79 @@
           <span class="name-hint muted">Clear the field to remove a custom name.</span>
         </label>
 
+        {#if isMed}
+          <!-- How this medication is actually taken. None of it comes from the
+               event log — an imported `medication_statement` carries at most a
+               dose quantity — so every field is the owner's own words, and an
+               empty one stays empty rather than being guessed at. -->
+          <div class="regimen-fields">
+            <label class="name-field">
+              <span class="name-label">Dose</span>
+              <input type="text" bind:value={regimenFields.dose} placeholder="10 mg" data-testid="action-dose-input" />
+            </label>
+
+            <label class="name-field">
+              <span class="name-label">Schedule</span>
+              <input
+                type="text"
+                bind:value={regimenFields.schedule}
+                placeholder="Twice daily"
+                data-testid="action-schedule-input"
+              />
+            </label>
+
+            <label class="name-field">
+              <span class="name-label">Route</span>
+              <select bind:value={regimenFields.route} data-testid="action-route-select">
+                <option value="">—</option>
+                {#each REGIMEN_ROUTES as route (route)}
+                  <option value={route}>{REGIMEN_ROUTE_LABELS[route]}</option>
+                {/each}
+              </select>
+            </label>
+
+            <label class="check-field">
+              <input type="checkbox" bind:checked={regimenFields.as_needed} data-testid="action-as-needed" />
+              <span class="name-label">As needed</span>
+            </label>
+
+            <label class="name-field">
+              <span class="name-label">Prescriber</span>
+              <input
+                type="text"
+                bind:value={regimenFields.prescriber}
+                placeholder="Dr. Rivera"
+                data-testid="action-prescriber-input"
+              />
+            </label>
+
+            <div class="date-fields">
+              <label class="name-field">
+                <span class="name-label">Started</span>
+                <input type="date" bind:value={regimenFields.started} data-testid="action-started-input" />
+              </label>
+              <label class="name-field">
+                <span class="name-label">Stopped</span>
+                <input type="date" bind:value={regimenFields.stopped} data-testid="action-stopped-input" />
+              </label>
+            </div>
+
+            <label class="name-field">
+              <span class="name-label">Instructions</span>
+              <textarea
+                rows="2"
+                bind:value={regimenFields.instructions}
+                placeholder="Take with food"
+                data-testid="action-instructions-input"
+              ></textarea>
+            </label>
+          </div>
+        {/if}
+
         <div class="action-buttons">
           <button type="button" class="ghost" onclick={closeAction} data-testid="action-cancel">Cancel</button>
-          <button type="button" class="primary" onclick={() => saveName(row)} data-testid="action-save-name">
-            Save name
+          <button type="button" class="primary" onclick={() => save(row, isMed)} data-testid="action-save">
+            Save
           </button>
         </div>
       </div>
@@ -684,6 +808,30 @@
 
   .name-hint {
     font-size: var(--text-xs);
+  }
+
+  .regimen-fields {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .check-field {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  /* Started/Stopped read as one course, and two date inputs fit a phone width
+     side by side. */
+  .date-fields {
+    display: flex;
+    gap: var(--space-3);
+  }
+
+  .date-fields .name-field {
+    flex: 1;
+    min-width: 0;
   }
 
   .action-buttons {
