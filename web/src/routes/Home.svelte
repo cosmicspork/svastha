@@ -214,7 +214,7 @@
       {/if}
 
       {#if meds.count > 0}
-        <button class="card tappable" onclick={() => navigate('#/summary')} data-testid="glance-meds">
+        <button class="card tappable" onclick={() => navigate('#/medications')} data-testid="glance-meds">
           <span class="k">Medications</span>
           <span class="v">{meds.count}</span>
           <span class="vsub">{meds.names.join(' · ')}</span>

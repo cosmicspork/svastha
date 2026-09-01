@@ -66,6 +66,42 @@ test('spine: imported history + logged data on one timeline', async ({ page }) =
   await page.screenshot({ path: `${OUT}/spine.png` })
 })
 
+test('medications: the whole list filed by route', async ({ page }) => {
+  await onboardViaUI(page)
+  await connectRelayViaUI(page)
+  await importFixtures(page)
+
+  // The fixtures carry meds but no regimen — route and as-needed are the
+  // owner's own curation, and the page's point is what it looks like once
+  // filed. Filing here is a per-fixture table, not a rule: the app never
+  // derives a route from a drug name, and a screenshot fixture must not be the
+  // one place that pretends otherwise.
+  await page.evaluate(async () => {
+    const { setRegimen } = await import('/src/lib/curation.ts')
+    const { allEvents } = await import('/src/lib/events.ts')
+    const { conceptKey } = await import('/src/lib/summary.ts')
+    const filings: Record<string, { route: string; schedule: string; as_needed?: boolean; prescriber?: string }> = {
+      Lisinopril: { route: 'mouth', schedule: 'Twice daily', prescriber: 'Dr. Rivera' },
+      Amoxicillin: { route: 'mouth', schedule: 'Three times daily' },
+      Ondansetron: { route: 'injection', schedule: 'Up to every 8 hours', as_needed: true },
+    }
+    const meds = (await allEvents()).filter(
+      (e: { event: { kind: string } }) => e.event.kind === 'medication_statement',
+    )
+    for (const stored of meds) {
+      const display: string = stored.event.code?.display ?? ''
+      const filing = Object.entries(filings).find(([drug]) => display.includes(drug))?.[1]
+      if (filing) await setRegimen(conceptKey(stored.event), filing)
+    }
+  })
+
+  await page.evaluate(() => {
+    window.location.hash = '#/medications'
+  })
+  await expect(page.getByTestId('medications-page')).toBeVisible()
+  await page.screenshot({ path: `${OUT}/medications.png` })
+})
+
 test('doctor share: what the clinician sees, opened cold', async ({ page, browser }) => {
   await onboardViaUI(page)
   await connectRelayViaUI(page)

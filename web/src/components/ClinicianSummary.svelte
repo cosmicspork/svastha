@@ -6,13 +6,6 @@
     allStatuses,
     allNames,
     allRegimens,
-    setStatus,
-    setName,
-    regimenChanged,
-    setRegimen,
-    normalizeRegimen,
-    REGIMEN_ROUTES,
-    REGIMEN_ROUTE_LABELS,
     type ConceptStatus,
     type Regimen,
   } from '../lib/curation'
@@ -22,7 +15,7 @@
   import { focusedEventId } from '../lib/spine-focus'
   import { navigate } from '../lib/router.svelte'
   import SummarySection from './SummarySection.svelte'
-  import Sheet from './Sheet.svelte'
+  import RowActionSheet from './RowActionSheet.svelte'
 
   // Same contract as Spine.svelte: `readonly` (the person screen, or a doctor
   // share opened cold) supplies its own already-loaded events and skips the
@@ -125,6 +118,12 @@
   // render.
   const currentMeds = $derived(keep(summary.medications.filter((r) => r.status === 'active')))
   const pastMeds = $derived(keep(summary.medications.filter((r) => r.status === 'inactive')))
+  // "As needed" is a sub-group of *current*, not a third status: a PRN med is
+  // one you are still on. Splitting it out keeps the scheduled list — the one a
+  // clinician reads as "what they take every day" — from being padded by meds
+  // taken twice a year.
+  const scheduledMeds = $derived(currentMeds.filter((r) => r.regimen?.as_needed !== true))
+  const prnMeds = $derived(currentMeds.filter((r) => r.regimen?.as_needed === true))
   const activeProblems = $derived(keep(summary.problems.filter((r) => r.status === 'active')))
   const resolvedProblems = $derived(keep(summary.problems.filter((r) => r.status === 'inactive')))
   const allergies = $derived(keep(summary.allergies))
@@ -198,45 +197,8 @@
   // (meds vs. problems drives the status wording). Null when closed.
   type Section = 'med' | 'problem'
   let action = $state<{ row: SummaryRow; section: Section } | null>(null)
-  let nameField = $state('')
-
-  /** The regimen fields, as the form holds them: all strings (an unset route is
-   * `''`, not a missing key) plus the as-needed boolean, so every input can bind
-   * directly. `regimenFromFields` turns them back into a {@link Regimen}. */
-  let regimenFields = $state({
-    dose: '',
-    schedule: '',
-    route: '',
-    as_needed: false,
-    prescriber: '',
-    started: '',
-    stopped: '',
-    instructions: '',
-  })
-
-  function seedRegimenFields(regimen: Regimen | undefined) {
-    regimenFields = {
-      dose: regimen?.dose ?? '',
-      schedule: regimen?.schedule ?? '',
-      route: regimen?.route ?? '',
-      as_needed: regimen?.as_needed === true,
-      prescriber: regimen?.prescriber ?? '',
-      started: regimen?.started ?? '',
-      stopped: regimen?.stopped ?? '',
-      instructions: regimen?.instructions ?? '',
-    }
-  }
-
-  /** The form's fields as a normalized regimen (`undefined` when the owner left
-   * or made it empty — the clear). Normalizing here means the comparison in
-   * `save` and the value written to curation are the same shape. */
-  function regimenFromFields(): Regimen | undefined {
-    return normalizeRegimen(regimenFields)
-  }
 
   function openAction(row: SummaryRow, section: Section) {
-    nameField = nameMap.get(row.key) ?? ''
-    seedRegimenFields(regimenMap.get(row.key))
     action = { row, section }
   }
 
@@ -249,27 +211,6 @@
    * effect re-hydrates. */
   async function reloadCuration() {
     ;[statusMap, nameMap, regimenMap] = await Promise.all([allStatuses(), allNames(), allRegimens()])
-  }
-
-  async function toggleStatus(row: SummaryRow) {
-    await setStatus(row.key, row.status === 'active' ? 'inactive' : 'active')
-    await reloadCuration()
-    closeAction()
-  }
-
-  /** Save the sheet: the name override and (meds only) the regimen, each
-   * written only when it actually changed. Both are mutable `cur-` blobs that
-   * re-sync on every write, so an unchanged field must not be re-stamped. */
-  async function save(row: SummaryRow, isMed: boolean) {
-    // An empty field clears the override (stored as an empty display, not a
-    // delete — see curation.ts's `setName`), falling back to the resolved name.
-    if (nameField.trim() !== (nameMap.get(row.key) ?? '')) await setName(row.key, nameField)
-    if (isMed) {
-      const next = regimenFromFields()
-      if (regimenChanged(regimenMap.get(row.key), next)) await setRegimen(row.key, next ?? {})
-    }
-    await reloadCuration()
-    closeAction()
   }
 
   /** date-part only, parsed as local midnight to avoid a timezone shift on a
@@ -389,9 +330,9 @@
     <div class="split-group">
       <SummarySection
         title="Medications"
-        rows={currentMeds}
+        rows={scheduledMeds}
         hueClass="cat-med"
-        alwaysShow={needle === ''}
+        alwaysShow={needle === '' && prnMeds.length === 0}
         emptyText="None recorded"
         dictionaryEnabled={$dictionaryStatus.enabled}
           {coveredSystems}
@@ -401,6 +342,21 @@
         {onviewtimeline}
         onrowtap={readonly ? undefined : (row) => openAction(row, 'med')}
       />
+      {#if prnMeds.length > 0}
+        <SummarySection
+          title="As needed"
+          rows={prnMeds}
+          hueClass="cat-med"
+          heading="h3"
+          dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
+          curateLabel="Mark past or rename"
+          detailLabel="Dose"
+          {readonly}
+          {onviewtimeline}
+          onrowtap={readonly ? undefined : (row) => openAction(row, 'med')}
+        />
+      {/if}
       {#if pastMeds.length > 0}
         <button
           type="button"
@@ -427,6 +383,18 @@
             onrowtap={readonly ? undefined : (row) => openAction(row, 'med')}
           />
         {/if}
+      {/if}
+      <!-- Owner-only: the medications page reads this device's curation, which
+           a recipient's copy of this component has no route to. -->
+      {#if !readonly}
+        <button
+          type="button"
+          class="ghost all-meds"
+          onclick={() => navigate('#/medications')}
+          data-testid="all-medications-link"
+        >
+          All medications ›
+        </button>
       {/if}
     </div>
 
@@ -612,103 +580,14 @@
   </div>
 
   {#if action && !readonly}
-    {@const row = action.row}
-    {@const isMed = action.section === 'med'}
-    <Sheet onclose={closeAction}>
-      <div class="action-sheet" data-testid="row-action-sheet">
-        <h2 class="action-title">{row.label}</h2>
-
-        <button type="button" class="tonal action" onclick={() => toggleStatus(row)} data-testid="action-toggle-status">
-          {#if row.status === 'active'}
-            {isMed ? 'Mark as past' : 'Mark as resolved'}
-          {:else}
-            {isMed ? 'Mark as current' : 'Mark as active'}
-          {/if}
-        </button>
-
-        <label class="name-field">
-          <span class="name-label">Edit name</span>
-          <input type="text" bind:value={nameField} placeholder={row.label} data-testid="action-name-input" />
-          <span class="name-hint muted">Clear the field to remove a custom name.</span>
-        </label>
-
-        {#if isMed}
-          <!-- How this medication is actually taken. None of it comes from the
-               event log — an imported `medication_statement` carries at most a
-               dose quantity — so every field is the owner's own words, and an
-               empty one stays empty rather than being guessed at. -->
-          <div class="regimen-fields">
-            <label class="name-field">
-              <span class="name-label">Dose</span>
-              <input type="text" bind:value={regimenFields.dose} placeholder="10 mg" data-testid="action-dose-input" />
-            </label>
-
-            <label class="name-field">
-              <span class="name-label">Schedule</span>
-              <input
-                type="text"
-                bind:value={regimenFields.schedule}
-                placeholder="Twice daily"
-                data-testid="action-schedule-input"
-              />
-            </label>
-
-            <label class="name-field">
-              <span class="name-label">Route</span>
-              <select bind:value={regimenFields.route} data-testid="action-route-select">
-                <option value="">—</option>
-                {#each REGIMEN_ROUTES as route (route)}
-                  <option value={route}>{REGIMEN_ROUTE_LABELS[route]}</option>
-                {/each}
-              </select>
-            </label>
-
-            <label class="check-field">
-              <input type="checkbox" bind:checked={regimenFields.as_needed} data-testid="action-as-needed" />
-              <span class="name-label">As needed</span>
-            </label>
-
-            <label class="name-field">
-              <span class="name-label">Prescriber</span>
-              <input
-                type="text"
-                bind:value={regimenFields.prescriber}
-                placeholder="Dr. Rivera"
-                data-testid="action-prescriber-input"
-              />
-            </label>
-
-            <div class="date-fields">
-              <label class="name-field">
-                <span class="name-label">Started</span>
-                <input type="date" bind:value={regimenFields.started} data-testid="action-started-input" />
-              </label>
-              <label class="name-field">
-                <span class="name-label">Stopped</span>
-                <input type="date" bind:value={regimenFields.stopped} data-testid="action-stopped-input" />
-              </label>
-            </div>
-
-            <label class="name-field">
-              <span class="name-label">Instructions</span>
-              <textarea
-                rows="2"
-                bind:value={regimenFields.instructions}
-                placeholder="Take with food"
-                data-testid="action-instructions-input"
-              ></textarea>
-            </label>
-          </div>
-        {/if}
-
-        <div class="action-buttons">
-          <button type="button" class="ghost" onclick={closeAction} data-testid="action-cancel">Cancel</button>
-          <button type="button" class="primary" onclick={() => save(row, isMed)} data-testid="action-save">
-            Save
-          </button>
-        </div>
-      </div>
-    </Sheet>
+    <RowActionSheet
+      row={action.row}
+      section={action.section}
+      name={nameMap.get(action.row.key) ?? ''}
+      regimen={regimenMap.get(action.row.key)}
+      onclose={closeAction}
+      onsaved={reloadCuration}
+    />
   {/if}
 {/if}
 
@@ -779,65 +658,11 @@
     margin-bottom: var(--space-2);
   }
 
-  .action-sheet {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-4);
-  }
-
-  .action-title {
-    font-family: var(--font-display);
-    font-size: var(--text-lg);
-    margin: 0;
-    overflow-wrap: anywhere;
-  }
-
-  .action.tonal {
-    width: 100%;
-  }
-
-  .name-field {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-  }
-
-  .name-label {
+  .all-meds {
+    min-height: 36px;
+    padding: var(--space-1) var(--space-2);
     font-size: var(--text-sm);
-  }
-
-  .name-hint {
-    font-size: var(--text-xs);
-  }
-
-  .regimen-fields {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
-  }
-
-  .check-field {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-  }
-
-  /* Started/Stopped read as one course, and two date inputs fit a phone width
-     side by side. */
-  .date-fields {
-    display: flex;
-    gap: var(--space-3);
-  }
-
-  .date-fields .name-field {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .action-buttons {
-    display: flex;
-    justify-content: flex-end;
-    gap: var(--space-2);
+    color: var(--action);
   }
 
   .coverage {
@@ -908,7 +733,13 @@
      unbroken block, and none of the app chrome (nav, the log FAB, the view
      toggle, the print button itself, tag chips). The :global rules reach the
      chrome that lives outside this component; they only apply while the summary
-     view — and thus this component — is mounted. */
+     view — and thus this component — is mounted.
+
+     TWIN: routes/Medications.svelte carries a near-identical block, and the two
+     must change together. Svelte styles are component-scoped, so a shared
+     stylesheet would have to give up the `.summary`-scoped :global rules that
+     keep these from leaking onto every other screen. Duplication is the cheaper
+     honesty. */
   @media print {
     :global(body) {
       background: #fff;
@@ -925,7 +756,8 @@
     }
     .print-btn,
     .filter-row,
-    .collapse-toggle {
+    .collapse-toggle,
+    .all-meds {
       display: none;
     }
     /* Codes live in the expanded panel on screen, where they're one tap away.

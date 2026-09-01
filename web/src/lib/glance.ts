@@ -203,7 +203,9 @@ export interface MedsGlance {
 
 /** Distinct medications on record, most-recently-logged names first. Approximate
  * — without a stop date every `medication_statement` counts, so this reads as
- * "medications on record", not a reconciled active list (that's the Summary). */
+ * "medications on record", not a reconciled active list (that's the medications
+ * page, `#/medications`, which the card taps through to — it splits current
+ * from past on the owner's `status:` curation and shelves by route). */
 export function medicationGlance(events: StoredEvent[], limit = 4): MedsGlance {
   const names: string[] = []
   const seen = new Set<string>()
