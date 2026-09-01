@@ -1162,13 +1162,21 @@ The bundle's internal structure is app-level (opaque to the relay, documented in
 `docs/ARCHITECTURE.md`). A bundle **MAY** carry an optional `curation` array of
 `SignedCurationRecord`s (see "Curation record" above) alongside its `events`, so
 a share can include the owner's per-concept **status** (current/past,
-active/resolved) and **name** overrides:
+active/resolved), **name** overrides, and **regimen** (how a medication is
+actually taken):
 
-- Only the `status:` and `name:` namespaces cross the vault boundary — never
-  `tag:`/`hide:`/`note:`/`fav:` (the owner's private working state) — and only
-  for a concept some event in the same bundle folds into. A record for an
-  excluded concept is never carried, so the array cannot leak the shape of what
-  the scope left out.
+- Only the `status:`, `name:`, and `regimen:` namespaces cross the vault
+  boundary — never `tag:`/`hide:`/`note:`/`fav:` (the owner's private working
+  state) — and only for a concept some event in the same bundle folds into. A
+  record for an excluded concept is never carried, so the array cannot leak the
+  shape of what the scope left out.
+- A `regimen:` value is `{ dose?, schedule?, route?, as_needed?, prescriber?,
+  started?, stopped?, instructions? }` — `route` one of `mouth | nose | eyes |
+  skin | inhaled | injection | other`, `started`/`stopped` ISO `YYYY-MM-DD`,
+  `as_needed` a boolean, everything else free text. A verified record is only
+  *authentic*, not *well-formed*: the value rides opaque to the signature, so a
+  recipient **MUST** shape-check it tolerantly on read — drop an unknown or
+  wrong-typed field rather than repair it, and never let one crash a render.
 - The recipient **verifies each record's signature against the bundle's declared
   `signer`** — the same signer every event's `author` is pinned to — and **drops
   (and counts) any that fail**, exactly as it does a tampered or spliced event.
@@ -1176,8 +1184,11 @@ active/resolved) and **name** overrides:
   dropped; a share recipient outside the vault cannot grandfather an unsigned
   record the way a device merging its own vault can.
 
-The field is optional and additive: a bundle from before it existed omits it and
-opens identically, and a recipient that predates it ignores the unknown field.
+The field is optional and additive, in both directions and per namespace: a
+bundle from before it existed omits it and opens identically, a recipient that
+predates it ignores the unknown field, and a recipient predating one of the
+namespaces verifies those records and then skips them when reducing by prefix.
+Adding a namespace to the list therefore does not move the bundle version.
 This is the reason the curation record is signed and its verification lives in
 the trust contract.
 

@@ -106,18 +106,25 @@ handoff to a *keyless* one. The wire contract is `spec/README.md`'s "Shares"
 section.
 
 A share bundle also carries the owner's per-concept **curation** — the `status:`
-(current/past, active/resolved) and `name:` overrides for the concepts its
-events fold into — as signed records alongside the events, so the recipient's
-clinician summary shows the owner's real current-vs-past list and display-name
-overrides, not a flat all-active guess. Only those two namespaces cross the
-boundary (never tags, hides, notes, or favorites), and only for concepts
-actually in the bundle. The recipient **verifies each record against the same
+(current/past, active/resolved), `name:` (display overrides), and `regimen:`
+(how a medication is actually taken) records for the concepts its events fold
+into — as signed records alongside the events, so the recipient's clinician
+summary shows the owner's real current-vs-past list, display-name overrides, and
+schedule/route/prescriber detail, not a flat all-active guess. Only those three
+namespaces cross the boundary (never tags, hides, notes, or favorites), and only
+for concepts actually in the bundle. The recipient **verifies each record against the same
 signer that signed the events and drops any that fail** — the point of signing
 curation: a keyless recipient holds the per-share key but is not the author, so
 only a signature, not the AEAD seal, can attest a record wasn't tampered with in
 transit. The create side excludes past-medication events by default (a
 current-only list), with an opt-in to include them; resolved problems always
-ride along, since a resolved problem is informative history.
+ride along, since a resolved problem is informative history. That ordering is
+load-bearing for `regimen:` too: the meds-scope filter runs *before* the
+curation narrowing, so an excluded past medication has no concept in the bundle
+and its regimen is dropped with it — the carriage cannot hint at a medication
+the share left out. Adding a namespace here is additive: the array is tagged by
+each record's own key, so a recipient predating `regimen:` verifies those
+records and then ignores them, and the bundle version does not move.
 
 Identity exchange for this slice is a single self-describing code —
 `svastha1:{ed25519_hex}:{x25519_hex}:{label}` — shown as a QR and as
@@ -268,10 +275,9 @@ their own working state, not something to project onto someone reading their
 shared record. The one exception is the *doctor share*, which bundles the
 owner's `status:`/`name:` records for the shared concepts inside the sealed
 bundle (not via a `cur-*` pull) so the clinician summary reads correctly; tags,
-hides, notes, favorites, and `regimen:` still never leave the vault. Regimen is
-owner-only today — it renders on the owner's own summary and nowhere else; a
-later change carries it in doctor-share bundles, and this paragraph is the
-place to say so when it does.
+hides, notes, and favorites still never leave the vault. `regimen:` crosses only
+inside a doctor-share bundle, verify-or-drop, for the concepts that bundle
+already carries — never through a `cur-*` pull and never to a household grant.
 
 **Favorites migration.** Favorited quick-log templates used to live in a
 single device-local `prefs` key; they now live under `fav:` curation records
