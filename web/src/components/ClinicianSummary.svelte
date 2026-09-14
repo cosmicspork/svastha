@@ -740,8 +740,8 @@
      chrome that lives outside this component; they only apply while the summary
      view — and thus this component — is mounted.
 
-     TWIN: routes/Medications.svelte carries a near-identical block, and the two
-     must change together. Svelte styles are component-scoped, so a shared
+     TWIN: routes/Medications.svelte and components/PharmacyMedList.svelte
+     carry near-identical blocks, and all three must change together. Svelte styles are component-scoped, so a shared
      stylesheet would have to give up the `.summary`-scoped :global rules that
      keep these from leaking onto every other screen. Duplication is the cheaper
      honesty. */

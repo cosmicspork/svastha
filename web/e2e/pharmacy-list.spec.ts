@@ -271,3 +271,35 @@ test('stacks the row on a phone and keeps it side by side on a wide screen', asy
   const narrowPrescriber = await prescriber.boundingBox()
   expect(narrowPrescriber!.y).toBeGreaterThan(narrowName!.y + narrowName!.height - 1)
 })
+
+test('printing carries the past meds and drops the on-screen chrome', async ({ page }) => {
+  await onboardViaUI(page)
+  await seedMeds(page)
+  await seedRegimens(page, { '29046': { route: 'mouth' } })
+  await setStatusFor(page, '723', 'inactive') // Amoxicillin → past
+  await page.reload()
+  await unlock(page)
+  await openPharmacy(page)
+
+  const past = page.getByTestId('pharmacy-group').filter({ hasText: 'Amoxicillin' })
+  await expect(past).toBeHidden()
+
+  await page.emulateMedia({ media: 'print' })
+
+  // Paper has no toggle: a printed list that silently dropped the recently
+  // stopped meds is the one a pharmacist most needs.
+  await expect(past).toBeVisible()
+  await expect(page.getByTestId('pharmacy-past-toggle')).toBeHidden()
+  await expect(page.getByTestId('pharmacy-print')).toBeHidden()
+  // Numbering is unchanged by the reveal — the same line is still number 4.
+  // Only Lisinopril is filed here, so the other two lead as unrouted.
+  expect(await rowLines(page)).toEqual([
+    '1 Albuterol',
+    '2 Metformin',
+    '3 Lisinopril',
+    '4 Amoxicillin',
+  ])
+
+  await page.emulateMedia({ media: 'screen' })
+  await expect(past).toBeHidden()
+})

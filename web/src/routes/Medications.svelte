@@ -261,8 +261,9 @@
 
   /* Print: the same black-on-white handoff the summary produces.
 
-     TWIN: components/ClinicianSummary.svelte carries a near-identical block,
-     and the two must change together. Svelte styles are component-scoped, so
+     TWIN: components/ClinicianSummary.svelte and
+     components/PharmacyMedList.svelte carry near-identical blocks, and all
+     three must change together. Svelte styles are component-scoped, so
      this cannot be shared without giving up the scoping that keeps the :global
      rules off every other screen. */
   @media print {

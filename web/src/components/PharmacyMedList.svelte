@@ -366,6 +366,83 @@
     gap: var(--space-1);
   }
 
+  /* Print: the black-on-white handoff a pharmacist can keep. The list owns
+     this block rather than the page, so a share recipient who prints the same
+     component gets the same paper.
+
+     TWIN: routes/Medications.svelte and components/ClinicianSummary.svelte
+     carry near-identical blocks; all three must change together. Svelte styles
+     are component-scoped, so sharing one stylesheet would give up the scoping
+     that keeps these rules off every other screen. */
+  @media print {
+    :global(body) {
+      background: #fff;
+      color: #000;
+    }
+
+    :global(.app-header),
+    :global(.fab),
+    :global(.layer) {
+      display: none !important;
+    }
+
+    .collapse-toggle {
+      display: none;
+    }
+
+    /* Paper has no toggle, so the past meds print whether or not the reader
+       opened them on screen — a med list missing its recently-stopped entries
+       is the one a pharmacist most needs to see. */
+    .past-group {
+      display: block !important;
+    }
+
+    .header-card {
+      box-shadow: none;
+      border-color: #000;
+    }
+
+    .chip {
+      border: 1px solid #000;
+      background: none !important;
+      color: #000;
+    }
+
+    /* Every hue collapses to ink: the category dot, the muted captions and the
+       past-med greys all have to survive a monochrome printer. */
+    .group-head,
+    .group-count,
+    .num,
+    .fact dt,
+    .fact dd,
+    .card-heading,
+    .allergy-note,
+    .provenance,
+    .med[data-past='true'] .name,
+    .med[data-past='true'] .dose,
+    .med[data-past='true'] .sig,
+    .med[data-past='true'] .num {
+      color: #000;
+    }
+
+    .dot {
+      background: #000;
+    }
+
+    .group,
+    .med {
+      break-inside: avoid;
+    }
+
+    /* Paper is read at reading distance, and ink is dearer than pixels. */
+    .pharmacy,
+    .pharmacy[data-size='counter'] {
+      --ph-name: 1.125rem;
+      --ph-dose: 1rem;
+      --ph-fact: 0.9375rem;
+    }
+  }
+
   /* Phone: the row becomes a card so nothing sits beside anything else, and the
      scale grows — this list is read at arm's length, not held up close. */
   @media (max-width: 40rem) {

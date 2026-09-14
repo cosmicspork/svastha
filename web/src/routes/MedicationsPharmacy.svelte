@@ -68,7 +68,20 @@
 
 {#if loaded}
   <div class="page" data-testid="medications-pharmacy-page">
-    <h1 class="page-heading">For the pharmacy</h1>
+    <div class="toolbar">
+      <h1 class="page-heading">For the pharmacy</h1>
+      <button
+        type="button"
+        class="ghost print-btn"
+        onclick={() => window.print()}
+        data-testid="pharmacy-print"
+      >
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M6 9V3h12v6" /><path d="M6 18H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2" /><rect x="6" y="14" width="12" height="7" rx="1" />
+        </svg>
+        Print
+      </button>
+    </div>
     <p class="lede muted">
       Every medication on record, numbered, with its dose, directions and prescriber.
     </p>
@@ -78,13 +91,41 @@
 {/if}
 
 <style>
+  .toolbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-bottom: var(--space-2);
+  }
+
   .page-heading {
-    margin: 0 0 var(--space-2);
+    margin: 0;
+  }
+
+  .print-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 36px;
+    min-width: 0;
+    font-size: var(--text-sm);
+    flex: none;
   }
 
   .lede {
     font-size: var(--text-sm);
     margin-bottom: var(--space-5);
     max-width: 34rem;
+  }
+
+  /* The list component carries the rest of the print styling (see its TWIN
+     note); the page only has to take its own chrome off the paper. */
+  @media print {
+    .print-btn,
+    .lede {
+      display: none;
+    }
   }
 </style>
