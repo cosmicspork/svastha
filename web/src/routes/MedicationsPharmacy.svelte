@@ -15,8 +15,11 @@
   import { get } from '../lib/db'
   import { session } from '../lib/session.svelte'
   import { RelayClient } from '../lib/relay'
+  import { buildPharmacyPdf, pharmacyPdfFilename } from '../lib/pharmacyPdf'
+  import { shareOrDownload } from '../lib/export'
   import PharmacyMedList from '../components/PharmacyMedList.svelte'
   import DoctorShareSheet from '../components/DoctorShareSheet.svelte'
+  import Sheet from '../components/Sheet.svelte'
 
   // The pharmacy handoff: the med list as someone filling a prescription needs
   // it. Owner-only, like the Medications page it hangs off — it reads this
@@ -36,6 +39,53 @@
   let relayUrl = $state('')
   let relay = $state<RelayClient | null>(null)
   let shareOpen = $state(false)
+  let chooserOpen = $state(false)
+  let pdfError = $state('')
+
+  // A file share is a plain copy, and saying so is the same honesty the
+  // doctor-share sheet applies to its own file path.
+  const PDF_HONEST_COPY =
+    'A PDF is a plain copy: it never expires, cannot be revoked, and whoever holds it can read ' +
+    'it. Hand it over the way you would a printout.'
+
+  // Built when the chooser opens, not when the button is tapped: iOS grants a
+  // tap a short window in which navigator.share may be called, and rendering a
+  // PDF inside that window can spend it, leaving the share to fail.
+  let pdfBytes: Uint8Array | null = null
+  let pdfPending: Promise<Uint8Array> | null = null
+
+  function startPdf(): void {
+    pdfError = ''
+    pdfBytes = null
+    pdfPending = buildPharmacyPdf(
+      summary.medications,
+      summary.allergies.map((a) => a.label),
+      createdAt,
+    )
+    void pdfPending
+      .then((bytes) => (pdfBytes = bytes))
+      .catch(() => (pdfError = 'The PDF could not be built. Print the list instead.'))
+  }
+
+  async function sharePdf(): Promise<void> {
+    try {
+      const bytes = pdfBytes ?? (await (pdfPending ?? buildPharmacyPdf(
+        summary.medications,
+        summary.allergies.map((a) => a.label),
+        createdAt,
+      )))
+      const name = pharmacyPdfFilename(new Date())
+      // A fresh ArrayBuffer copy: some engines reject a File over a view onto
+      // a larger buffer.
+      const file = new File([bytes.slice().buffer as ArrayBuffer], name, {
+        type: 'application/pdf',
+      })
+      await shareOrDownload(file)
+      chooserOpen = false
+    } catch {
+      pdfError = 'The PDF could not be built. Print the list instead.'
+    }
+  }
 
   let dictionary = $state<Map<string, string>>(new Map())
   $effect(() => {
@@ -90,7 +140,10 @@
       <button
         type="button"
         class="ghost print-btn"
-        onclick={() => (shareOpen = true)}
+        onclick={() => {
+          chooserOpen = true
+          startPdf()
+        }}
         data-testid="pharmacy-share"
       >
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -131,6 +184,35 @@
     />
   </div>
 
+  {#if chooserOpen}
+    <Sheet onclose={() => (chooserOpen = false)}>
+      <section class="chooser">
+        <h2>Share this list</h2>
+        <button
+          type="button"
+          class="choice"
+          onclick={() => {
+            chooserOpen = false
+            shareOpen = true
+          }}
+          data-testid="pharmacy-share-link"
+        >
+          <span class="choice-name">Link or QR code</span>
+          <span class="choice-sub muted"
+            >Medications only. Expires on its own, and you can revoke it.</span
+          >
+        </button>
+        <button type="button" class="choice" onclick={sharePdf} data-testid="pharmacy-share-pdf">
+          <span class="choice-name">PDF</span>
+          <span class="choice-sub muted">{PDF_HONEST_COPY}</span>
+        </button>
+        {#if pdfError}
+          <p class="error" data-testid="pharmacy-pdf-error">{pdfError}</p>
+        {/if}
+      </section>
+    </Sheet>
+  {/if}
+
   {#if shareOpen}
     <!-- Medications only, and not negotiable from inside the sheet: someone
          sharing from this page is sharing this list. Past meds stay the sheet's
@@ -147,6 +229,28 @@
 {/if}
 
 <style>
+  .chooser {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .choice {
+    display: grid;
+    gap: var(--space-1);
+    text-align: left;
+    padding: var(--space-3);
+    min-height: 44px;
+  }
+
+  .choice-name {
+    font-size: var(--text-base);
+  }
+
+  .choice-sub {
+    font-size: var(--text-sm);
+    line-height: 1.4;
+  }
+
   .toolbar {
     display: flex;
     align-items: center;

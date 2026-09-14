@@ -13,6 +13,7 @@ import {
   encryptedExportFilename,
   ExportParseError,
   ForeignIdentityError,
+  shareOrDownload,
   type ParsedEncryptedExport,
   type ImportEncryptedExportDeps,
 } from '../export'
@@ -353,5 +354,77 @@ describe('importEncryptedExport', () => {
       keyBytes: () => new Uint8Array([1, 2, 3]),
     })
     expect(fresh.staleVaultKey).toBe(false)
+  })
+})
+
+describe('shareOrDownload', () => {
+  const file = new File(['%PDF-1.7'], 'svastha-medications-2026-09-14.pdf', {
+    type: 'application/pdf',
+  })
+
+  /** A recording stand-in for the download fallback. */
+  function saver() {
+    const calls: string[] = []
+    return { calls, download: (filename: string) => calls.push(filename) }
+  }
+
+  it('shares when the browser accepts the file', async () => {
+    const shared: unknown[] = []
+    const { calls, download } = saver()
+    const outcome = await shareOrDownload(file, {
+      nav: { share: async (d) => void shared.push(d), canShare: () => true },
+      download,
+    })
+    expect(outcome).toBe('shared')
+    expect(shared).toHaveLength(1)
+    expect(calls).toEqual([]) // never both
+  })
+
+  // Adversarial: the three ways a browser can look shareable and not be.
+  it.each([
+    ['no Web Share at all', {}],
+    ['share without canShare', { share: async () => {} }],
+    ['canShare that rejects files', { share: async () => {}, canShare: () => false }],
+  ] as [string, { share?: Navigator['share']; canShare?: Navigator['canShare'] }][])(
+    'downloads with %s',
+    async (_label, nav) => {
+      const { calls, download } = saver()
+      expect(await shareOrDownload(file, { nav, download })).toBe('downloaded')
+      expect(calls).toEqual([file.name])
+    },
+  )
+
+  // Dismissing the sheet is a decision. Downloading anyway would leave a copy
+  // of a medication list on disk that the person just declined to send.
+  it('does nothing when the user dismisses the share sheet', async () => {
+    const { calls, download } = saver()
+    const abort = Object.assign(new Error('dismissed'), { name: 'AbortError' })
+    const outcome = await shareOrDownload(file, {
+      nav: {
+        share: async () => {
+          throw abort
+        },
+        canShare: () => true,
+      },
+      download,
+    })
+    expect(outcome).toBe('cancelled')
+    expect(calls).toEqual([])
+  })
+
+  it('falls back when the share fails for any other reason', async () => {
+    const { calls, download } = saver()
+    const denied = Object.assign(new Error('not allowed'), { name: 'NotAllowedError' })
+    const outcome = await shareOrDownload(file, {
+      nav: {
+        share: async () => {
+          throw denied
+        },
+        canShare: () => true,
+      },
+      download,
+    })
+    expect(outcome).toBe('downloaded')
+    expect(calls).toEqual([file.name])
   })
 })

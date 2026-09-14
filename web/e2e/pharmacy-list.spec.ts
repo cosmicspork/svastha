@@ -337,3 +337,95 @@ test('counter size enlarges the list and is remembered', async ({ page }) => {
   await expect(page.getByTestId('pharmacy-size-counter')).toBeHidden()
   await page.emulateMedia({ media: 'screen' })
 })
+
+test('shares the list as a PDF, downloading where the OS has no share sheet', async ({ page }) => {
+  await onboardViaUI(page)
+  await seedMeds(page)
+  await seedRegimens(page, { '29046': { route: 'mouth', dose: '10 mg tablet' } })
+  await page.reload()
+  await unlock(page)
+  await openPharmacy(page)
+
+  // Hide one med first: whatever leaves this page must show what the page shows.
+  await page.evaluate(
+    async ({ rxnorm }) => {
+      const { allEvents } = await import('/src/lib/events.ts')
+      const { setHidden } = await import('/src/lib/curation.ts')
+      for (const stored of await allEvents()) {
+        if (stored.event.code?.system === rxnorm && stored.event.code?.code === '6809') {
+          await setHidden(stored.event.id, true)
+        }
+      }
+    },
+    { rxnorm: RXNORM },
+  )
+  await page.reload()
+  await unlock(page)
+  await openPharmacy(page)
+
+  // Chromium on Linux has no Web Share API, so this exercises the fallback.
+  await page.getByTestId('pharmacy-share').click()
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByTestId('pharmacy-share-pdf').click()
+  const download = await downloadPromise
+
+  expect(download.suggestedFilename()).toMatch(/^svastha-medications-\d{4}-\d{2}-\d{2}\.pdf$/)
+  const path = await download.path()
+  const bytes = (await import('node:fs')).readFileSync(path!)
+  expect(bytes.subarray(0, 5).toString('latin1')).toBe('%PDF-')
+
+  // The words actually in the file, read back through the app's own PDF text
+  // layer — a header check alone would pass on an empty document.
+  const text = await page.evaluate(async (data) => {
+    const { textLayer } = await import('/src/lib/pdf.ts')
+    const lines = await textLayer(new Uint8Array(data))
+    return lines.map((l) => l.text).join('\n')
+  }, [...bytes])
+
+  expect(text).toContain('Lisinopril')
+  expect(text).toContain('10 mg tablet')
+  expect(text).toContain('1. ')
+  // The hidden med is absent from the file, as it is from the page.
+  expect(text).not.toContain('Metformin')
+  await expect(page.getByTestId('pharmacy-pdf-error')).toHaveCount(0)
+})
+
+test('uses the OS share sheet when the browser has one', async ({ page }) => {
+  // Stub Web Share before any app code runs, and record what it receives.
+  await page.addInitScript(() => {
+    const w = window as unknown as { __shared?: { name: string; type: string }[] }
+    w.__shared = []
+    Object.defineProperty(navigator, 'canShare', { value: () => true, configurable: true })
+    Object.defineProperty(navigator, 'share', {
+      configurable: true,
+      value: async (data: { files?: File[] }) => {
+        for (const f of data.files ?? []) w.__shared!.push({ name: f.name, type: f.type })
+      },
+    })
+  })
+
+  await onboardViaUI(page)
+  await seedMeds(page)
+  await page.reload()
+  await unlock(page)
+  await openPharmacy(page)
+
+  let downloaded = false
+  page.on('download', () => (downloaded = true))
+
+  await page.getByTestId('pharmacy-share').click()
+  await page.getByTestId('pharmacy-share-pdf').click()
+
+  await expect
+    .poll(async () =>
+      page.evaluate(() => (window as unknown as { __shared: unknown[] }).__shared.length),
+    )
+    .toBe(1)
+  const shared = await page.evaluate(
+    () => (window as unknown as { __shared: { name: string; type: string }[] }).__shared[0],
+  )
+  expect(shared.type).toBe('application/pdf')
+  expect(shared.name).toMatch(/^svastha-medications-/)
+  // Shared, so never also saved to disk.
+  expect(downloaded).toBe(false)
+})

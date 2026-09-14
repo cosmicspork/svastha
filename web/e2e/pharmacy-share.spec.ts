@@ -51,7 +51,9 @@ async function openShareSheet(page: Page): Promise<void> {
     window.location.hash = '#/medications/pharmacy'
   })
   await expect(page.getByTestId('medications-pharmacy-page')).toBeVisible({ timeout: 15_000 })
+  // Share offers two ways out of the page; this is the link one.
   await page.getByTestId('pharmacy-share').click()
+  await page.getByTestId('pharmacy-share-link').click()
   await expect(page.getByTestId('share-scope-locked')).toBeVisible({ timeout: 15_000 })
 }
 
