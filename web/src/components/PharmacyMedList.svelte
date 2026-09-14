@@ -1,5 +1,6 @@
 <script lang="ts">
   import { buildPharmacyGroups, pharmacyRowCount } from '../lib/pharmacy'
+  import type { ListSize } from '../lib/pharmacyPrefs'
   import type { SummaryRow } from '../lib/summary'
 
   // The pharmacy handoff, rendered identically wherever it appears: the owner's
@@ -12,7 +13,8 @@
     medications,
     allergies,
     createdAt,
-    size = 'standard',
+    size = $bindable('standard'),
+    showSizeControl = true,
   }: {
     /** `buildSummary(...).medications` — the host folds, so hidden entries are
      * already gone and this component never reads the vault. */
@@ -25,8 +27,13 @@
     createdAt: string
     /** Counter mode enlarges the name, dose and prescriber so a phone can be
      * read across a counter. Not a page zoom: the numbers a pharmacist needs
-     * grow, the chrome does not. */
-    size?: 'standard' | 'counter'
+     * grow, the chrome does not. Bindable, because the host decides whether
+     * the choice is remembered — the owner's page persists it, a share
+     * recipient (who has no vault) keeps it for the tab. */
+    size?: ListSize
+    /** Hidden where the list is embedded in something that has its own
+     * controls, such as a share preview. */
+    showSizeControl?: boolean
   } = $props()
 
   const groups = $derived(buildPharmacyGroups(medications))
@@ -51,6 +58,25 @@
 </script>
 
 <div class="pharmacy" data-size={size} data-testid="pharmacy-list">
+  {#if showSizeControl}
+    <div class="seg size-control" role="group" aria-label="Text size">
+      <button
+        type="button"
+        aria-pressed={size === 'standard'}
+        onclick={() => (size = 'standard')}
+        data-testid="pharmacy-size-standard">Standard</button
+      >
+      <!-- "Counter" names where it is used, not how big it is: the choice is
+           whether the phone is read in the hand or across a counter. -->
+      <button
+        type="button"
+        aria-pressed={size === 'counter'}
+        onclick={() => (size = 'counter')}
+        data-testid="pharmacy-size-counter">Counter</button
+      >
+    </div>
+  {/if}
+
   <section class="header-card" aria-labelledby="pharmacy-allergies-heading">
     <h2 class="card-heading" id="pharmacy-allergies-heading">Drug allergies</h2>
     {#if allergies === null}
@@ -162,6 +188,11 @@
     --ph-name: var(--text-2xl);
     --ph-dose: var(--text-xl);
     --ph-fact: var(--text-lg);
+  }
+
+  .size-control {
+    max-width: 20rem;
+    margin-bottom: var(--space-4);
   }
 
   /* The one lifted surface: allergies are what a pharmacist checks before
@@ -386,7 +417,8 @@
       display: none !important;
     }
 
-    .collapse-toggle {
+    .collapse-toggle,
+    .size-control {
       display: none;
     }
 

@@ -11,6 +11,7 @@
   } from '../lib/curation'
   import { buildSummary } from '../lib/summary'
   import { loadDictionaryIndex, dictionaryStatus } from '../lib/dictionary'
+  import { loadListSize, setListSize, type ListSize } from '../lib/pharmacyPrefs'
   import PharmacyMedList from '../components/PharmacyMedList.svelte'
 
   // The pharmacy handoff: the med list as someone filling a prescription needs
@@ -23,6 +24,7 @@
   let nameMap = $state<Map<string, string>>(new Map())
   let regimenMap = $state<Map<string, Regimen>>(new Map())
   let loaded = $state(false)
+  let size = $state<ListSize>('standard')
 
   let dictionary = $state<Map<string, string>>(new Map())
   $effect(() => {
@@ -57,10 +59,11 @@
         .filter((r) => (r.value as { hidden?: boolean } | undefined)?.hidden === true)
         .map((r) => r.key.slice('hide:'.length)),
     )
-    ;[statusMap, nameMap, regimenMap] = await Promise.all([
+    ;[statusMap, nameMap, regimenMap, size] = await Promise.all([
       allStatuses(),
       allNames(),
       allRegimens(),
+      loadListSize(),
     ])
     loaded = true
   })
@@ -86,7 +89,20 @@
       Every medication on record, numbered, with its dose, directions and prescriber.
     </p>
 
-    <PharmacyMedList medications={summary.medications} allergies={summary.allergies} {createdAt} />
+    <!-- The size is persisted here rather than inside the list: the list is
+         also rendered where there is no vault to write to. -->
+    <PharmacyMedList
+      medications={summary.medications}
+      allergies={summary.allergies}
+      {createdAt}
+      bind:size={
+        () => size,
+        (next) => {
+          size = next
+          void setListSize(next)
+        }
+      }
+    />
   </div>
 {/if}
 

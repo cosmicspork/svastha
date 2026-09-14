@@ -303,3 +303,37 @@ test('printing carries the past meds and drops the on-screen chrome', async ({ p
   await page.emulateMedia({ media: 'screen' })
   await expect(past).toBeHidden()
 })
+
+test('counter size enlarges the list and is remembered', async ({ page }) => {
+  await onboardViaUI(page)
+  await seedMeds(page)
+  await page.reload()
+  await unlock(page)
+  await openPharmacy(page)
+
+  const name = page
+    .getByTestId('pharmacy-row')
+    .filter({ hasText: 'Lisinopril' })
+    .getByTestId('pharmacy-name')
+  const fontSize = () => name.evaluate((el) => parseFloat(getComputedStyle(el).fontSize))
+
+  await expect(page.getByTestId('pharmacy-list')).toHaveAttribute('data-size', 'standard')
+  const standard = await fontSize()
+
+  await page.getByTestId('pharmacy-size-counter').click()
+  await expect(page.getByTestId('pharmacy-list')).toHaveAttribute('data-size', 'counter')
+  expect(await fontSize()).toBeGreaterThan(standard)
+
+  // Persisted, not per-visit: someone who reads this across a counter needs it
+  // at that size every time.
+  await page.reload()
+  await unlock(page)
+  await openPharmacy(page)
+  await expect(page.getByTestId('pharmacy-list')).toHaveAttribute('data-size', 'counter')
+  await expect(page.getByTestId('pharmacy-size-counter')).toHaveAttribute('aria-pressed', 'true')
+
+  // The control is chrome, so it stays off the paper.
+  await page.emulateMedia({ media: 'print' })
+  await expect(page.getByTestId('pharmacy-size-counter')).toBeHidden()
+  await page.emulateMedia({ media: 'screen' })
+})
