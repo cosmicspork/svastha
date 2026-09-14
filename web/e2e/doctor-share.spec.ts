@@ -561,3 +561,85 @@ async function openAsRecipient(
   })
   return page
 }
+
+// Hiding an entry is how someone takes it off their own screens. A share that
+// carried it anyway would hand a stranger exactly what the owner had put away,
+// so the sheet filters hidden events before it scopes anything: the count, the
+// preview and the sealed bundle all see one visible set.
+test('a hidden entry never reaches the bundle', async ({ page }) => {
+  await onboardViaUI(page)
+  await connectRelayViaUI(page)
+  await logFood(page, 'Porridge')
+  await logFood(page, 'Walnuts')
+
+  // The sheet reads events once, on mount, so each pass reopens it rather than
+  // expecting a live update.
+  const openSheet = async (): Promise<void> => {
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('share-count')).toBeHidden()
+    await page.evaluate(() => {
+      window.location.hash = '#/share/doctor'
+    })
+    await page.getByTestId('new-doctor-link').click()
+    await expect(page.getByTestId('share-count')).toBeVisible()
+  }
+
+  await openSheet()
+  const before = (await page.getByTestId('share-count').innerText()).trim()
+  await expect(page.getByTestId('share-count')).toContainText('2')
+
+  // Hide one of the two, through the same signed curation path the row action
+  // uses, then reopen the sheet.
+  const hiddenId = await page.evaluate(async () => {
+    const { allEvents } = await import('/src/lib/events.ts')
+    const { setHidden } = await import('/src/lib/curation.ts')
+    const walnuts = (await allEvents()).find((se) =>
+      JSON.stringify(se.event.value ?? '').includes('Walnuts'),
+    )
+    await setHidden(walnuts!.event.id, true)
+    return walnuts!.event.id
+  })
+
+  await openSheet()
+  const after = (await page.getByTestId('share-count').innerText()).trim()
+  expect(after).not.toBe(before)
+  await expect(page.getByTestId('share-count')).toContainText('1')
+
+  await page.getByTestId('share-create').click()
+  await expect(page.getByTestId('share-link')).toBeVisible()
+  const link = (await page.getByTestId('share-link').innerText()).trim()
+  const [token, keySeg] = link.split('/#/s/')[1].split('.')
+
+  // The sealed bundle itself, not just the count: open it under the link's key
+  // and look for the hidden id and its text.
+  const bundle = await page.evaluate(
+    async ({ relay, token, keySeg }) => {
+      const b64urlToBytes = (s: string) => {
+        const b64 = s.replace(/-/g, '+').replace(/_/g, '/')
+        const pad = b64.length % 4 === 0 ? '' : '='.repeat(4 - (b64.length % 4))
+        const bin = atob(b64 + pad)
+        return Uint8Array.from(bin, (c) => c.charCodeAt(0))
+      }
+      const sealed = new Uint8Array(await (await fetch(`${relay}/v0/share/${token}`)).arrayBuffer())
+      const { initSvastha, WasmDataKey } = await import('/src/lib/svastha.ts')
+      await initSvastha()
+      const key = WasmDataKey.from_bytes(b64urlToBytes(keySeg))
+      const json = new TextDecoder().decode(key.open(sealed, new TextEncoder().encode(token)))
+      return { json, ids: (JSON.parse(json).events as { id: string }[]).map((e) => e.id) }
+    },
+    { relay: RELAY, token, keySeg },
+  )
+
+  expect(bundle.ids).not.toContain(hiddenId)
+  expect(bundle.json).not.toContain('Walnuts')
+  expect(bundle.json).toContain('Porridge')
+
+  // Un-hiding puts it back: the filter reads the current hide state, it does
+  // not remember that an entry was once hidden.
+  await page.evaluate(async ({ hiddenId }) => {
+    const { setHidden } = await import('/src/lib/curation.ts')
+    await setHidden(hiddenId, false)
+  }, { hiddenId })
+  await openSheet()
+  await expect(page.getByTestId('share-count')).toContainText('2')
+})

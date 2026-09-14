@@ -284,6 +284,30 @@ export async function setHidden(eventId: string, hidden: boolean): Promise<void>
   await setCuration(`hide:${eventId}`, { hidden })
 }
 
+/** The event ids the owner has hidden, from `hide:` records.
+ *
+ * Only `{ hidden: true }` counts: an un-hide writes `{ hidden: false }` rather
+ * than deleting the record, and a value of any other shape is a record this
+ * build did not write — neither may be read as a hide, or un-hiding would be
+ * impossible and a malformed record could silently remove an entry from the
+ * owner's own screens.
+ *
+ * Pure over records so the callers that already hold them do not re-read the
+ * store; {@link loadHiddenIds} is the convenience for those that don't. */
+export function hiddenIdsFrom(records: CurationRecord[]): Set<string> {
+  const ids = new Set<string>()
+  for (const record of records) {
+    if ((record.value as { hidden?: unknown } | undefined)?.hidden !== true) continue
+    const id = record.key.slice('hide:'.length)
+    if (id !== '') ids.add(id)
+  }
+  return ids
+}
+
+export async function loadHiddenIds(): Promise<Set<string>> {
+  return hiddenIdsFrom(await allCurationByPrefix('hide:'))
+}
+
 export async function noteOf(eventId: string): Promise<string> {
   const record = await getCuration(`note:${eventId}`)
   return (record?.value as { text?: string } | undefined)?.text ?? ''

@@ -10,6 +10,7 @@
   import { CATEGORIES, CATEGORY_META, type Category } from '../lib/category'
   import {
     allCurationByPrefix,
+    loadHiddenIds,
     statusMapFrom,
     nameMapFrom,
     regimenMapFrom,
@@ -72,6 +73,8 @@
   // narrowed to the in-scope concepts and carried in the bundle so the recipient
   // sees the same Current/Past + Active/Resolved grouping and name overrides.
   let curationRecords = $state<SignedCurationRecord[]>([])
+  // Event ids the owner has hidden; see `visible` below.
+  let hiddenIds = $state<Set<string>>(new Set())
 
   // --- scope ---
   // The chip row is the ordinary (non-sensitive) categories; the opt-in group
@@ -126,10 +129,19 @@
     categories,
   })
 
+  // A hidden entry cannot reach a share bundle. Hiding is how someone takes an
+  // entry off their own screens, and a share that carried it anyway would hand
+  // a stranger what the owner had already put away. Applied before the scope
+  // filter, so the count, the preview, the carried curation and both delivery
+  // paths all see one visible set. Guaranteed by e2e/doctor-share.spec.ts's
+  // "a hidden entry never reaches the bundle".
+  const visible = $derived(
+    hiddenIds.size === 0 ? events : events.filter((se) => !hiddenIds.has(se.event.id)),
+  )
   // Short-circuit the empty selection to no events (rather than leaning on
   // filterEventsForScope's null = all-non-sensitive fallback) so the count and
   // preview never imply data a disabled create couldn't send.
-  const filtered = $derived(nothingSelected ? [] : filterEventsForScope(events, scope))
+  const filtered = $derived(nothingSelected ? [] : filterEventsForScope(visible, scope))
   const statuses = $derived(statusMapFrom(curationRecords))
   // The scoped subset the bundle actually carries: the category/date filter,
   // then the meds-scope filter (past meds dropped unless opted in).
@@ -284,7 +296,7 @@
   }
 
   onMount(async () => {
-    ;[events, curationRecords] = await Promise.all([
+    ;[events, curationRecords, hiddenIds] = await Promise.all([
       allEvents(),
       // Every namespace a share may carry must be loaded here: `curationForBundle`
       // narrows this list, it does not fetch, so a namespace missing from this
@@ -295,6 +307,7 @@
         allCurationByPrefix('name:'),
         allCurationByPrefix('regimen:'),
       ]).then(([s, n, r]) => [...s, ...n, ...r] as SignedCurationRecord[]),
+      loadHiddenIds(),
     ])
   })
 </script>

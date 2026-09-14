@@ -20,6 +20,8 @@ import {
   normalizeRegimen,
   regimenMapFrom,
   regimenChanged,
+  hiddenIdsFrom,
+  loadHiddenIds,
   type CurationRecord,
   type SignedCurationRecord,
   type CurationSigner,
@@ -598,5 +600,58 @@ describe('curationCodec with a regimen: key', () => {
     const tampered = signed({ key: KEY, value: { dose: '999 mg' }, updated_at: 500 })
     await curationCodec.remoteApply(blobId, new TextEncoder().encode(JSON.stringify(tampered)))
     expect(await getCuration(KEY)).toBeUndefined()
+  })
+})
+
+describe('hiddenIdsFrom', () => {
+  const rec = (key: string, value: unknown): CurationRecord => ({ key, value, updated_at: 1000 })
+
+  it('collects the ids of records hidden right now', () => {
+    const ids = hiddenIdsFrom([rec('hide:evt-1', { hidden: true }), rec('hide:evt-2', { hidden: true })])
+    expect([...ids].sort()).toEqual(['evt-1', 'evt-2'])
+  })
+
+  // An un-hide writes `{hidden: false}` rather than deleting the record, so
+  // reading "has a hide: record" as hidden would make un-hiding impossible.
+  it('treats an un-hidden record as not hidden', () => {
+    expect(hiddenIdsFrom([rec('hide:evt-1', { hidden: false })]).size).toBe(0)
+  })
+
+  // Adversarial: values this build never wrote (an older or newer schema, a
+  // hand-edited store) must not be read as a hide — a malformed record would
+  // otherwise silently remove an entry from the owner's own screens.
+  it.each([
+    ['a string value', 'yes'],
+    ['an empty object', {}],
+    ['null', null],
+    ['undefined', undefined],
+    ['a truthy non-true flag', { hidden: 'true' }],
+    ['a numeric flag', { hidden: 1 }],
+  ])('ignores %s', (_label, value) => {
+    expect(hiddenIdsFrom([rec('hide:evt-1', value)]).size).toBe(0)
+  })
+
+  it('ignores a record with no id after the prefix', () => {
+    expect(hiddenIdsFrom([rec('hide:', { hidden: true })]).size).toBe(0)
+  })
+
+  it('reads only what it is given, prefix already stripped', () => {
+    // The caller filters by prefix; a key from another namespace would have to
+    // be passed in deliberately, and the slice must not mangle it silently.
+    const ids = hiddenIdsFrom([rec('hide:evt-9', { hidden: true })])
+    expect(ids.has('evt-9')).toBe(true)
+    expect(ids.has('hide:evt-9')).toBe(false)
+  })
+})
+
+describe('loadHiddenIds', () => {
+  it('reads hides from the store, including after an un-hide', async () => {
+    const sign = signAs(AUTHOR_A)
+    await writeCuration('hide:evt-1', { hidden: true }, sign, 1000)
+    await writeCuration('hide:evt-2', { hidden: true }, sign, 1000)
+    expect([...(await loadHiddenIds())].sort()).toEqual(['evt-1', 'evt-2'])
+
+    await writeCuration('hide:evt-1', { hidden: false }, sign, 2000)
+    expect([...(await loadHiddenIds())]).toEqual(['evt-2'])
   })
 })
