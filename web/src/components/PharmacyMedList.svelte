@@ -146,6 +146,9 @@
                 {#if row.asNeeded}
                   <span class="chips"><span class="chip prn">As needed</span></span>
                 {/if}
+                {#if row.code}
+                  <span class="code data muted" data-testid="pharmacy-code">{row.code}</span>
+                {/if}
               </div>
               <dl class="med-facts">
                 <div class="fact">
@@ -337,6 +340,12 @@
     gap: var(--space-1) var(--space-2);
   }
 
+  /* Demoted under the name: the pharmacist reads the drug, and reaches for the
+     code only to confirm it. */
+  .code {
+    font-size: var(--text-sm);
+  }
+
   .med-facts {
     display: grid;
     gap: var(--space-2);
@@ -447,6 +456,7 @@
     .num,
     .fact dt,
     .fact dd,
+    .code,
     .card-heading,
     .allergy-note,
     .provenance,

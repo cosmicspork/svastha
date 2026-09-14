@@ -27,6 +27,11 @@ export interface PharmacyRow {
   sig: string
   asNeeded: boolean
   prescriber: string
+  /** The row's terminology coding, rendered as "RxNorm 6809", or '' when the
+   * entry is free text. A pharmacist reads the name, but the code is what
+   * identifies the drug unambiguously — and when nothing named the concept it
+   * is the only identity the row has. */
+  code: string
   past: boolean
 }
 
@@ -84,6 +89,7 @@ export function buildPharmacyGroups(rows: SummaryRow[]): PharmacyGroup[] {
         sig: sigLine(row.regimen),
         asNeeded: row.regimen?.as_needed === true,
         prescriber: row.regimen?.prescriber ?? '',
+        code: row.coding ? `${row.coding.system} ${row.coding.code}` : '',
         past: row.status === 'inactive',
       })),
     })

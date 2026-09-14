@@ -166,6 +166,15 @@ describe('buildPharmacyGroups', () => {
     expect(row.prescriber).toBe('Dr. Anita Rao')
   })
 
+  it('carries the coding that identifies the drug', () => {
+    // The name is what a pharmacist reads; the code is what identifies it, and
+    // for an entry nothing named it is the only identity the row has.
+    // `buildSummary` has already shortened the system (shortenSystem), so the
+    // row shows "RxNorm 29046" rather than the full URL.
+    const row = groups([LISI])[0].rows[0]
+    expect(row.code).toBe('RxNorm 29046')
+  })
+
   it('leaves unrecorded fields empty', () => {
     const row = groups([LISI])[0].rows[0]
     expect(row.dose).toBe('')
