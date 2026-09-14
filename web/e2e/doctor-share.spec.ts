@@ -625,11 +625,16 @@ test('a hidden entry never reaches the bundle', async ({ page }) => {
       await initSvastha()
       const key = WasmDataKey.from_bytes(b64urlToBytes(keySeg))
       const json = new TextDecoder().decode(key.open(sealed, new TextEncoder().encode(token)))
-      return { json, ids: (JSON.parse(json).events as { id: string }[]).map((e) => e.id) }
+      // A bundle event is a StoredEvent: the signed envelope wraps the event,
+      // so the id is one level in. Reading `e.id` here would make the
+      // absence check below pass against every bundle.
+      const parsed = JSON.parse(json) as { events: { event: { id: string } }[] }
+      return { json, ids: parsed.events.map((e) => e.event.id) }
     },
     { relay: RELAY, token, keySeg },
   )
 
+  expect(bundle.ids).toHaveLength(1)
   expect(bundle.ids).not.toContain(hiddenId)
   expect(bundle.json).not.toContain('Walnuts')
   expect(bundle.json).toContain('Porridge')

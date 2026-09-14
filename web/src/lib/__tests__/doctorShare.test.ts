@@ -19,6 +19,7 @@ import {
   generateShareToken,
   referencedAttachmentShas,
   referencedDocumentShas,
+  resolveShareScope,
   shareStatus,
   SHARE_TOKEN_LEN,
   type DoctorShareRecord,
@@ -429,5 +430,89 @@ describe('curationForBundle', () => {
 
   it('is empty when no record matches an in-bundle concept', () => {
     expect(curationForBundle([cond], [rec(`status:${kLis}`, { status: 'inactive' })])).toEqual([])
+  })
+})
+
+describe('resolveShareScope (locked)', () => {
+  // The lock is the guarantee that a sheet opened to share one thing shares
+  // only that thing. Every case here sets the hidden controls to something
+  // wider than the preset: a resolver that read them would sweep the extra in.
+  const wideOpen = {
+    selected: set(...NON_SENSITIVE),
+    sensitiveOn: set('cycle', 'mind'),
+    fromDate: '2026-01-01',
+    toDate: '2026-06-30',
+  }
+
+  it('ignores every selected chip and opt-in behind the lock', () => {
+    const scope = resolveShareScope({ locked: true, preset: ['med'], ...wideOpen })
+    expect(scope.categories).toEqual(['med'])
+  })
+
+  it('ignores the date pickers behind the lock', () => {
+    const scope = resolveShareScope({ locked: true, preset: ['med'], ...wideOpen })
+    expect(scope.fromIso).toBeNull()
+    expect(scope.toIso).toBeNull()
+  })
+
+  it('returns the empty sentinel for an empty preset rather than everything', () => {
+    // Null disables creation upstream; a fallthrough to "every non-sensitive
+    // category" would turn a misconfigured lock into a full-record share.
+    expect(resolveShareScope({ locked: true, preset: [], ...wideOpen }).categories).toBeNull()
+    expect(resolveShareScope({ locked: true, preset: null, ...wideOpen }).categories).toBeNull()
+  })
+
+  it('normalizes a preset to CATEGORIES order without duplicates', () => {
+    const scope = resolveShareScope({
+      locked: true,
+      preset: ['med', 'vital', 'med'],
+      ...wideOpen,
+    })
+    expect(scope.categories).toEqual(['vital', 'med'])
+  })
+
+  it('scopes real events to the preset alone', () => {
+    // End of the chain, not just the shape: a locked med scope over a mixed
+    // record yields the med events and nothing else.
+    const events = [
+      ev('bp', 'observation', '2026-02-01T00:00:00+00:00', {
+        system: 'http://loinc.org',
+        code: '8480-6',
+      }),
+      ev('med', 'medication_statement', '2026-02-01T00:00:00+00:00'),
+      ev('alg', 'allergy_intolerance', '2026-02-01T00:00:00+00:00'),
+    ]
+    const scope = resolveShareScope({ locked: true, preset: ['med'], ...wideOpen })
+    expect(filterEventsForScope(events, scope).map((e) => e.event.id)).toEqual(['med'])
+  })
+})
+
+describe('resolveShareScope (unlocked)', () => {
+  it('derives from the controls exactly as the sheet always has', () => {
+    const scope = resolveShareScope({
+      locked: false,
+      preset: ['med'],
+      selected: set('vital'),
+      sensitiveOn: set('cycle'),
+      fromDate: '2026-01-01',
+      toDate: '2026-06-30',
+    })
+    // The preset is initial UI state only; unlocked, the controls win.
+    expect(scope.categories).toEqual(['vital', 'cycle'])
+    expect(scope.fromIso).toBe('2026-01-01T00:00:00')
+    expect(scope.toIso).toBe('2026-06-30T23:59:59.999')
+  })
+
+  it('keeps the empty-selection sentinel', () => {
+    const scope = resolveShareScope({
+      locked: false,
+      preset: null,
+      selected: set(),
+      sensitiveOn: set(),
+      fromDate: '',
+      toDate: '',
+    })
+    expect(scope.categories).toBeNull()
+    expect(scope.fromIso).toBeNull()
   })
 })

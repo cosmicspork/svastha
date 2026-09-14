@@ -604,7 +604,12 @@ describe('curationCodec with a regimen: key', () => {
 })
 
 describe('hiddenIdsFrom', () => {
-  const rec = (key: string, value: unknown): CurationRecord => ({ key, value, updated_at: 1000 })
+  const rec = (key: string, value: unknown): CurationRecord => ({
+    key,
+    value,
+    updated_at: 1000,
+    author: AUTHOR_A,
+  })
 
   it('collects the ids of records hidden right now', () => {
     const ids = hiddenIdsFrom([rec('hide:evt-1', { hidden: true }), rec('hide:evt-2', { hidden: true })])

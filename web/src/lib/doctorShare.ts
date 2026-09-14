@@ -122,6 +122,45 @@ export function deriveShareCategories(
   return list.length > 0 ? list : null
 }
 
+/** The scope a create actually uses, from the sheet's controls or, when the
+ * sheet was opened for one purpose, from that preset alone.
+ *
+ * A locked scope reads ONLY `preset`: the caller opened the sheet to share one
+ * thing (the pharmacy page shares medications), and the toggles behind the lock
+ * must not be able to widen it. Deriving from `selected`/`sensitiveOn` under
+ * lock — even though the locked UI hides them — would make the guarantee a
+ * property of the markup rather than of the scope, and one refactor away from
+ * silently sharing the whole record. Dates are dropped too: a list scoped to a
+ * date range is not the med list the caller asked to share.
+ *
+ * The empty preset returns the same null sentinel `deriveShareCategories`
+ * uses, so an empty lock disables creation rather than falling through to
+ * "everything".
+ *
+ * Guaranteed by doctorShare.test.ts's "resolveShareScope (locked)".
+ */
+export function resolveShareScope(input: {
+  locked: boolean
+  preset: Category[] | null
+  selected: ReadonlySet<Category>
+  sensitiveOn: ReadonlySet<Category>
+  fromDate: string
+  toDate: string
+}): ShareScope {
+  if (input.locked) {
+    const preset = new Set(input.preset ?? [])
+    const categories = CATEGORIES.filter((c) => preset.has(c))
+    return { fromIso: null, toIso: null, categories: categories.length > 0 ? categories : null }
+  }
+  return {
+    // A day-granularity picker: include the whole "to" day, from the start of
+    // the "from" day. Left local (no offset) — isoToMillis parses either way.
+    fromIso: input.fromDate ? `${input.fromDate}T00:00:00` : null,
+    toIso: input.toDate ? `${input.toDate}T23:59:59.999` : null,
+    categories: deriveShareCategories(input.selected, input.sensitiveOn),
+  }
+}
+
 /** The bundle plaintext, before sealing. `events` are `SignedEvent`s in exactly
  * the JSON shape the app stores and syncs (`StoredEvent`), so the recipient
  * runs the same verify path a relay pull does. `attachments` inlines the bytes

@@ -12,7 +12,11 @@
   import { buildSummary } from '../lib/summary'
   import { loadDictionaryIndex, dictionaryStatus } from '../lib/dictionary'
   import { loadListSize, setListSize, type ListSize } from '../lib/pharmacyPrefs'
+  import { get } from '../lib/db'
+  import { session } from '../lib/session.svelte'
+  import { RelayClient } from '../lib/relay'
   import PharmacyMedList from '../components/PharmacyMedList.svelte'
+  import DoctorShareSheet from '../components/DoctorShareSheet.svelte'
 
   // The pharmacy handoff: the med list as someone filling a prescription needs
   // it. Owner-only, like the Medications page it hangs off — it reads this
@@ -25,6 +29,13 @@
   let regimenMap = $state<Map<string, Regimen>>(new Map())
   let loaded = $state(false)
   let size = $state<ListSize>('standard')
+
+  // Sharing reuses the doctor-share sheet, locked to medications: the same
+  // sealed bundle, the same expiry and revocation, scoped to the one list this
+  // page is about. Nothing here re-implements the share path.
+  let relayUrl = $state('')
+  let relay = $state<RelayClient | null>(null)
+  let shareOpen = $state(false)
 
   let dictionary = $state<Map<string, string>>(new Map())
   $effect(() => {
@@ -59,6 +70,8 @@
         .filter((r) => (r.value as { hidden?: boolean } | undefined)?.hidden === true)
         .map((r) => r.key.slice('hide:'.length)),
     )
+    relayUrl = (await get<string>('prefs', 'relayUrl')) ?? ''
+    if (relayUrl && session.identity) relay = new RelayClient(relayUrl, session.identity)
     ;[statusMap, nameMap, regimenMap, size] = await Promise.all([
       allStatuses(),
       allNames(),
@@ -73,6 +86,18 @@
   <div class="page" data-testid="medications-pharmacy-page">
     <div class="toolbar">
       <h1 class="page-heading">For the pharmacy</h1>
+      <div class="toolbar-actions">
+      <button
+        type="button"
+        class="ghost print-btn"
+        onclick={() => (shareOpen = true)}
+        data-testid="pharmacy-share"
+      >
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 15V4" /><path d="M8 8l4-4 4 4" /><path d="M5 12v7a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-7" />
+        </svg>
+        Share
+      </button>
       <button
         type="button"
         class="ghost print-btn"
@@ -84,6 +109,7 @@
         </svg>
         Print
       </button>
+      </div>
     </div>
     <p class="lede muted">
       Every medication on record, numbered, with its dose, directions and prescriber.
@@ -104,6 +130,20 @@
       }
     />
   </div>
+
+  {#if shareOpen}
+    <!-- Medications only, and not negotiable from inside the sheet: someone
+         sharing from this page is sharing this list. Past meds stay the sheet's
+         own opt-in, since including a stopped med only narrows what a
+         pharmacist has to ask about. -->
+    <DoctorShareSheet
+      {relay}
+      {relayUrl}
+      presetCategories={['med']}
+      lockScope
+      onclose={() => (shareOpen = false)}
+    />
+  {/if}
 {/if}
 
 <style>
@@ -118,6 +158,12 @@
 
   .page-heading {
     margin: 0;
+  }
+
+  .toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
   }
 
   .print-btn {
@@ -139,7 +185,7 @@
   /* The list component carries the rest of the print styling (see its TWIN
      note); the page only has to take its own chrome off the paper. */
   @media print {
-    .print-btn,
+    .toolbar-actions,
     .lede {
       display: none;
     }
