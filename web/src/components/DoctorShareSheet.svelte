@@ -3,9 +3,11 @@
   import { renderSVG } from 'uqr'
   import Sheet from './Sheet.svelte'
   import ClinicianSummary from './ClinicianSummary.svelte'
+  import PharmacyMedList from './PharmacyMedList.svelte'
   import type { RelayClient } from '../lib/relay'
   import { normalizeRelayUrl } from '../lib/relay'
   import { session } from '../lib/session.svelte'
+  import { isMedicationOnlyBundle } from '../lib/shareRecipient'
   import { allEvents, type StoredEvent } from '../lib/events'
   import { CATEGORIES, CATEGORY_META, type Category } from '../lib/category'
   import {
@@ -31,7 +33,7 @@
   } from '../lib/doctorShare'
   import { createFileShare, recordFileShare, type FileShareExport } from '../lib/fileShare'
   import { downloadBlob } from '../lib/export'
-  import { conceptKey } from '../lib/summary'
+  import { buildSummary, conceptKey } from '../lib/summary'
 
   // Management (the list of existing links, revoke, re-show) lives on the
   // Doctor screen now — this sheet is creation only. `oncreated` lets that
@@ -179,6 +181,15 @@
   const previewStatus = $derived(statusMapFrom(carriedCuration))
   const previewNames = $derived(nameMapFrom(carriedCuration))
   const previewRegimen = $derived(regimenMapFrom(carriedCuration))
+  // Folded from the same scoped events and carried curation the bundle ships,
+  // for the pharmacy branch of the preview below.
+  const previewSummary = $derived(
+    buildSummary(scopedEvents, {
+      status: previewStatus,
+      names: previewNames,
+      regimen: previewRegimen,
+    }),
+  )
   // Whether the meds-scope toggle is relevant: only when medications are in the
   // selection (and there is at least one past med to include or exclude).
   const hasPastMeds = $derived(
@@ -627,13 +638,24 @@
       {#if showPreview}
         <div class="preview" data-testid="share-preview">
           {#key scopedEvents}
-            <ClinicianSummary
-              events={scopedEvents}
-              readonly
-              status={previewStatus}
-              names={previewNames}
-              regimen={previewRegimen}
-            />
+            {#if isMedicationOnlyBundle(scopedEvents)}
+              <!-- Same branch the recipient takes (ShareView), so "Preview what
+                   they see" stays literally true for a meds-only share. -->
+              <PharmacyMedList
+                medications={previewSummary.medications}
+                allergies={null}
+                createdAt={new Date().toISOString()}
+                showSizeControl={false}
+              />
+            {:else}
+              <ClinicianSummary
+                events={scopedEvents}
+                readonly
+                status={previewStatus}
+                names={previewNames}
+                regimen={previewRegimen}
+              />
+            {/if}
           {/key}
         </div>
       {/if}

@@ -77,7 +77,11 @@
     </div>
   {/if}
 
-  <section class="header-card" aria-labelledby="pharmacy-allergies-heading">
+  <!-- Everything except the size control: the content a reader gets, which a
+       share preview compares against the recipient's view character for
+       character (see e2e/doctor-share.spec.ts). -->
+  <div data-testid="pharmacy-body">
+    <section class="header-card" aria-labelledby="pharmacy-allergies-heading">
     <h2 class="card-heading" id="pharmacy-allergies-heading">Drug allergies</h2>
     {#if allergies === null}
       <p class="allergy-note muted" data-testid="pharmacy-allergies-absent">
@@ -167,15 +171,16 @@
     {/each}
   {/if}
 
-  <footer class="provenance">
-    <span
-      >{total}
-      {total === 1 ? 'medication' : 'medications'} as recorded on this device, {fmtStamp(
-        createdAt,
-      )}.</span
-    >
-    <span>Doses and directions are as recorded by the patient and their clinicians.</span>
-  </footer>
+    <footer class="provenance">
+      <span
+        >{total}
+        {total === 1 ? 'medication' : 'medications'} as recorded on this device, {fmtStamp(
+          createdAt,
+        )}.</span
+      >
+      <span>Doses and directions are as recorded by the patient and their clinicians.</span>
+    </footer>
+  </div>
 </div>
 
 <style>

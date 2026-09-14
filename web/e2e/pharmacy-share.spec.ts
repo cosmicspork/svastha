@@ -41,15 +41,18 @@ async function seedMixedRecord(page: Page): Promise<void> {
 async function unlock(page: Page): Promise<void> {
   await page.getByTestId('unlock-passphrase').fill(PASSPHRASE)
   await page.getByTestId('unlock-submit').click()
+  // Writing curation needs an unlocked session, and the unlock is async — wait
+  // for the form to go rather than racing the next evaluate().
+  await expect(page.getByTestId('unlock-submit')).toHaveCount(0)
 }
 
 async function openShareSheet(page: Page): Promise<void> {
   await page.evaluate(() => {
     window.location.hash = '#/medications/pharmacy'
   })
-  await expect(page.getByTestId('medications-pharmacy-page')).toBeVisible()
+  await expect(page.getByTestId('medications-pharmacy-page')).toBeVisible({ timeout: 15_000 })
   await page.getByTestId('pharmacy-share').click()
-  await expect(page.getByTestId('share-scope-locked')).toBeVisible()
+  await expect(page.getByTestId('share-scope-locked')).toBeVisible({ timeout: 15_000 })
 }
 
 test('shares medications only, with the scope fixed', async ({ page }) => {
@@ -111,9 +114,6 @@ test('a hidden medication stays out of a share minted from this page', async ({ 
   await seedMixedRecord(page)
   await page.reload()
   await unlock(page)
-  // Writing curation needs an unlocked session, so wait for the unlock to land.
-  await expect(page.getByTestId('nav-settings')).toBeVisible()
-
   const hiddenId = await page.evaluate(
     async ({ rxnorm }) => {
       const { allEvents } = await import('/src/lib/events.ts')
@@ -157,4 +157,96 @@ test('a hidden medication stays out of a share minted from this page', async ({ 
   expect(json).not.toContain(hiddenId)
   expect(json).not.toContain('6809') // Metformin
   expect(json).toContain('29046') // Lisinopril
+})
+
+/** Open a share link in a fresh, vault-less context — a real recipient. */
+async function openAsRecipient(
+  browser: import('@playwright/test').Browser,
+  link: string,
+): Promise<Page> {
+  const context = await browser.newContext()
+  const page = await context.newPage()
+  await page.goto(link)
+  await expect(page.getByRole('heading', { name: 'Shared medical record' })).toBeVisible({
+    timeout: 15_000,
+  })
+  return page
+}
+
+test('a recipient of a meds-only link gets the pharmacy list', async ({ page, browser }) => {
+  await onboardViaUI(page)
+  await connectRelayViaUI(page)
+  await logBP(page, '128', '82')
+  await seedMixedRecord(page)
+  await page.reload()
+  await unlock(page)
+
+  // Curate one med so the recipient's list has a dose, directions and a
+  // prescriber to show — the facts a pharmacist actually reads.
+  await page.evaluate(
+    async ({ rxnorm }) => {
+      const { setRegimen } = await import('/src/lib/curation.ts')
+      await setRegimen(`medication_statement|${rxnorm}|29046`, {
+        route: 'mouth',
+        dose: '10 mg tablet',
+        schedule: 'once daily',
+        prescriber: 'Dr. Anita Rao',
+      })
+    },
+    { rxnorm: RXNORM },
+  )
+
+  await openShareSheet(page)
+
+  // The preview takes the same branch, so "Preview what they see" is literal.
+  await page.getByTestId('share-preview-toggle').click()
+  await expect(page.getByTestId('share-preview').getByTestId('pharmacy-list')).toBeVisible()
+
+  await page.getByTestId('share-create').click()
+  const link = (await page.getByTestId('share-link').innerText()).trim()
+
+  const recipient = await openAsRecipient(browser, link)
+  await expect(recipient.getByTestId('pharmacy-list')).toBeVisible()
+  await expect(recipient.getByTestId('clinician-summary')).toHaveCount(0)
+
+  const rows = recipient.locator('[data-testid="pharmacy-row"]:visible')
+  await expect(rows).toHaveCount(2)
+  await expect(rows.first()).toHaveAttribute('data-n', '1')
+  await expect(rows.nth(1)).toHaveAttribute('data-n', '2')
+  await expect(rows.filter({ hasText: 'Lisinopril' }).getByTestId('pharmacy-dose')).toHaveText(
+    '10 mg tablet',
+  )
+  await expect(
+    rows.filter({ hasText: 'Lisinopril' }).getByTestId('pharmacy-prescriber'),
+  ).toHaveText('Dr. Anita Rao')
+
+  // A meds-only share cannot carry allergies, and the recipient is told that
+  // rather than shown an empty list that reads as "none".
+  await expect(recipient.getByTestId('pharmacy-allergies-absent')).toBeVisible()
+  await expect(recipient.getByTestId('pharmacy-allergies-none')).toHaveCount(0)
+
+  await recipient.context().close()
+})
+
+test('an ordinary share still renders the clinical summary', async ({ page, browser }) => {
+  await onboardViaUI(page)
+  await connectRelayViaUI(page)
+  await logBP(page, '118', '76')
+  await seedMixedRecord(page)
+  await page.reload()
+  await unlock(page)
+
+  // Adversarial counterpart to the test above: the default doctor-share scope
+  // carries meds AND vitals, so the meds-only branch must not fire.
+  await page.evaluate(() => {
+    window.location.hash = '#/share/doctor'
+  })
+  await page.getByTestId('new-doctor-link').click()
+  await page.getByTestId('share-create').click()
+  const link = (await page.getByTestId('share-link').innerText()).trim()
+
+  const recipient = await openAsRecipient(browser, link)
+  await expect(recipient.getByTestId('clinician-summary')).toBeVisible()
+  await expect(recipient.getByTestId('pharmacy-list')).toHaveCount(0)
+  await recipient.context().close()
 })

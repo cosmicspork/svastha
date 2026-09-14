@@ -6,14 +6,16 @@
   // path runs. See shareRecipient.ts for the parse/fetch/open/verify pipeline.
   import { onMount } from 'svelte'
   import { initSvastha } from '../lib/svastha'
-  import { loadShare, type ShareLoadResult } from '../lib/shareRecipient'
+  import { isMedicationOnlyBundle, loadShare, type ShareLoadResult } from '../lib/shareRecipient'
   import { inspectFileShare, openWithPassphrase } from '../lib/fileShare'
   import { statusMapFrom, nameMapFrom, regimenMapFrom } from '../lib/curation'
+  import { buildSummary } from '../lib/summary'
   import { fingerprint } from '../lib/exchange'
   import { base64ToBytes } from '../lib/base64'
   import { buildTimeline, type TimelineEntry, type AttachmentRef } from '../lib/timeline'
   import { mimeForDocName } from '../lib/provenance'
   import ClinicianSummary from './ClinicianSummary.svelte'
+  import PharmacyMedList from './PharmacyMedList.svelte'
   import AttachmentViewer from './AttachmentViewer.svelte'
 
   // null = still loading; the pipeline is wasm-gated, so nothing is shown until
@@ -158,6 +160,17 @@
     result?.status === 'ok' ? regimenMapFrom(result.bundle.curation) : new Map(),
   )
 
+  // The fold behind the pharmacy render, over the recipient's own verified
+  // events and the curation that survived verification. Built here rather than
+  // in the list so the list stays a pure view, as it is on the owner's page.
+  const medSummary = $derived(
+    buildSummary(result?.status === 'ok' ? result.bundle.events : [], {
+      status: statusMap,
+      names: nameMap,
+      regimen: regimenMap,
+    }),
+  )
+
   function loadSharedBytes(sha256: string): Promise<Uint8Array | null> {
     const b64 = result?.status === 'ok' ? result.bundle.attachments[sha256] : undefined
     return Promise.resolve(b64 ? base64ToBytes(b64) : null)
@@ -294,13 +307,26 @@
       {/if}
     </header>
 
-    <ClinicianSummary
-      events={bundle.events}
-      readonly
-      status={statusMap}
-      names={nameMap}
-      regimen={regimenMap}
-    />
+    {#if isMedicationOnlyBundle(bundle.events)}
+      <!-- A share scoped to medications is a pharmacy handoff, so it renders as
+           one: numbered, dose and directions large, no timeline. Allergies are
+           null rather than empty — a meds-only bundle cannot carry them (they
+           categorize as clinical), and an empty list here would read as "none
+           on record". -->
+      <PharmacyMedList
+        medications={medSummary.medications}
+        allergies={null}
+        createdAt={bundle.createdAt}
+      />
+    {:else}
+      <ClinicianSummary
+        events={bundle.events}
+        readonly
+        status={statusMap}
+        names={nameMap}
+        regimen={regimenMap}
+      />
+    {/if}
 
     {#if paperEntries.length > 0}
       <section class="documents" data-testid="share-documents">
