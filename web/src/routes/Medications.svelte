@@ -98,6 +98,17 @@
   <div class="meds" data-testid="medications-page">
     <div class="toolbar">
       <h1 class="page-heading">Medications</h1>
+      <button
+        type="button"
+        class="ghost print-btn"
+        onclick={() => navigate('#/medications/pharmacy')}
+        data-testid="medications-pharmacy-link"
+      >
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M5 4h11l3 3v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" /><path d="M8 10h8" /><path d="M8 14h8" /><path d="M8 18h5" />
+        </svg>
+        For the pharmacy
+      </button>
       <button type="button" class="ghost print-btn" onclick={() => window.print()} data-testid="medications-print">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M6 9V3h12v6" /><path d="M6 18H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2" /><rect x="6" y="14" width="12" height="7" rx="1" />
@@ -198,6 +209,7 @@
   .toolbar {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     justify-content: space-between;
     gap: var(--space-3);
     margin-bottom: var(--space-4);
@@ -249,8 +261,9 @@
 
   /* Print: the same black-on-white handoff the summary produces.
 
-     TWIN: components/ClinicianSummary.svelte carries a near-identical block,
-     and the two must change together. Svelte styles are component-scoped, so
+     TWIN: components/ClinicianSummary.svelte and
+     components/PharmacyMedList.svelte carry near-identical blocks, and all
+     three must change together. Svelte styles are component-scoped, so
      this cannot be shared without giving up the scoping that keeps the :global
      rules off every other screen. */
   @media print {

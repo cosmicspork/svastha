@@ -3,13 +3,16 @@
   import { renderSVG } from 'uqr'
   import Sheet from './Sheet.svelte'
   import ClinicianSummary from './ClinicianSummary.svelte'
+  import PharmacyMedList from './PharmacyMedList.svelte'
   import type { RelayClient } from '../lib/relay'
   import { normalizeRelayUrl } from '../lib/relay'
   import { session } from '../lib/session.svelte'
+  import { isMedicationOnlyBundle } from '../lib/shareRecipient'
   import { allEvents, type StoredEvent } from '../lib/events'
   import { CATEGORIES, CATEGORY_META, type Category } from '../lib/category'
   import {
     allCurationByPrefix,
+    loadHiddenIds,
     statusMapFrom,
     nameMapFrom,
     regimenMapFrom,
@@ -19,7 +22,7 @@
     applyMedScope,
     createDoctorShare,
     curationForBundle,
-    deriveShareCategories,
+    resolveShareScope,
     filterEventsForScope,
     referencedAttachmentShas,
     referencedDocumentShas,
@@ -30,7 +33,7 @@
   } from '../lib/doctorShare'
   import { createFileShare, recordFileShare, type FileShareExport } from '../lib/fileShare'
   import { downloadBlob } from '../lib/export'
-  import { conceptKey } from '../lib/summary'
+  import { buildSummary, conceptKey } from '../lib/summary'
 
   // Management (the list of existing links, revoke, re-show) lives on the
   // Doctor screen now — this sheet is creation only. `oncreated` lets that
@@ -43,11 +46,25 @@
     relayUrl,
     onclose,
     oncreated,
+    presetCategories,
+    presetIncludePastMeds = false,
+    lockScope = false,
   }: {
     relay: RelayClient | null
     relayUrl: string
     onclose: () => void
     oncreated?: () => void
+    /** The categories this share is for, when the sheet is opened from a screen
+     * that already knows: the pharmacy page shares medications. Absent means
+     * the ordinary sheet, which opens on every non-sensitive category. */
+    presetCategories?: Category[]
+    presetIncludePastMeds?: boolean
+    /** Fix the scope to `presetCategories` and all dates. The category and date
+     * controls are replaced by a line naming the scope; the past-meds switch
+     * stays live, because including a stopped med narrows nothing. The lock is
+     * enforced in `resolveShareScope`, not by hiding the controls — see its
+     * note. */
+    lockScope?: boolean
   } = $props()
 
   // Verbatim on every screen that mints or manages a link: revocation and
@@ -72,6 +89,8 @@
   // narrowed to the in-scope concepts and carried in the bundle so the recipient
   // sees the same Current/Past + Active/Resolved grouping and name overrides.
   let curationRecords = $state<SignedCurationRecord[]>([])
+  // Event ids the owner has hidden; see `visible` below.
+  let hiddenIds = $state<Set<string>>(new Set())
 
   // --- scope ---
   // The chip row is the ordinary (non-sensitive) categories; the opt-in group
@@ -85,14 +104,20 @@
   // Everything non-sensitive starts included: the sheet defaults to sharing the
   // ordinary record, and the visual (active chips) matches the semantics —
   // deselect to narrow, rather than an empty row that reads as "nothing".
-  let selected = $state<Set<Category>>(new Set(nonSensitiveCategories))
+  // Read once, at construction: the sheet is mounted fresh each time it opens,
+  // so a preset is initial state, not a live input.
+  const initialCategories = [...(presetCategories ?? nonSensitiveCategories)]
+  let selected = $state<Set<Category>>(new Set(initialCategories))
   // Opt-in categories, off by default — a share never carries cycle or mood
   // data unless the owner turns it on here.
-  let sensitiveOn = $state<Set<Category>>(new Set())
+  let sensitiveOn = $state<Set<Category>>(
+    new Set(initialCategories.filter((c) => CATEGORY_META[c].sensitive)),
+  )
   // Past (inactive) medications are excluded by default — the default share is
   // a current-only med list. Turning this on includes their events and rides
   // their status records along so the recipient groups them as Past.
-  let includePastMeds = $state(false)
+  const initialIncludePastMeds = presetIncludePastMeds === true
+  let includePastMeds = $state(initialIncludePastMeds)
   let expiryDays = $state<number>(DEFAULT_EXPIRY_DAYS)
   let showPreview = $state(false)
 
@@ -112,24 +137,36 @@
     showPreview = false
   }
 
-  /** The materialized explicit scope, or null when nothing at all is selected. */
-  const categories = $derived(deriveShareCategories(selected, sensitiveOn))
+  /** The scope this create will use: the controls, or — when locked — the
+   * preset alone, so nothing behind the lock can widen it. */
+  const scope = $derived<ShareScope>(
+    resolveShareScope({
+      locked: lockScope,
+      preset: presetCategories ?? null,
+      selected,
+      sensitiveOn,
+      fromDate,
+      toDate,
+    }),
+  )
+  const categories = $derived(scope.categories)
   // Nothing chosen — not "everything". The create button disables and says so
   // rather than falling through to a share that carries the whole record.
   const nothingSelected = $derived(categories === null)
 
-  const scope = $derived<ShareScope>({
-    // A day-granularity picker: include the whole "to" day, from the start of
-    // the "from" day. Left local (no offset) — isoToMillis parses either way.
-    fromIso: fromDate ? `${fromDate}T00:00:00` : null,
-    toIso: toDate ? `${toDate}T23:59:59.999` : null,
-    categories,
-  })
-
+  // A hidden entry cannot reach a share bundle. Hiding is how someone takes an
+  // entry off their own screens, and a share that carried it anyway would hand
+  // a stranger what the owner had already put away. Applied before the scope
+  // filter, so the count, the preview, the carried curation and both delivery
+  // paths all see one visible set. Guaranteed by e2e/doctor-share.spec.ts's
+  // "a hidden entry never reaches the bundle".
+  const visible = $derived(
+    hiddenIds.size === 0 ? events : events.filter((se) => !hiddenIds.has(se.event.id)),
+  )
   // Short-circuit the empty selection to no events (rather than leaning on
   // filterEventsForScope's null = all-non-sensitive fallback) so the count and
   // preview never imply data a disabled create couldn't send.
-  const filtered = $derived(nothingSelected ? [] : filterEventsForScope(events, scope))
+  const filtered = $derived(nothingSelected ? [] : filterEventsForScope(visible, scope))
   const statuses = $derived(statusMapFrom(curationRecords))
   // The scoped subset the bundle actually carries: the category/date filter,
   // then the meds-scope filter (past meds dropped unless opted in).
@@ -144,6 +181,15 @@
   const previewStatus = $derived(statusMapFrom(carriedCuration))
   const previewNames = $derived(nameMapFrom(carriedCuration))
   const previewRegimen = $derived(regimenMapFrom(carriedCuration))
+  // Folded from the same scoped events and carried curation the bundle ships,
+  // for the pharmacy branch of the preview below.
+  const previewSummary = $derived(
+    buildSummary(scopedEvents, {
+      status: previewStatus,
+      names: previewNames,
+      regimen: previewRegimen,
+    }),
+  )
   // Whether the meds-scope toggle is relevant: only when medications are in the
   // selection (and there is at least one past med to include or exclude).
   const hasPastMeds = $derived(
@@ -158,10 +204,14 @@
   const pageCount = $derived(referencedAttachmentShas(scopedEvents).length)
   const documentCount = $derived(referencedDocumentShas(scopedEvents).length)
 
+  // Reads the RESOLVED categories, never the raw controls: under a lock the two
+  // differ, and a description sourced from the controls would name data the
+  // share does not carry.
   const scopeDescription = $derived.by(() => {
-    const allNonSensitive = nonSensitiveCategories.every((c) => selected.has(c))
-    const onSensitive = sensitiveCategories.filter((c) => sensitiveOn.has(c))
-    const offSensitive = sensitiveCategories.filter((c) => !sensitiveOn.has(c))
+    const resolved = new Set(categories ?? [])
+    const allNonSensitive = nonSensitiveCategories.every((c) => resolved.has(c))
+    const onSensitive = sensitiveCategories.filter((c) => resolved.has(c))
+    const offSensitive = sensitiveCategories.filter((c) => !resolved.has(c))
     const label = (c: Category) => CATEGORY_META[c].label
 
     let cats: string
@@ -171,8 +221,8 @@
     } else {
       let start = ''
       if (allNonSensitive) start = `All categories except ${offSensitive.map(label).join(', ')}`
-      else if (selected.size > 0)
-        start = CATEGORIES.filter((c) => selected.has(c))
+      else if (resolved.size > 0)
+        start = CATEGORIES.filter((c) => resolved.has(c) && !CATEGORY_META[c].sensitive)
           .map(label)
           .join(', ')
       const on = onSensitive.map(label)
@@ -181,9 +231,9 @@
     }
 
     let dates = 'all dates'
-    if (fromDate && toDate) dates = `${fromDate} to ${toDate}`
-    else if (fromDate) dates = `from ${fromDate}`
-    else if (toDate) dates = `through ${toDate}`
+    if (scope.fromIso && scope.toIso) dates = `${fromDate} to ${toDate}`
+    else if (scope.fromIso) dates = `from ${fromDate}`
+    else if (scope.toIso) dates = `through ${toDate}`
     return `${cats}; ${dates}`
   })
 
@@ -284,7 +334,7 @@
   }
 
   onMount(async () => {
-    ;[events, curationRecords] = await Promise.all([
+    ;[events, curationRecords, hiddenIds] = await Promise.all([
       allEvents(),
       // Every namespace a share may carry must be loaded here: `curationForBundle`
       // narrows this list, it does not fetch, so a namespace missing from this
@@ -295,6 +345,7 @@
         allCurationByPrefix('name:'),
         allCurationByPrefix('regimen:'),
       ]).then(([s, n, r]) => [...s, ...n, ...r] as SignedCurationRecord[]),
+      loadHiddenIds(),
     ])
   })
 </script>
@@ -411,7 +462,13 @@
 
     <section class="stack">
       <h3>What to include</h3>
-      <div class="dates">
+      {#if lockScope}
+        <!-- Opened to share one thing, so there is nothing to choose. The line
+             states the scope rather than showing disabled controls, which would
+             read as something the reader could still change. -->
+        <p class="locked-scope" data-testid="share-scope-locked">{scopeDescription}</p>
+      {:else}
+        <div class="dates">
         <label>
           From
           <input
@@ -451,13 +508,13 @@
         Everything above starts included — deselect what you don't want to share. Cycle and Mind are
         opt-in below.
       </p>
-      {#if nothingSelected}
-        <p class="hint warn" data-testid="share-nothing-selected">
-          Nothing selected — choose at least one category.
-        </p>
-      {/if}
+        {#if nothingSelected}
+          <p class="hint warn" data-testid="share-nothing-selected">
+            Nothing selected — choose at least one category.
+          </p>
+        {/if}
 
-      <div class="optin" role="group" aria-label="Opt-in">
+        <div class="optin" role="group" aria-label="Opt-in">
         <p class="optin-label">Opt-in</p>
         {#each sensitiveCategories as cat (cat)}
           <button
@@ -477,8 +534,9 @@
             </span>
             <span class="switch" aria-hidden="true"><span class="knob"></span></span>
           </button>
-        {/each}
-      </div>
+          {/each}
+        </div>
+      {/if}
 
       {#if hasPastMeds}
         <div class="optin" role="group" aria-label="Medications">
@@ -580,13 +638,24 @@
       {#if showPreview}
         <div class="preview" data-testid="share-preview">
           {#key scopedEvents}
-            <ClinicianSummary
-              events={scopedEvents}
-              readonly
-              status={previewStatus}
-              names={previewNames}
-              regimen={previewRegimen}
-            />
+            {#if isMedicationOnlyBundle(scopedEvents)}
+              <!-- Same branch the recipient takes (ShareView), so "Preview what
+                   they see" stays literally true for a meds-only share. -->
+              <PharmacyMedList
+                medications={previewSummary.medications}
+                allergies={null}
+                createdAt={new Date().toISOString()}
+                showSizeControl={false}
+              />
+            {:else}
+              <ClinicianSummary
+                events={scopedEvents}
+                readonly
+                status={previewStatus}
+                names={previewNames}
+                regimen={previewRegimen}
+              />
+            {/if}
           {/key}
         </div>
       {/if}
@@ -669,6 +738,12 @@
   .hint {
     font-size: var(--text-xs);
     margin: var(--space-1) 0 0;
+  }
+
+  .locked-scope {
+    margin: 0;
+    font-size: var(--text-sm);
+    color: var(--muted);
   }
 
   .chips {

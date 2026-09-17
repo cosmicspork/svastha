@@ -106,6 +106,48 @@ export function downloadBlob(filename: string, blob: Blob): void {
   URL.revokeObjectURL(url)
 }
 
+/** What became of a share attempt, so a caller can tell "the user backed out"
+ * from "the file went somewhere". */
+export type ShareOutcome = 'shared' | 'downloaded' | 'cancelled'
+
+/**
+ * Hand a file to the OS share sheet, falling back to a download.
+ *
+ * Both halves of the Web Share test matter: a browser can have `share` without
+ * `canShare`, and `canShare({files})` is the only way to learn whether THIS
+ * file type is acceptable — Chrome on a desktop advertises `share` and then
+ * rejects files.
+ *
+ * A user who dismisses the share sheet (`AbortError`) gets nothing: they chose
+ * not to send it, and quietly downloading it instead would put a copy of their
+ * medication list in their downloads folder against that choice. Any other
+ * failure does fall back, because there the file went nowhere by accident.
+ *
+ * `deps` is for tests, which cannot install a Web Share API.
+ */
+export async function shareOrDownload(
+  file: File,
+  deps: {
+    nav?: { share?: Navigator['share']; canShare?: Navigator['canShare'] }
+    download?: (filename: string, blob: Blob) => void
+  } = {},
+): Promise<ShareOutcome> {
+  const nav = deps.nav ?? (typeof navigator === 'undefined' ? undefined : navigator)
+  const save = deps.download ?? downloadBlob
+  const data = { files: [file], title: file.name }
+
+  if (nav?.share && nav.canShare?.(data)) {
+    try {
+      await nav.share(data)
+      return 'shared'
+    } catch (e) {
+      if ((e as { name?: string } | undefined)?.name === 'AbortError') return 'cancelled'
+    }
+  }
+  save(file.name, file)
+  return 'downloaded'
+}
+
 export function downloadJson(filename: string, text: string): void {
   downloadBlob(filename, new Blob([text], { type: 'application/json' }))
 }

@@ -115,6 +115,27 @@ export function parseShareFragment(hash: string): ParsedFragment | null {
 }
 
 /**
+ * Whether these events are nothing but medications.
+ *
+ * How a recipient knows a share is a med list: the bundle carries no statement
+ * of intent, and adding one would move the pinned contract, so the events
+ * themselves answer it. A share scoped to medications contains exactly
+ * `medication_statement` events, and any other scope contains something else.
+ *
+ * Empty is false, not vacuously true: a bundle with no events is not a med
+ * list, and rendering one as an empty pharmacy handoff would tell a pharmacist
+ * this person takes nothing.
+ *
+ * A mixed share whose non-med events all failed verification reaches this as
+ * meds-only and renders as a med list. That is the honest reading — the
+ * unverified events are gone, and the view already carries the dropped-events
+ * warning above it.
+ */
+export function isMedicationOnlyBundle(events: StoredEvent[]): boolean {
+  return events.length > 0 && events.every((se) => se.event.kind === 'medication_statement')
+}
+
+/**
  * Validate the decrypted plaintext against the pinned bundle contract:
  * `{ v: 1, created_at, signer, events: [...] }`, with `signer` a base64url
  * unpadded 32-byte Ed25519 key. Returns null (→ "damaged link") on malformed

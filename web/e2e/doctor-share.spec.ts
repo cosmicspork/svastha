@@ -322,17 +322,20 @@ test('doctor share carries verified curation: current-only by default, past on o
   await expect(ownerPage.getByTestId('share-link')).toBeVisible()
   const defaultLink = (await ownerPage.getByTestId('share-link').innerText()).trim()
 
+  // A meds-only bundle renders as the pharmacy list, so the curation is read
+  // there — same records, same verify-or-drop path, a reader-facing layout.
   const defaultDoc = await openAsRecipient(browser, defaultLink)
-  const defaultMeds = defaultDoc.getByTestId('summary-section-medications')
+  const defaultMeds = defaultDoc.getByTestId('pharmacy-list')
   await expect(defaultMeds).toContainText('BP + sugar combo')
-  // The override leads; the source code rides along in the row's panel (#86
-  // rendering, threaded through the read-only recipient path).
-  const renamedRow = defaultMeds.getByTestId('summary-row').filter({ hasText: 'BP + sugar combo' })
-  await renamedRow.getByTestId('summary-row-trigger').click()
-  await expect(renamedRow.getByTestId('summary-coding')).toContainText('RxNorm 6809')
+  // The override leads; the source code rides along beside it (#86 rendering,
+  // threaded through the read-only recipient path).
+  const renamedRow = defaultDoc
+    .getByTestId('pharmacy-row')
+    .filter({ hasText: 'BP + sugar combo' })
+  await expect(renamedRow.getByTestId('pharmacy-code')).toContainText('RxNorm 6809')
   // Lisinopril is past — excluded entirely from the default share.
-  await expect(defaultDoc.getByTestId('clinician-summary')).not.toContainText('Lisinopril')
-  await expect(defaultDoc.getByTestId('meds-past-toggle')).toHaveCount(0)
+  await expect(defaultMeds).not.toContainText('Lisinopril')
+  await expect(defaultDoc.getByTestId('pharmacy-past-toggle')).toHaveCount(0)
   await defaultDoc.context().close()
 
   // --- Include past on: the recipient now sees a Past group with Lisinopril. ---
@@ -343,13 +346,13 @@ test('doctor share carries verified curation: current-only by default, past on o
   const pastLink = (await ownerPage.getByTestId('share-link').innerText()).trim()
 
   const pastDoc = await openAsRecipient(browser, pastLink)
-  await expect(pastDoc.getByTestId('summary-section-medications')).toContainText('BP + sugar combo')
-  const pastToggle = pastDoc.getByTestId('meds-past-toggle')
+  await expect(pastDoc.getByTestId('pharmacy-list')).toContainText('BP + sugar combo')
+  const pastToggle = pastDoc.getByTestId('pharmacy-past-toggle')
   await expect(pastToggle).toContainText('1 past')
   await pastToggle.click()
-  await expect(
-    pastDoc.getByTestId('summary-section-past').getByTestId('summary-row').filter({ hasText: 'Lisinopril' }),
-  ).toHaveCount(1)
+  const pastRow = pastDoc.getByTestId('pharmacy-row').filter({ hasText: 'Lisinopril' })
+  await expect(pastRow).toHaveCount(1)
+  await expect(pastRow).toHaveAttribute('data-past', 'true')
   // Nothing failed verification — no dropped-curation warning.
   await expect(pastDoc.getByTestId('share-curation-warning')).toHaveCount(0)
   await pastDoc.context().close()
@@ -470,48 +473,50 @@ test('doctor share carries the curated regimen, and never a past med’s', async
   // the sheet never fetched `regimen:` records this sub-line is simply absent.
   await ownerPage.getByTestId('share-preview-toggle').click()
   const preview = ownerPage.getByTestId('share-preview')
-  await expect(preview.getByTestId('summary-regimen-subline').first()).toBeVisible()
-  const previewMeds = (await preview.getByTestId('summary-section-medications').innerText()).trim()
-  const previewPrn = (await preview.getByTestId('summary-section-as-needed').innerText()).trim()
-  expect(previewMeds).toContain('twice a day · Dr. Ada Lovelace')
-  expect(previewPrn).toContain('As needed')
-  await expect(preview.getByTestId('clinician-summary')).not.toContainText('Dr. Pastonly')
+  await expect(preview.getByTestId('pharmacy-list')).toBeVisible()
+  // The body, not the whole list: the preview hides the size control, and the
+  // comparison below is about the content a reader gets.
+  const previewList = (await preview.getByTestId('pharmacy-body').innerText()).trim()
+  expect(previewList).toContain('twice a day · with food')
+  expect(previewList).toContain('Dr. Ada Lovelace')
+  expect(previewList).toContain('As needed')
+  await expect(preview.getByTestId('pharmacy-list')).not.toContainText('Dr. Pastonly')
 
   await ownerPage.getByTestId('share-create').click()
   await expect(ownerPage.getByTestId('share-link')).toBeVisible()
   const link = (await ownerPage.getByTestId('share-link').innerText()).trim()
 
   const doc = await openAsRecipient(browser, link)
-  const meds = doc.getByTestId('summary-section-medications')
-  const prn = doc.getByTestId('summary-section-as-needed')
+  const list = doc.getByTestId('pharmacy-list')
 
-  // The sub-line and the PRN sub-group + chip, rendered from the bundle's
-  // verified curation by the same read-only component the owner previewed.
-  await expect(meds.getByTestId('summary-regimen-subline')).toHaveText('twice a day · Dr. Ada Lovelace')
-  await expect(prn.getByTestId('summary-row').filter({ hasText: 'Ibuprofen' })).toHaveCount(1)
-  await expect(prn.getByTestId('summary-prn-chip')).toBeVisible()
+  // Dose, directions, route grouping and prescriber, rendered from the
+  // bundle's verified curation by the same component the owner previewed.
+  const metRow = doc.getByTestId('pharmacy-row').filter({ hasText: 'Metformin' })
+  await expect(metRow.getByTestId('pharmacy-dose')).toHaveText('500 mg')
+  await expect(metRow.getByTestId('pharmacy-sig')).toHaveText('twice a day · with food')
+  await expect(metRow.getByTestId('pharmacy-prescriber')).toHaveText('Dr. Ada Lovelace')
+  await expect(doc.getByTestId('pharmacy-group').filter({ has: metRow })).toHaveAttribute(
+    'data-group',
+    'mouth',
+  )
 
-  // The panel fields the sub-line has no room for.
-  const metRow = meds.getByTestId('summary-row').filter({ hasText: 'Metformin' })
-  await metRow.getByTestId('summary-row-trigger').click()
-  await expect(metRow.getByTestId('summary-regimen-route')).toContainText('By mouth')
-  await expect(metRow.getByTestId('summary-regimen-prescriber')).toContainText('Dr. Ada Lovelace')
-  await expect(metRow.getByTestId('summary-regimen-instructions')).toContainText('with food')
+  // As-needed stays a chip on the row, never a group of its own.
+  const ibuRow = doc.getByTestId('pharmacy-row').filter({ hasText: 'Ibuprofen' })
+  await expect(ibuRow).toHaveCount(1)
+  await expect(ibuRow.getByText('As needed')).toBeVisible()
 
   // No trace of the past med: not the drug, not its schedule, not its
   // prescriber. A regimen carried for an out-of-scope concept would announce a
   // medication the owner chose not to share.
-  const whole = doc.getByTestId('clinician-summary')
-  await expect(whole).not.toContainText('Warfarin')
-  await expect(whole).not.toContainText('Dr. Pastonly')
-  await expect(whole).not.toContainText('5 mg every evening')
+  await expect(list).not.toContainText('Warfarin')
+  await expect(list).not.toContainText('Dr. Pastonly')
+  await expect(list).not.toContainText('5 mg every evening')
   // Everything that did cross verified — no dropped-curation warning.
   await expect(doc.getByTestId('share-curation-warning')).toHaveCount(0)
 
   // What the owner previewed is what the recipient got, character for
-  // character, for the two med groups the regimen shows up in.
-  expect((await meds.innerText()).trim()).toBe(previewMeds)
-  expect((await prn.innerText()).trim()).toBe(previewPrn)
+  // character.
+  expect((await doc.getByTestId('pharmacy-body').innerText()).trim()).toBe(previewList)
 
   await doc.context().close()
   await ownerContext.close()
@@ -561,3 +566,92 @@ async function openAsRecipient(
   })
   return page
 }
+
+// Hiding an entry is how someone takes it off their own screens. A share that
+// carried it anyway would hand a stranger exactly what the owner had put away,
+// so the sheet filters hidden events before it scopes anything: the count, the
+// preview and the sealed bundle all see one visible set.
+test('a hidden entry never reaches the bundle', async ({ page }) => {
+  await onboardViaUI(page)
+  await connectRelayViaUI(page)
+  await logFood(page, 'Porridge')
+  await logFood(page, 'Walnuts')
+
+  // The sheet reads events once, on mount, so each pass reopens it rather than
+  // expecting a live update.
+  const openSheet = async (): Promise<void> => {
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('share-count')).toBeHidden()
+    await page.evaluate(() => {
+      window.location.hash = '#/share/doctor'
+    })
+    // Same allowance openAsRecipient uses: the first paint of a screen can be
+    // slow when the whole suite has been hammering one dev server.
+    await page.getByTestId('new-doctor-link').click({ timeout: 15_000 })
+    await expect(page.getByTestId('share-count')).toBeVisible({ timeout: 15_000 })
+  }
+
+  await openSheet()
+  const before = (await page.getByTestId('share-count').innerText()).trim()
+  await expect(page.getByTestId('share-count')).toContainText('2')
+
+  // Hide one of the two, through the same signed curation path the row action
+  // uses, then reopen the sheet.
+  const hiddenId = await page.evaluate(async () => {
+    const { allEvents } = await import('/src/lib/events.ts')
+    const { setHidden } = await import('/src/lib/curation.ts')
+    const walnuts = (await allEvents()).find((se) =>
+      JSON.stringify(se.event.value ?? '').includes('Walnuts'),
+    )
+    await setHidden(walnuts!.event.id, true)
+    return walnuts!.event.id
+  })
+
+  await openSheet()
+  const after = (await page.getByTestId('share-count').innerText()).trim()
+  expect(after).not.toBe(before)
+  await expect(page.getByTestId('share-count')).toContainText('1')
+
+  await page.getByTestId('share-create').click()
+  await expect(page.getByTestId('share-link')).toBeVisible()
+  const link = (await page.getByTestId('share-link').innerText()).trim()
+  const [token, keySeg] = link.split('/#/s/')[1].split('.')
+
+  // The sealed bundle itself, not just the count: open it under the link's key
+  // and look for the hidden id and its text.
+  const bundle = await page.evaluate(
+    async ({ relay, token, keySeg }) => {
+      const b64urlToBytes = (s: string) => {
+        const b64 = s.replace(/-/g, '+').replace(/_/g, '/')
+        const pad = b64.length % 4 === 0 ? '' : '='.repeat(4 - (b64.length % 4))
+        const bin = atob(b64 + pad)
+        return Uint8Array.from(bin, (c) => c.charCodeAt(0))
+      }
+      const sealed = new Uint8Array(await (await fetch(`${relay}/v0/share/${token}`)).arrayBuffer())
+      const { initSvastha, WasmDataKey } = await import('/src/lib/svastha.ts')
+      await initSvastha()
+      const key = WasmDataKey.from_bytes(b64urlToBytes(keySeg))
+      const json = new TextDecoder().decode(key.open(sealed, new TextEncoder().encode(token)))
+      // A bundle event is a StoredEvent: the signed envelope wraps the event,
+      // so the id is one level in. Reading `e.id` here would make the
+      // absence check below pass against every bundle.
+      const parsed = JSON.parse(json) as { events: { event: { id: string } }[] }
+      return { json, ids: parsed.events.map((e) => e.event.id) }
+    },
+    { relay: RELAY, token, keySeg },
+  )
+
+  expect(bundle.ids).toHaveLength(1)
+  expect(bundle.ids).not.toContain(hiddenId)
+  expect(bundle.json).not.toContain('Walnuts')
+  expect(bundle.json).toContain('Porridge')
+
+  // Un-hiding puts it back: the filter reads the current hide state, it does
+  // not remember that an entry was once hidden.
+  await page.evaluate(async ({ hiddenId }) => {
+    const { setHidden } = await import('/src/lib/curation.ts')
+    await setHidden(hiddenId, false)
+  }, { hiddenId })
+  await openSheet()
+  await expect(page.getByTestId('share-count')).toContainText('2')
+})

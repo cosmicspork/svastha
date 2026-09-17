@@ -47,6 +47,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import {
+  isMedicationOnlyBundle,
   parseShareFragment,
   validateBundle,
   verifyBundleEvents,
@@ -464,5 +465,53 @@ describe('openShareBundle (round-trip through the mocked envelope)', () => {
     const key = WasmDataKey.from_bytes(KEY)
     const bytes = key.seal(new TextEncoder().encode('not a bundle'), new TextEncoder().encode(TOKEN))
     expect(openShareBundle(bytes, TOKEN, KEY)).toBeNull()
+  })
+})
+
+describe('isMedicationOnlyBundle', () => {
+  const of = (...kinds: StoredEvent['event']['kind'][]): StoredEvent[] =>
+    kinds.map((kind, i) => ({
+      event: {
+        id: `evt-${i}`,
+        kind,
+        code: null,
+        effective_at: null,
+        value: null,
+        provenance: { source: 'self', source_doc: null },
+      },
+      author: 'a'.repeat(64),
+      signature: 'b'.repeat(128),
+    }))
+
+  it('is true for a bundle of only medications', () => {
+    expect(isMedicationOnlyBundle(of('medication_statement'))).toBe(true)
+    expect(isMedicationOnlyBundle(of('medication_statement', 'medication_statement'))).toBe(true)
+  })
+
+  // Adversarial: `every` is vacuously true on an empty array, and an empty
+  // pharmacy list would tell a reader this person takes nothing — a claim no
+  // empty bundle supports.
+  it('is false for an empty bundle rather than vacuously true', () => {
+    expect(isMedicationOnlyBundle([])).toBe(false)
+  })
+
+  it.each([
+    ['a vital alongside', ['medication_statement', 'observation']],
+    ['an allergy alongside', ['medication_statement', 'allergy_intolerance']],
+    ['an allergy alone', ['allergy_intolerance']],
+    ['a med last', ['observation', 'medication_statement']],
+  ] as [string, StoredEvent['event']['kind'][]][])('is false with %s', (_label, kinds) => {
+    expect(isMedicationOnlyBundle(of(...kinds))).toBe(false)
+  })
+
+  it('matches the kind exactly, not by prefix or trimmed text', () => {
+    // A bundle is attacker-supplied JSON as far as this function is concerned:
+    // a near-miss kind must not open the med-list door.
+    const sneaky = of('medication_statement')
+    sneaky[0].event.kind = 'medication_statement ' as StoredEvent['event']['kind']
+    expect(isMedicationOnlyBundle(sneaky)).toBe(false)
+    const prefixed = of('medication_statement')
+    prefixed[0].event.kind = 'medication_statement_note' as StoredEvent['event']['kind']
+    expect(isMedicationOnlyBundle(prefixed)).toBe(false)
   })
 })
