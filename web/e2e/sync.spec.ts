@@ -57,16 +57,24 @@ test('a cold restore above the batch threshold pulls pages, not per-id GETs', as
   page,
   browser,
 }) => {
-  test.setTimeout(120_000)
   const words = await onboardViaUI(page)
   await connectRelayViaUI(page)
 
   // 23 events (21 food + one BP pair): enough distinct ev- blobs to clear
   // BATCH_PULL_THRESHOLD (20) so the restore takes the framed include=body
   // walk instead of the per-id loop the test below this one still exercises.
-  for (let i = 0; i < 21; i++) {
-    await logFood(page, `meal-${i}`)
-  }
+  // The meals go straight through logEvent — the call the log form makes —
+  // because the form lingers ~1s on its checkmark after every save, and this
+  // test is about the restore, not the form. Distinct timestamps keep them 21
+  // separate spine rows, as 21 separate logs would be.
+  await page.evaluate(async () => {
+    const { logEvent } = await import('/src/lib/events.ts')
+    const { foodDrafts } = await import('/src/lib/drafts.ts')
+    const now = Date.now()
+    for (let i = 0; i < 21; i++) {
+      await logEvent(foodDrafts([`meal-${i}`], new Date(now - (21 - i) * 1000).toISOString()))
+    }
+  })
   await logBP(page, '117', '75')
   await waitForPushed(page)
 
