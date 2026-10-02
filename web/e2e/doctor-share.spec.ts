@@ -591,9 +591,11 @@ test('a hidden entry never reaches the bundle', async ({ page }) => {
     await expect(page.getByTestId('share-count')).toBeVisible({ timeout: 15_000 })
   }
 
+  // The count reads "0 entries selected" until the sheet's mount-time read
+  // lands, so only a retrying assertion on the settled text is sound here: a
+  // snapshot taken on first paint compares one zero against another.
   await openSheet()
-  const before = (await page.getByTestId('share-count').innerText()).trim()
-  await expect(page.getByTestId('share-count')).toContainText('2')
+  await expect(page.getByTestId('share-count')).toHaveText('2 entries selected')
 
   // Hide one of the two, through the same signed curation path the row action
   // uses, then reopen the sheet.
@@ -608,9 +610,7 @@ test('a hidden entry never reaches the bundle', async ({ page }) => {
   })
 
   await openSheet()
-  const after = (await page.getByTestId('share-count').innerText()).trim()
-  expect(after).not.toBe(before)
-  await expect(page.getByTestId('share-count')).toContainText('1')
+  await expect(page.getByTestId('share-count')).toHaveText('1 entry selected')
 
   await page.getByTestId('share-create').click()
   await expect(page.getByTestId('share-link')).toBeVisible()
