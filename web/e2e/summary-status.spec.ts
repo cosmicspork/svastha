@@ -57,9 +57,14 @@ function pastMeds(page: Page) {
   return page.getByTestId('summary-section-past').getByTestId('summary-row')
 }
 
-/** Expand a row and open its status/name sheet from the panel. */
+/** Expand a row and open its status/name sheet from the panel. The trigger is
+ * a toggle and a save leaves the panel open, so clicking it on a row that is
+ * already expanded would collapse it; the curate click then only lands if it
+ * beats the collapse transition. */
 async function openCurate(row: Locator): Promise<void> {
-  await row.getByTestId('summary-row-trigger').click()
+  const trigger = row.getByTestId('summary-row-trigger')
+  if ((await trigger.getAttribute('aria-expanded')) !== 'true') await trigger.click()
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true')
   await row.getByTestId('summary-row-curate').click()
   await expect(row.page().getByTestId('row-action-sheet')).toBeVisible()
 }
@@ -162,7 +167,7 @@ test('edit a medication regimen from the action sheet', async ({ page }) => {
   await page.getByTestId('action-instructions-input').fill('Take with food')
   await page.getByTestId('action-save').click()
 
-  expect(await regimenKeys(page)).toHaveLength(1)
+  await expect.poll(() => regimenKeys(page)).toHaveLength(1)
 
   // The curated dose leads the row (it outranks a recorded dose quantity), and
   // the panel — still open from openCurate — carries the rest.
@@ -185,9 +190,11 @@ test('edit a medication regimen from the action sheet', async ({ page }) => {
   await expect(page.getByTestId('action-as-needed')).toBeChecked()
   await expect(page.getByTestId('action-started-input')).toHaveValue('2024-03-01')
 
-  // Saving an untouched sheet is not an edit either.
+  // Saving an untouched sheet is not an edit either. The sheet closes only
+  // once its save has run, so a snapshot after that is a sound negative check.
   const before = await regimenKeys(page)
   await page.getByTestId('action-save').click()
+  await expect(page.getByTestId('row-action-sheet')).toBeHidden()
   expect(await regimenKeys(page)).toEqual(before)
 
   // --- clearing every field removes the panel rows ---
