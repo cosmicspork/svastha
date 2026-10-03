@@ -84,6 +84,18 @@ harvest a PR's "## Deferred" notes into the list.
 - Compare-and-update for `applyAdminReply` and `noteNodeSeen`
   (two-transaction read-modify-write races)
 
+## CI & tooling
+
+- Shard the e2e job across 2-3 runners, each still `--workers=1`, behind one
+  `e2e` gate job that needs the matrix (tabla's `ci.yml` has the pattern), so
+  the required check keeps a single stable name. Each shard repeats about two
+  minutes of setup (relay build, wasm, Playwright), so two shards land nearer
+  4.5 minutes than half of today's 7
+- Raise Playwright `--workers` in CI once it holds there. Locally the suite
+  ran at 4 workers in about 1.1 minutes against 3.4 serial after #210, but
+  the FAB-click fix in `openLog` is inferred rather than reproduced, and
+  import's "opens an imported source document" flaked once with no cause found
+
 ## Native (arrives with the wrapper)
 
 - OS keystore custody for the seed
