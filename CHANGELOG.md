@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.17.0](https://github.com/cosmicspork/svastha/compare/v0.16.0...v0.17.0) (2026-10-03)
+
+
+### Features
+
+* **meds:** pharmacy medication list, with print, share and PDF export ([#199](https://github.com/cosmicspork/svastha/issues/199)) ([7a26832](https://github.com/cosmicspork/svastha/commit/7a26832fb5f81870e82e6c466dda51a1bbe1169e))
+
+
+### Bug Fixes
+
+* **web:** commit IndexedDB writes eagerly and settle e2e races ([#210](https://github.com/cosmicspork/svastha/issues/210)) ([f5cf50b](https://github.com/cosmicspork/svastha/commit/f5cf50b1bf5d1a6207af13a89117740aad8de40e))
+
 ## [0.16.0](https://github.com/cosmicspork/svastha/compare/v0.15.0...v0.16.0) (2026-08-03)
 
 
