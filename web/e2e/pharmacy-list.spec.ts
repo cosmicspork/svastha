@@ -325,7 +325,17 @@ test('counter size enlarges the list and is remembered', async ({ page }) => {
   expect(await fontSize()).toBeGreaterThan(standard)
 
   // Persisted, not per-visit: someone who reads this across a counter needs it
-  // at that size every time.
+  // at that size every time. The attribute flips before the pref write lands,
+  // so wait for the stored value first: a reload that beats the commit aborts
+  // it. A fresh read transaction only sees committed data.
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        const { loadListSize } = await import('/src/lib/pharmacyPrefs.ts')
+        return loadListSize()
+      }),
+    )
+    .toBe('counter')
   await page.reload()
   await unlock(page)
   await openPharmacy(page)

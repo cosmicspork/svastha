@@ -515,8 +515,13 @@ test('doctor share carries the curated regimen, and never a past med’s', async
   await expect(doc.getByTestId('share-curation-warning')).toHaveCount(0)
 
   // What the owner previewed is what the recipient got, character for
-  // character.
-  expect((await doc.getByTestId('pharmacy-body').innerText()).trim()).toBe(previewList)
+  // character, bar the provenance stamp: the preview is stamped when it renders
+  // and the bundle when it is minted, and the two can straddle a minute.
+  const unstamped = (text: string) =>
+    text.replace(/as recorded on this device, .+\./, 'as recorded on this device, <stamp>.')
+  expect(unstamped((await doc.getByTestId('pharmacy-body').innerText()).trim())).toBe(
+    unstamped(previewList),
+  )
 
   await doc.context().close()
   await ownerContext.close()

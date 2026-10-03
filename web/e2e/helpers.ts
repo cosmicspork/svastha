@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 
 export const PASSPHRASE = 'correct horse battery staple'
 
@@ -123,12 +123,27 @@ export async function restoreViaUI(
  * opens a sheet with the same `log-{kind}` testids. Fall back to that sheet
  * when the kind isn't one of the fan's petals in a fresh test profile. */
 export async function openLog(page: Page, kind: string): Promise<void> {
-  await page.getByTestId('fab').click()
+  const fab = page.getByTestId('fab')
+  await fab.click()
+  // The fan re-reads its order before it opens, so which kinds are petals is
+  // only settled once it reports expanded.
+  await expect(fab).toHaveAttribute('aria-expanded', 'true')
   const target = page.getByTestId(`log-${kind}`)
   if ((await target.count()) === 0) {
-    await page.getByTestId('bloom-more').click()
+    await clickPetal(page.getByTestId('bloom-more'))
   }
-  await target.click()
+  await clickPetal(target)
+}
+
+/** Petals fly out on a staggered, overshooting transition, and a click sent
+ * while one is still moving can press on the petal and release off it, which
+ * clicks nothing. Wait for the element's own transitions to finish first. A
+ * More-sheet item has none, so this is a no-op there. */
+async function clickPetal(petal: Locator): Promise<void> {
+  await petal.evaluate((el) =>
+    Promise.all(el.getAnimations().map((a) => a.finished.catch(() => undefined))),
+  )
+  await petal.click()
 }
 
 /** Log a blood pressure reading through the quick-log UI (two events). */

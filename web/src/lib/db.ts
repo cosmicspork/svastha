@@ -161,6 +161,29 @@ async function store(name: string, mode: IDBTransactionMode): Promise<IDBObjectS
   return db.transaction(name, mode).objectStore(name)
 }
 
+/**
+ * One request in its own `readwrite` transaction, settled when the transaction
+ * **commits**. A request's `success` only means the write is queued: unloading
+ * the page before the commit aborts the transaction and drops the write, so a
+ * caller that awaits a write and then reloads, or a UI that flips on it and is
+ * closed, would otherwise lose it. The explicit `commit()` sends the commit
+ * with the request instead of after the request's own round trip; without it,
+ * a reload issued straight after a tap lost the write most of the time in the
+ * e2e browser.
+ */
+async function writeOne(name: string, request: (s: IDBObjectStore) => IDBRequest): Promise<void> {
+  const db = await openDb()
+  const tx = db.transaction(name, 'readwrite')
+  const done = new Promise<void>((resolve, reject) => {
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+    tx.onabort = () => reject(tx.error ?? new Error(`write to ${name} aborted`))
+  })
+  request(tx.objectStore(name))
+  tx.commit()
+  await done
+}
+
 export async function get<T>(storeName: string, key: IDBValidKey): Promise<T | undefined> {
   const s = await store(storeName, 'readonly')
   return requestToPromise(s.get(key))
@@ -172,8 +195,7 @@ export async function put(
   value: unknown,
   key?: IDBValidKey,
 ): Promise<void> {
-  const s = await store(storeName, 'readwrite')
-  await requestToPromise(s.put(value, key))
+  await writeOne(storeName, (s) => s.put(value, key))
 }
 
 /**
@@ -190,6 +212,7 @@ export function putAll(storeName: string, values: unknown[]): Promise<void> {
         const tx = db.transaction(storeName, 'readwrite')
         const s = tx.objectStore(storeName)
         for (const value of values) s.put(value)
+        tx.commit()
         tx.oncomplete = () => resolve()
         tx.onerror = () => reject(tx.error)
         tx.onabort = () => reject(tx.error ?? new Error('putAll aborted'))
@@ -253,6 +276,7 @@ export function mutate<T>(
           }
           const write = s.keyPath === null ? s.put(next, key) : s.put(next)
           write.onsuccess = () => (outcome = { written: true, value: next })
+          tx.commit()
         }
         tx.oncomplete = () =>
           outcome
@@ -265,13 +289,11 @@ export function mutate<T>(
 }
 
 export async function del(storeName: string, key: IDBValidKey): Promise<void> {
-  const s = await store(storeName, 'readwrite')
-  await requestToPromise(s.delete(key))
+  await writeOne(storeName, (s) => s.delete(key))
 }
 
 export async function clear(storeName: string): Promise<void> {
-  const s = await store(storeName, 'readwrite')
-  await requestToPromise(s.clear())
+  await writeOne(storeName, (s) => s.clear())
 }
 
 export async function getAll<T>(storeName: string): Promise<T[]> {
