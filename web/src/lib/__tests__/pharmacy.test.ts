@@ -183,3 +183,34 @@ describe('buildPharmacyGroups', () => {
     expect(row.asNeeded).toBe(false)
   })
 })
+
+describe('pharmacy sig chain', () => {
+  const dosed = (text: string | null): StoredEvent => {
+    const e = med(AMOX)
+    e.event.value = text === null ? null : ({ dosage: { text } } as never)
+    return e
+  }
+  const sigRow = (events: StoredEvent[], regimen?: Regimen) =>
+    buildPharmacyGroups(
+      buildSummary(events, { now: NOW, regimen: regimen ? new Map([[key(AMOX), regimen]]) : undefined }).medications,
+    )[0].rows[0]
+
+  it("puts the owner's schedule first and ignores the record's dosage", () => {
+    const row = sigRow([dosed('1 tab BID')], { schedule: 'once daily', instructions: 'with food' })
+    expect(row.sig).toBe('once daily · with food')
+    expect(row.frequencyMissing).toBe(false)
+  })
+
+  it('falls back to "As prescribed" and keeps the owner\'s instructions', () => {
+    const row = sigRow([dosed('1 tab BID')], { instructions: 'with food' })
+    expect(row.sig).toBe('As prescribed: 1 tab BID · with food')
+    expect(row.frequencyMissing).toBe(false)
+  })
+
+  it('flags a missing frequency and keeps any instructions', () => {
+    expect(sigRow([dosed(null)]).frequencyMissing).toBe(true)
+    const row = sigRow([dosed(null)], { instructions: 'with food' })
+    expect(row.sig).toBe('with food')
+    expect(row.frequencyMissing).toBe(true)
+  })
+})

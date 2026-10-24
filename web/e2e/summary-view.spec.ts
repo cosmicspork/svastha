@@ -344,14 +344,14 @@ test('summary: a regimen adds a sub-line, and as-needed meds split into their ow
   )
   await expect(page.getByTestId('meds-past-toggle')).toHaveCount(0)
 
-  // The sub-line is schedule and prescriber, joined — and absent where neither
-  // was recorded rather than rendered blank.
+  // The frequency line is the owner's schedule (the prescriber lives in the
+  // panel), and a med with no schedule or recorded dosage says so.
   await expect(
-    meds(page).filter({ hasText: 'Lisinopril' }).getByTestId('summary-regimen-subline'),
-  ).toHaveText('Every morning · Dr. Rivera')
+    meds(page).filter({ hasText: 'Lisinopril' }).getByTestId('summary-frequency'),
+  ).toHaveText('Every morning')
   await expect(
-    meds(page).filter({ hasText: 'amoxicillin' }).getByTestId('summary-regimen-subline'),
-  ).toHaveCount(0)
+    meds(page).filter({ hasText: 'amoxicillin' }).getByTestId('summary-frequency-missing'),
+  ).toHaveText('Frequency not recorded')
 })
 
 test('summary: "All medications" leads to the medications page', async ({ page }) => {

@@ -147,6 +147,11 @@
                 {#if row.sig}
                   <span class="sig" data-testid="pharmacy-sig">{row.sig}</span>
                 {/if}
+                {#if row.frequencyMissing}
+                  <span class="sig missing" data-testid="pharmacy-frequency-missing"
+                    >Frequency not recorded — ask</span
+                  >
+                {/if}
                 {#if row.asNeeded}
                   <span class="chips"><span class="chip prn">As needed</span></span>
                 {/if}

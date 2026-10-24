@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildSummary, shelveMedications, splitProblems, conceptKey, conceptKeysForEvents } from '../summary'
+import { buildSummary, medicationFrequency, shelveMedications, splitProblems, conceptKey, conceptKeysForEvents } from '../summary'
 import type { StoredEvent } from '../events'
 import type { EventKind, EventValue } from '../drafts'
 import { lwwMerge, priorityMapFrom, type ConceptPriority, type ConceptStatus, type CurationRecord, type Regimen } from '../curation'
@@ -12,6 +12,8 @@ function ev(partial: {
   value?: EventValue | null
   effective_at?: string | null
   id?: string
+  source?: string
+  proposed?: boolean
 }): StoredEvent {
   return {
     event: {
@@ -20,7 +22,8 @@ function ev(partial: {
       code: partial.code ?? null,
       value: partial.value ?? null,
       effective_at: partial.effective_at ?? null,
-      provenance: { source: 'import', source_doc: null },
+      provenance: { source: partial.source ?? 'import', source_doc: null },
+      ...(partial.proposed ? { proposed: { by: 'node' } } : {}),
     },
     author: 'author-hex',
     signature: 'signature-hex',
@@ -1039,5 +1042,87 @@ describe('conceptKey', () => {
     const welder = ev({ code: OCCUPATION, value: { text: 'welder' }, effective_at: '2019-01-01T00:00:00+00:00' })
     expect([...conceptKeysForEvents([welder])]).toEqual([conceptKey(welder.event)])
     expect(buildSummary([welder], { now: NOW }).work[0].key).toBe(conceptKey(welder.event))
+  })
+})
+
+describe('medication frequency', () => {
+  const METFORMIN: Code = { system: RXNORM, code: '6809', display: 'Metformin' }
+  const dosage = (d: object): EventValue => ({ dosage: d as never })
+  const statement = (value: EventValue | null, at: string | null, extra = {}) =>
+    ev({ kind: 'medication_statement', code: METFORMIN, value, effective_at: at, ...extra })
+  const row = (events: StoredEvent[], regimen?: Regimen) =>
+    buildSummary(events, {
+      now: NOW,
+      regimen: regimen ? new Map([['medication_statement|' + RXNORM + '|6809', regimen]]) : undefined,
+    }).medications[0]
+
+  it("prefers the owner's schedule over the record's dosage", () => {
+    const r = row([statement(dosage({ frequency: '1', period: '1', period_unit: 'd' }), '2024-01-01T00:00:00+00:00')], {
+      schedule: 'twice a day with dinner',
+    })
+    expect(r.prescribed).toBe('once daily')
+    expect(medicationFrequency(r)).toEqual({ kind: 'owner', text: 'twice a day with dinner' })
+  })
+
+  it('uses the record dosage, labelled, when there is no schedule', () => {
+    const r = row([statement(dosage({ text: '1 tab BID' }), '2024-01-01T00:00:00+00:00')], { prescriber: 'Dr. Rao' })
+    expect(medicationFrequency(r)).toEqual({ kind: 'prescribed', text: 'As prescribed: 1 tab BID' })
+  })
+
+  it('treats a blank schedule as no schedule', () => {
+    const r = row([statement(dosage({ text: '1 tab BID' }), '2024-01-01T00:00:00+00:00')])
+    r.regimen = { schedule: '   ' }
+    expect(medicationFrequency(r).kind).toBe('prescribed')
+  })
+
+  it('takes the newest dosage in the fold, whichever order the events arrive', () => {
+    const older = statement(dosage({ text: 'once daily' }), '2023-01-01T00:00:00+00:00')
+    const newer = statement(dosage({ text: 'twice daily' }), '2024-06-01T00:00:00+00:00')
+    expect(row([newer, older]).prescribed).toBe('twice daily')
+    expect(row([older, newer]).prescribed).toBe('twice daily')
+  })
+
+  it('does not let a newer dose-only refill hide an older sig', () => {
+    const sig = statement(dosage({ text: 'once daily' }), '2023-01-01T00:00:00+00:00')
+    const bare = statement(dosage({ dose: { value: '500', unit: null } }), '2024-06-01T00:00:00+00:00')
+    const r = row([sig, bare])
+    expect(r.prescribed).toBe('once daily')
+    expect(r.detail).toBe('500')
+  })
+
+  it('reports a gap when neither the owner nor the record states a frequency', () => {
+    expect(medicationFrequency(row([statement(null, '2024-01-01T00:00:00+00:00')]))).toEqual({ kind: 'missing' })
+    const bare = statement(dosage({ dose: { value: '5', unit: null } }), '2024-01-01T00:00:00+00:00')
+    expect(medicationFrequency(row([bare]))).toEqual({ kind: 'missing' })
+    // A regimen with no schedule (prescriber only) is still a gap.
+    expect(medicationFrequency(row([bare], { prescriber: 'Dr. Rao' }))).toEqual({ kind: 'missing' })
+  })
+
+  it('ignores medication_dose events', () => {
+    const dose = ev({ kind: 'medication_dose', code: METFORMIN, value: dosage({ text: 'once daily' }), effective_at: '2024-01-01T00:00:00+00:00' })
+    const stmt = statement(null, '2024-01-01T00:00:00+00:00')
+    expect(row([stmt, dose]).prescribed).toBe('')
+  })
+
+  describe('origin', () => {
+    const at = '2024-01-01T00:00:00+00:00'
+    it('is "records" for an imported event', () => {
+      expect(row([statement(null, at, { source: 'import:Mercy Health.xml' })]).origin).toBe('records')
+    })
+    it('is "records" for an approved proposal, whose source is the proposer\'s method', () => {
+      expect(row([statement(null, at, { source: 'ocr', proposed: true })]).origin).toBe('records')
+    })
+    it('is "self" for an owner-logged event', () => {
+      expect(row([statement(null, at, { source: 'self' })]).origin).toBe('self')
+    })
+    it('is "both" when the fold mixes the two', () => {
+      const events = [statement(null, at, { source: 'self' }), statement(null, '2024-02-01T00:00:00+00:00', { source: 'import:x.xml' })]
+      expect(row(events).origin).toBe('both')
+    })
+    it('claims nothing for an unattributed source or a lookalike prefix', () => {
+      expect(row([statement(null, at, { source: '' })]).origin).toBeUndefined()
+      expect(row([statement(null, at, { source: 'imported' })]).origin).toBeUndefined()
+      expect(row([statement(null, at, { source: 'selfish' })]).origin).toBeUndefined()
+    })
   })
 })
