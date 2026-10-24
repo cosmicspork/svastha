@@ -318,14 +318,6 @@ async function seedDoctorLink(page: Page): Promise<string> {
 
 /** Build the vault on `page` and return the route vars the manifest needs. */
 export async function seedVault(page: Page, browser: Browser): Promise<Record<string, string>> {
-  // Workaround, not a guarantee: hold the relay's poke stream open with no
-  // pokes. On main, pulling back this device's own `cur-` record ties
-  // `lwwMerge`, `remoteApply` reads the tie as "remote lost" and re-pushes, and
-  // the relay's poke for that push starts the next pull: a livelock (~17
-  // pull/push cycles a second) that never lets a pull resolve or a curated
-  // screen settle. The sweep pulls explicitly instead. Remove once that is
-  // fixed.
-  await page.route('**/v0/events', () => {})
   const labReport = await fakeLabReportPng(page)
   const words = await onboardViaUI(page)
   await connectRelayViaUI(page)

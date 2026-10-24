@@ -46,8 +46,8 @@ function listen(page: Page, current: () => Bucket | null): void {
   })
   page.on('pageerror', (e) => current()?.pageErrors.add(String(e.message ?? e).slice(0, 400)))
   page.on('requestfailed', (r) => {
-    // The poke stream is held open on purpose (see seed.ts), so its abort on
-    // a reload is not a failure of the screen.
+    // The poke stream is long-lived by design, so its abort on a reload or
+    // navigation is not a failure of the screen.
     if (new URL(r.url()).pathname === '/v0/events') return
     current()?.failedRequests.add(`${r.method()} ${r.url()} (${r.failure()?.errorText ?? 'failed'})`)
   })
