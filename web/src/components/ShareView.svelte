@@ -8,7 +8,7 @@
   import { initSvastha } from '../lib/svastha'
   import { isMedicationOnlyBundle, loadShare, type ShareLoadResult } from '../lib/shareRecipient'
   import { inspectFileShare, openWithPassphrase } from '../lib/fileShare'
-  import { statusMapFrom, nameMapFrom, regimenMapFrom, priorityMapFrom } from '../lib/curation'
+  import { statusMapFrom, nameMapFrom, regimenMapFrom, allergyMapFrom, priorityMapFrom } from '../lib/curation'
   import { buildSummary } from '../lib/summary'
   import { fingerprint } from '../lib/exchange'
   import { base64ToBytes } from '../lib/base64'
@@ -149,7 +149,7 @@
     }
   }
 
-  // The verified `status:`/`name:`/`regimen:`/`priority:` overlay the share carried, folded
+  // The verified `status:`/`name:`/`regimen:`/`allergy:`/`priority:` overlay the share carried, folded
   // into the concept maps the summary renders from — so a recipient sees the
   // owner's real Current/Past split, name overrides, and how each medication is
   // actually taken, not a flat all-active list. Each reducer prefix-filters the
@@ -158,6 +158,9 @@
   const nameMap = $derived(result?.status === 'ok' ? nameMapFrom(result.bundle.curation) : new Map())
   const regimenMap = $derived(
     result?.status === 'ok' ? regimenMapFrom(result.bundle.curation) : new Map(),
+  )
+  const allergyMap = $derived(
+    result?.status === 'ok' ? allergyMapFrom(result.bundle.curation) : new Map(),
   )
   // Only pins ever cross (see doctorShare.ts's `curationForBundle`), so this
   // reorders the recipient's Problems and Allergies and hides nothing.
@@ -330,6 +333,7 @@
         status={statusMap}
         names={nameMap}
         regimen={regimenMap}
+        allergy={allergyMap}
         priority={priorityMap}
       />
     {/if}

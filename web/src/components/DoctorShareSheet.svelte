@@ -16,6 +16,7 @@
     statusMapFrom,
     nameMapFrom,
     regimenMapFrom,
+    allergyMapFrom,
     priorityMapFrom,
     hiddenConceptsFrom,
     type SignedCurationRecord,
@@ -184,6 +185,7 @@
   const previewStatus = $derived(statusMapFrom(carriedCuration))
   const previewNames = $derived(nameMapFrom(carriedCuration))
   const previewRegimen = $derived(regimenMapFrom(carriedCuration))
+  const previewAllergy = $derived(allergyMapFrom(carriedCuration))
   const previewPriority = $derived(priorityMapFrom(carriedCuration))
   // Folded from the same scoped events and carried curation the bundle ships,
   // for the pharmacy branch of the preview below.
@@ -192,6 +194,7 @@
       status: previewStatus,
       names: previewNames,
       regimen: previewRegimen,
+      allergy: previewAllergy,
       priority: previewPriority,
     }),
   )
@@ -349,10 +352,11 @@
         allCurationByPrefix('status:'),
         allCurationByPrefix('name:'),
         allCurationByPrefix('regimen:'),
+        allCurationByPrefix('allergy:'),
         // Also the source of the hidden-concept filter above, not only of the
         // pinned records that ride along.
         allCurationByPrefix('priority:'),
-      ]).then(([s, n, r, p]) => [...s, ...n, ...r, ...p] as SignedCurationRecord[]),
+      ]).then(([s, n, r, a, p]) => [...s, ...n, ...r, ...a, ...p] as SignedCurationRecord[]),
       loadHiddenIds(),
     ])
   })
@@ -662,6 +666,7 @@
                 status={previewStatus}
                 names={previewNames}
                 regimen={previewRegimen}
+                allergy={previewAllergy}
                 priority={previewPriority}
               />
             {/if}

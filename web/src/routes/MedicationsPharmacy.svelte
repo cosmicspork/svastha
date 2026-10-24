@@ -7,11 +7,13 @@
     allNames,
     allRegimens,
     allPriorities,
+    allAllergies,
     type ConceptStatus,
     type ConceptPriority,
     type Regimen,
+    type AllergyDetails,
   } from '../lib/curation'
-  import { buildSummary } from '../lib/summary'
+  import { buildSummary, allergyChipText } from '../lib/summary'
   import { loadDictionaryIndex, dictionaryStatus } from '../lib/dictionary'
   import { loadListSize, setListSize, type ListSize } from '../lib/pharmacyPrefs'
   import { get } from '../lib/db'
@@ -33,6 +35,7 @@
   let nameMap = $state<Map<string, string>>(new Map())
   let regimenMap = $state<Map<string, Regimen>>(new Map())
   let priorityMap = $state<Map<string, ConceptPriority>>(new Map())
+  let allergyMap = $state<Map<string, AllergyDetails>>(new Map())
   let loaded = $state(false)
   let size = $state<ListSize>('standard')
 
@@ -62,7 +65,7 @@
     pdfBytes = null
     pdfPending = buildPharmacyPdf(
       summary.medications,
-      summary.allergies.map((a) => a.label),
+      summary.allergies.map(allergyChipText),
       createdAt,
     )
     void pdfPending
@@ -74,7 +77,7 @@
     try {
       const bytes = pdfBytes ?? (await (pdfPending ?? buildPharmacyPdf(
         summary.medications,
-        summary.allergies.map((a) => a.label),
+        summary.allergies.map(allergyChipText),
         createdAt,
       )))
       const name = pharmacyPdfFilename(new Date())
@@ -114,6 +117,7 @@
       names: nameMap,
       regimen: regimenMap,
       priority: priorityMap,
+      allergy: allergyMap,
     }),
   )
 
@@ -127,11 +131,12 @@
     )
     relayUrl = (await get<string>('prefs', 'relayUrl')) ?? ''
     if (relayUrl && session.identity) relay = new RelayClient(relayUrl, session.identity)
-    ;[statusMap, nameMap, regimenMap, priorityMap, size] = await Promise.all([
+    ;[statusMap, nameMap, regimenMap, priorityMap, allergyMap, size] = await Promise.all([
       allStatuses(),
       allNames(),
       allRegimens(),
       allPriorities(),
+      allAllergies(),
       loadListSize(),
     ])
     loaded = true

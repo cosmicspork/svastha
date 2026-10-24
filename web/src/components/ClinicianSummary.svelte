@@ -6,13 +6,15 @@
     allStatuses,
     allNames,
     allRegimens,
+    allAllergies,
     allPriorities,
     setPriority,
     type ConceptPriority,
     type ConceptStatus,
     type Regimen,
+    type AllergyDetails,
   } from '../lib/curation'
-  import { buildSummary, splitProblems, type SummaryRow, type WindowedSection } from '../lib/summary'
+  import { buildSummary, splitProblems, allergyGroups, type SummaryRow, type WindowedSection } from '../lib/summary'
   import { loadDictionaryIndex, dictionaryStatus } from '../lib/dictionary'
   import { shortenSystem } from '../lib/codes'
   import { focusedEventId } from '../lib/spine-focus'
@@ -25,7 +27,7 @@
   // own-vault fetch and all local curation reads. A read-only view never reads
   // the local `cur-*` store (curation is owner-only in v1 — see
   // docs/ARCHITECTURE.md, "Curation overlay"), but a doctor-share recipient MAY
-  // be handed the owner's `status:`/`name:`/`regimen:`/`priority:` overlay for
+  // be handed the owner's `status:`/`name:`/`regimen:`/`allergy:`/`priority:` overlay for
   // the shared concepts, already verified, via `status`/`names`/`regimen`/
   // `priority` — so it renders the same Current/Past and Active/Resolved
   // grouping, name overrides, regimen detail, and pinned order the owner sees,
@@ -39,6 +41,7 @@
     status: providedStatus,
     names: providedNames,
     regimen: providedRegimen,
+    allergy: providedAllergy,
     priority: providedPriority,
     heading,
     timelineHref,
@@ -51,6 +54,9 @@
      * read-only mode. Drives the same sub-line, "As needed" chip/sub-group and
      * panel rows the owner sees — the recipient just cannot edit them. */
     regimen?: Map<string, Regimen>
+    /** The verified `allergy:` overlay a doctor-share bundle carried, in
+     * read-only mode: the category, reaction and severity the owner recorded. */
+    allergy?: Map<string, AllergyDetails>
     /** The verified `priority:` overlay a doctor-share bundle carried, in
      * read-only mode — pins only, so the recipient's Problems and Allergies
      * lead with what the owner pinned. */
@@ -71,6 +77,7 @@
   let statusMap = $state<Map<string, ConceptStatus>>(new Map())
   let nameMap = $state<Map<string, string>>(new Map())
   let regimenMap = $state<Map<string, Regimen>>(new Map())
+  let allergyMap = $state<Map<string, AllergyDetails>>(new Map())
   let priorityMap = $state<Map<string, ConceptPriority>>(new Map())
   let loaded = $state(false)
 
@@ -81,6 +88,7 @@
   const effectiveStatus = $derived(readonly ? (providedStatus ?? new Map()) : statusMap)
   const effectiveNames = $derived(readonly ? (providedNames ?? new Map()) : nameMap)
   const effectiveRegimen = $derived(readonly ? (providedRegimen ?? new Map()) : regimenMap)
+  const effectiveAllergy = $derived(readonly ? (providedAllergy ?? new Map()) : allergyMap)
   const effectivePriority = $derived(readonly ? (providedPriority ?? new Map()) : priorityMap)
 
   // The offline code dictionary (see lib/dictionary.ts): empty unless enabled.
@@ -107,6 +115,7 @@
       status: effectiveStatus,
       names: effectiveNames,
       regimen: effectiveRegimen,
+      allergy: effectiveAllergy,
       priority: effectivePriority,
     }),
   )
@@ -149,6 +158,10 @@
   const activeProblems = $derived(keep(problemLists.active))
   const resolvedProblems = $derived(keep(problemLists.resolved))
   const allergies = $derived(keep(summary.allergies))
+  // Whether grouping is on is decided by the whole list, not the filtered one:
+  // typing in the filter must not make the sub-headings come and go.
+  const allergiesGrouped = $derived(allergyGroups(summary.allergies) !== null)
+  const allergyGroupsShown = $derived(allergiesGrouped ? allergyGroups(allergies) : null)
   const immunizations = $derived(keepWindowed(summary.immunizations))
   const vitals = $derived(keepWindowed(summary.latestVitals))
   const results = $derived(keepWindowed(summary.recentResults))
@@ -236,10 +249,11 @@
    * summary re-splits, re-labels, and re-doses — the same way the dictionary
    * effect re-hydrates. */
   async function reloadCuration() {
-    ;[statusMap, nameMap, regimenMap, priorityMap] = await Promise.all([
+    ;[statusMap, nameMap, regimenMap, allergyMap, priorityMap] = await Promise.all([
       allStatuses(),
       allNames(),
       allRegimens(),
+      allAllergies(),
       allPriorities(),
     ])
   }
@@ -355,7 +369,9 @@
         emptyText="None recorded"
         dictionaryEnabled={$dictionaryStatus.enabled}
         {coveredSystems}
-        curateLabel="Pin, hide, or rename"
+        curateLabel="Details, pin, hide, or rename"
+        allergy
+        groups={allergyGroupsShown}
         {readonly}
         {onviewtimeline}
         onrowtap={readonly ? undefined : (row) => openAction(row, 'allergy')}
@@ -706,6 +722,7 @@
       section={action.section}
       name={nameMap.get(action.row.key) ?? ''}
       regimen={regimenMap.get(action.row.key)}
+      allergy={allergyMap.get(action.row.key)}
       priority={priorityMap.get(action.row.key) ?? ''}
       onclose={closeAction}
       onsaved={reloadCuration}

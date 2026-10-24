@@ -35,6 +35,8 @@ import {
   type ConceptPriority,
   type ConceptStatus,
   type Regimen,
+  type AllergyDetails,
+  ALLERGY_CATEGORY_LABELS,
   type RegimenRoute,
 } from './curation'
 import { isoToMillis } from './time'
@@ -106,6 +108,9 @@ export interface SummaryRow {
    * namespace), absent when there is none. Only medication rows are expected to
    * carry one; elsewhere it is inert data the view simply never renders. */
   regimen?: Regimen
+  /** The owner's recorded category, reaction and severity for an allergy
+   * (curation.ts's `allergy:`); absent when none. Inert outside Allergies. */
+  allergy?: AllergyDetails
   /** Whether the owner pinned this concept (curation.ts's `priority:`). Only
    * problems and allergies are reordered on it; elsewhere it is inert. */
   pinned: boolean
@@ -382,6 +387,63 @@ function pinnedFirst(rows: SummaryRow[]): SummaryRow[] {
   return [...rows.filter((r) => r.pinned), ...rows.filter((r) => !r.pinned)]
 }
 
+/** The Allergies order, as bands: pinned, then severe, then medication, then any
+ * other category, then uncategorized. A severe allergy outranks a category
+ * because the cost of missing it is the cost of the reaction, not of the label. */
+export function allergyBand(row: SummaryRow): 0 | 1 | 2 | 3 | 4 {
+  if (row.pinned) return 0
+  if (row.allergy?.severity === 'severe') return 1
+  const category = row.allergy?.category
+  if (category === 'medication') return 2
+  return category ? 3 : 4
+}
+
+/** One comparator for the band order above, alphabetical within a band. The
+ * pharmacy list and the summary both sort with it so they cannot disagree. */
+export function byAllergyPriority(a: SummaryRow, b: SummaryRow): number {
+  return allergyBand(a) - allergyBand(b) || byLabel(a, b)
+}
+
+export interface AllergyGroup {
+  id: 'medications' | 'other'
+  title: string
+  rows: SummaryRow[]
+}
+
+/** Sub-headings for the Allergies section, or null while no allergy has a
+ * category (a heading over an uncategorized list would claim a split nobody
+ * made). Pinned rows lead *within* their group rather than above both: "pinned
+ * first" is read per group so a heading never sits under rows it does not
+ * describe. `rows` must already be in {@link byAllergyPriority} order. */
+export function allergyGroups(rows: SummaryRow[]): AllergyGroup[] | null {
+  if (!rows.some((r) => r.allergy?.category)) return null
+  const meds = rows.filter((r) => r.allergy?.category === 'medication')
+  const other = rows.filter((r) => r.allergy?.category !== 'medication')
+  const groups: AllergyGroup[] = []
+  if (meds.length > 0) groups.push({ id: 'medications', title: 'Medications', rows: meds })
+  if (other.length > 0) groups.push({ id: 'other', title: 'Other', rows: other })
+  return groups
+}
+
+/** An allergy row's sub-line: the category word for a non-medication category
+ * (the group heading already says "Medications"), then the reaction, then
+ * "Not categorized" when grouping is on and the owner has not filed it. */
+export function allergySubline(row: SummaryRow, grouped: boolean): string {
+  const a = row.allergy
+  const parts: string[] = []
+  if (a?.category && a.category !== 'medication') parts.push(ALLERGY_CATEGORY_LABELS[a.category])
+  if (a?.reaction) parts.push(a.reaction)
+  if (grouped && !a?.category) parts.push('Not categorized')
+  return parts.join(' · ')
+}
+
+/** The pharmacy chip text: "Penicillin — anaphylaxis (severe)". Only severe is
+ * marked; a pharmacist scanning chips needs the one that changes the decision. */
+export function allergyChipText(row: SummaryRow): string {
+  const a = row.allergy
+  return `${row.label}${a?.reaction ? ` — ${a.reaction}` : ''}${a?.severity === 'severe' ? ' (severe)' : ''}`
+}
+
 /** The start of the recency window: `months` before `nowMs`. Month arithmetic,
  * not a 365-day approximation, so "the last 12 months" means the same calendar
  * date a year ago however the leap years fall. */
@@ -411,6 +473,7 @@ interface Curation {
   status: Map<string, ConceptStatus>
   names: Map<string, string>
   regimen: Map<string, Regimen>
+  allergy: Map<string, AllergyDetails>
   priority: Map<string, ConceptPriority>
 }
 
@@ -453,6 +516,7 @@ function foldSection(
       focusId: (rep ?? ls).id,
       status: curation.status.get(key) ?? 'active',
       regimen: curation.regimen.get(key),
+      allergy: curation.allergy.get(key),
       pinned: curation.priority.get(key) === 'pinned',
       prescribed: prescribedFrequency(group),
       origin: originOf(group),
@@ -707,6 +771,8 @@ export function buildSummary(
     status?: Map<string, ConceptStatus>
     names?: Map<string, string>
     regimen?: Map<string, Regimen>
+    /** The owner's allergy details (curation.ts's `allergy:`). */
+    allergy?: Map<string, AllergyDetails>
     /** The owner's per-concept priority (curation.ts's `priority:`): pinned
      * problems and allergies lead their section, and a hidden concept's events
      * are dropped before anything folds, leaving it only in `hidden`. */
@@ -733,6 +799,7 @@ export function buildSummary(
     status: opts.status ?? new Map(),
     names: opts.names ?? new Map(),
     regimen: opts.regimen ?? new Map(),
+    allergy: opts.allergy ?? new Map(),
     priority: opts.priority ?? new Map(),
   }
   // Subtract hides before grouping; dropped silently — a clinical summary
@@ -786,8 +853,8 @@ export function buildSummary(
       dictionary,
       curation,
     ).sort(byLabel),
-    allergies: pinnedFirst(
-      foldSection(allergyEvents, 'latest', () => '', nameIndex, dictionary, curation).sort(byLabel),
+    allergies: foldSection(allergyEvents, 'latest', () => '', nameIndex, dictionary, curation).sort(
+      byAllergyPriority,
     ),
     hidden: {
       problems: foldSection(

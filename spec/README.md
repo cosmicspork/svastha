@@ -434,7 +434,7 @@ version-bumped contract change).
 
 The event log above is immutable; a thin **curation overlay** carries the mutable
 state layered on top (tags, hides, notes, favorite quick-log templates, and
-concept-level status/name/regimen/priority records). Each entry is a small, namespace-defined
+concept-level status/name/regimen/allergy/priority records). Each entry is a small, namespace-defined
 value under an app-level key, merged last-writer-wins. `core` is namespace-
 agnostic: `key` and `value` are opaque to the contract. The overlay's app-level
 conventions (which key namespaces exist, the mutable `cur-*` blob mapping, and its
@@ -1245,9 +1245,9 @@ The bundle's internal structure is app-level (opaque to the relay, documented in
 `SignedCurationRecord`s (see "Curation record" above) alongside its `events`, so
 a share can include the owner's per-concept **status** (current/past,
 active/resolved), **name** overrides, **regimen** (how a medication is
-actually taken), and **priority** (which concepts the owner pinned):
+actually taken), and **allergy** (an allergy's category, reaction, and severity), and **priority** (which concepts the owner pinned):
 
-- Only the `status:`, `name:`, `regimen:`, and `priority:` namespaces cross the
+- Only the `status:`, `name:`, `regimen:`, `allergy:`, and `priority:` namespaces cross the
   vault boundary — never `tag:`/`hide:`/`note:`/`fav:` (the owner's private
   working state) — and only for a concept some event in the same bundle folds
   into. A record for an excluded concept is never carried, so the array cannot
@@ -1264,6 +1264,10 @@ actually taken), and **priority** (which concepts the owner pinned):
   *authentic*, not *well-formed*: the value rides opaque to the signature, so a
   recipient **MUST** shape-check it tolerantly on read — drop an unknown or
   wrong-typed field rather than repair it, and never let one crash a render.
+- An `allergy:` value is `{ category?, reaction?, severity? }` — `category` one
+  of `medication | food | environment | other`, `severity` one of `mild |
+  moderate | severe`, `reaction` free text. A recipient **MUST** shape-check it
+  tolerantly on read like `regimen:`, matching the enums exactly.
 - The recipient **verifies each record's signature against the bundle's declared
   `signer`** — the same signer every event's `author` is pinned to — and **drops
   (and counts) any that fail**, exactly as it does a tampered or spliced event.

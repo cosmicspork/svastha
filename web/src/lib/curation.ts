@@ -1,7 +1,7 @@
 // The curation overlay: the system's only mutable state, layered over the
 // otherwise append-only event log (see docs/ARCHITECTURE.md, "Event model").
 // Tags, notes, hides, favorite draft templates, and the concept-level
-// `status:`/`name:`/`regimen:`/`priority:` overrides all live here as signed curation records,
+// `status:`/`name:`/`regimen:`/`allergy:`/`priority:` overrides all live here as signed curation records,
 // LWW-merged and synced through their own `cur-*` blob namespace — see
 // docs/ARCHITECTURE.md's "Curation overlay" section for the full design
 // (mutable-blob mapping, the signing rationale, owner-only v1 scope).
@@ -597,6 +597,92 @@ export function regimenMapFrom(records: CurationRecord[]): Map<string, Regimen> 
  * which takes this map). */
 export async function allRegimens(): Promise<Map<string, Regimen>> {
   return regimenMapFrom(await allCurationByPrefix('regimen:'))
+}
+
+// --- helpers: allergy details ---
+//
+// `allergy:` records what an imported allergy drops on the floor: its category,
+// the reaction, and how bad it was. Import never guesses a category from the
+// code system (an RxNorm substance is probably a drug, but SNOMED covers food
+// and drugs alike, and a wrong guess on an allergy list is the bad failure), so
+// the owner records it.
+
+export const ALLERGY_CATEGORIES = ['medication', 'food', 'environment', 'other'] as const
+export type AllergyCategory = (typeof ALLERGY_CATEGORIES)[number]
+
+export const ALLERGY_CATEGORY_LABELS: Record<AllergyCategory, string> = {
+  medication: 'Medication',
+  food: 'Food',
+  environment: 'Environment',
+  other: 'Other',
+}
+
+export const ALLERGY_SEVERITIES = ['mild', 'moderate', 'severe'] as const
+export type AllergySeverity = (typeof ALLERGY_SEVERITIES)[number]
+
+export interface AllergyDetails {
+  category?: AllergyCategory
+  reaction?: string
+  severity?: AllergySeverity
+}
+
+/** Cap on the reaction text: it rides a row sub-line and a pharmacy chip, and a
+ * pasted paragraph belongs in a note. */
+export const ALLERGY_REACTION_MAX = 200
+
+/**
+ * Tolerant shape-check on read, like {@link normalizeRegimen}: a wrong-typed or
+ * unknown field is dropped, never repaired. Enums match exactly (`'SEVERE'`
+ * is not `'severe'`: guessing a severity up or down is worse than showing
+ * none). `undefined` for the all-empty value, which is also the clear.
+ */
+export function normalizeAllergy(value: unknown): AllergyDetails | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const v = value as Record<string, unknown>
+  const details: AllergyDetails = {}
+  if (typeof v.category === 'string' && (ALLERGY_CATEGORIES as readonly string[]).includes(v.category)) {
+    details.category = v.category as AllergyCategory
+  }
+  const reaction = trimmedString(v.reaction)
+  if (reaction) details.reaction = reaction.slice(0, ALLERGY_REACTION_MAX).trim()
+  if (typeof v.severity === 'string' && (ALLERGY_SEVERITIES as readonly string[]).includes(v.severity)) {
+    details.severity = v.severity as AllergySeverity
+  }
+  return Object.keys(details).length === 0 ? undefined : details
+}
+
+/** Whether two allergy details differ once normalized — the diff-before-write
+ * test, for the same reason as {@link regimenChanged}. */
+export function allergyChanged(before: AllergyDetails | undefined, after: AllergyDetails | undefined): boolean {
+  const a = normalizeAllergy(before)
+  const b = normalizeAllergy(after)
+  if (!a || !b) return a !== b
+  return a.category !== b.category || a.reaction !== b.reaction || a.severity !== b.severity
+}
+
+export async function getAllergy(conceptKey: string): Promise<AllergyDetails | undefined> {
+  return normalizeAllergy((await getCuration(`allergy:${conceptKey}`))?.value)
+}
+
+/** An all-empty value is stored as `{}` — the clear (the sync model has no delete). */
+export async function setAllergy(conceptKey: string, details: AllergyDetails): Promise<void> {
+  await setCuration(`allergy:${conceptKey}`, normalizeAllergy(details) ?? {})
+}
+
+/** Concept -> allergy details from a set of curation records; cleared and
+ * unsalvageable values are dropped. Tolerant of a mixed-namespace array. */
+export function allergyMapFrom(records: CurationRecord[]): Map<string, AllergyDetails> {
+  const map = new Map<string, AllergyDetails>()
+  for (const r of records) {
+    if (!r.key.startsWith('allergy:')) continue
+    const details = normalizeAllergy(r.value)
+    if (details) map.set(r.key.slice('allergy:'.length), details)
+  }
+  return map
+}
+
+export async function allAllergies(): Promise<Map<string, AllergyDetails>> {
+  return allergyMapFrom(await allCurationByPrefix('allergy:'))
 }
 
 // --- helpers: concept priority ---

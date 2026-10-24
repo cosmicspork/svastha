@@ -5,11 +5,21 @@
     setName,
     setRegimen,
     setPriority,
+    setAllergy,
+    allergyChanged,
+    normalizeAllergy,
+    ALLERGY_CATEGORIES,
+    ALLERGY_CATEGORY_LABELS,
+    ALLERGY_SEVERITIES,
+    ALLERGY_REACTION_MAX,
     regimenChanged,
     normalizeRegimen,
     REGIMEN_ROUTES,
     REGIMEN_ROUTE_LABELS,
     type Regimen,
+    type AllergyDetails,
+    type AllergyCategory,
+    type AllergySeverity,
     type ConceptPriority,
   } from '../lib/curation'
   import type { SummaryRow } from '../lib/summary'
@@ -25,6 +35,7 @@
     section,
     name = '',
     regimen,
+    allergy,
     priority = '',
     onclose,
     onsaved,
@@ -38,6 +49,8 @@
     name?: string
     /** The concept's current regimen, seeded into the fields on open. */
     regimen?: Regimen
+    /** The allergy's recorded details, seeded into the fields on open. */
+    allergy?: AllergyDetails
     /** The concept's current priority, `''` (normal) when there is none. */
     priority?: ConceptPriority
     onclose: () => void
@@ -57,6 +70,7 @@
     { value: 'pinned', label: 'Pin' },
     { value: 'hidden', label: 'Hide' },
   ]
+  const isAllergy = $derived(section === 'allergy')
   const isProblem = $derived(section === 'problem')
 
   // Seeded once, at open: the sheet is a form over a snapshot, and the host
@@ -65,6 +79,14 @@
   // owner has typed.
   let nameField = $state(untrack(() => name))
   let priorityField = $state<ConceptPriority>(untrack(() => priority))
+  // `''` is the unset state for both pickers.
+  let categoryField = $state<AllergyCategory | ''>(untrack(() => allergy?.category ?? ''))
+  let severityField = $state<AllergySeverity | ''>(untrack(() => allergy?.severity ?? ''))
+  let reactionField = $state(untrack(() => allergy?.reaction ?? ''))
+
+  function allergyFromFields(): AllergyDetails | undefined {
+    return normalizeAllergy({ category: categoryField, severity: severityField, reaction: reactionField })
+  }
 
   /** The regimen fields, as the form holds them: all strings (an unset route is
    * `''`, not a missing key) plus the as-needed boolean, so every input can bind
@@ -104,6 +126,10 @@
     // delete — see curation.ts's `setName`), falling back to the resolved name.
     if (nameField.trim() !== name) await setName(row.key, nameField)
     if (hasPriority && priorityField !== priority) await setPriority(row.key, priorityField)
+    if (isAllergy) {
+      const next = allergyFromFields()
+      if (allergyChanged(allergy, next)) await setAllergy(row.key, next ?? {})
+    }
     if (isMed) {
       const next = regimenFromFields()
       if (regimenChanged(regimen, next)) await setRegimen(row.key, next ?? {})
@@ -156,6 +182,70 @@
             Pinned {noun} lead the list, here and on any doctor link you make.
           {/if}
         </span>
+      </div>
+    {/if}
+
+    {#if isAllergy}
+      <!-- Import drops all three, and the category is never guessed from the
+           code system, so this is the owner's own record. Unset is a real
+           choice: it is how a wrong pick is taken back. -->
+      <div class="name-field">
+        <span class="name-label" id="allergy-category-label">Category</span>
+        <div class="seg" role="group" aria-labelledby="allergy-category-label" data-testid="action-allergy-category">
+          <button
+            type="button"
+            aria-pressed={categoryField === ''}
+            onclick={() => (categoryField = '')}
+            data-testid="action-allergy-category-unset"
+          >
+            Not set
+          </button>
+          {#each ALLERGY_CATEGORIES as c (c)}
+            <button
+              type="button"
+              aria-pressed={categoryField === c}
+              onclick={() => (categoryField = c)}
+              data-testid="action-allergy-category-{c}"
+            >
+              {ALLERGY_CATEGORY_LABELS[c]}
+            </button>
+          {/each}
+        </div>
+      </div>
+
+      <label class="name-field">
+        <span class="name-label">Reaction</span>
+        <input
+          type="text"
+          bind:value={reactionField}
+          maxlength={ALLERGY_REACTION_MAX}
+          placeholder="Hives, anaphylaxis"
+          data-testid="action-allergy-reaction"
+        />
+      </label>
+
+      <div class="name-field">
+        <span class="name-label" id="allergy-severity-label">Severity</span>
+        <div class="seg" role="group" aria-labelledby="allergy-severity-label" data-testid="action-allergy-severity">
+          <button
+            type="button"
+            aria-pressed={severityField === ''}
+            onclick={() => (severityField = '')}
+            data-testid="action-allergy-severity-unset"
+          >
+            Not set
+          </button>
+          {#each ALLERGY_SEVERITIES as sev (sev)}
+            <button
+              type="button"
+              aria-pressed={severityField === sev}
+              onclick={() => (severityField = sev)}
+              data-testid="action-allergy-severity-{sev}"
+            >
+              {sev[0].toUpperCase() + sev.slice(1)}
+            </button>
+          {/each}
+        </div>
       </div>
     {/if}
 
