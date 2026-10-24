@@ -157,8 +157,14 @@ test('a hidden medication stays out of a share minted from this page', async ({ 
   )
 
   expect(json).not.toContain(hiddenId)
-  expect(json).not.toContain('6809') // Metformin
-  expect(json).toContain('29046') // Lisinopril
+  // Codes are compared on the parsed events, not as substrings of the JSON: a
+  // four-digit code turns up by chance inside the bundle's hex ids and
+  // signatures often enough to fail a run.
+  const codes = (JSON.parse(json) as { events: { event: { code: { code: string } | null } }[] }).events.map(
+    (se) => se.event.code?.code,
+  )
+  expect(codes).not.toContain('6809') // Metformin
+  expect(codes).toContain('29046') // Lisinopril
 })
 
 /** Open a share link in a fresh, vault-less context — a real recipient. */
