@@ -298,15 +298,35 @@ async function applySharedSealed(
 }
 
 /**
+ * Apply one blob, or skip it and keep going. A blob this build can't apply —
+ * an event shape from a newer contract version that `verify_event` can't
+ * decode, a forged signature, a foreign author — is never stored, so it is
+ * retried on the next pull, exactly as the own-vault pull treats a bad frame.
+ * Letting it throw instead would abandon every blob listed after it, on every
+ * pull, until this build updates.
+ */
+async function applyOrSkip(
+  share: Share,
+  known: Set<string>,
+  blobId: string,
+  sealed: Uint8Array,
+): Promise<void> {
+  try {
+    await applySharedSealed(share, known, blobId, sealed)
+  } catch (err) {
+    console.warn(`shared blob ${blobId} from ${share.ownerEd} skipped:`, err)
+  }
+}
+
+/**
  * Batched walk of one share's blobs (`?include=body`), applying each frame as
  * it streams. Returns `false` when the relay doesn't support batching, so the
  * caller falls back to its per-blob loop; `true` when this share is finished
  * for this pull — either the walk completed, or the grant vanished mid-walk
  * and the share was marked stale, as a null listing does.
  *
- * Integrity errors propagate to `pullShared`'s per-share catch, aborting this
- * share and leaving the rest for the next pull — today's semantics for an
- * inline throw.
+ * A frame that fails to apply is skipped (see {@link applyOrSkip}); only a
+ * listing or transport failure reaches `pullShared`'s per-share catch.
  */
 async function batchPullShare(
   client: SharingClient & BatchSharedListClient,
@@ -335,7 +355,7 @@ async function batchPullShare(
       } else {
         continue
       }
-      await applySharedSealed(share, known, id, blob)
+      await applyOrSkip(share, known, id, blob)
     }
 
     // Same non-advancing-cursor guard as sync.ts's own walk: a buggy relay
@@ -397,7 +417,7 @@ export async function pullShared(): Promise<void> {
       for (const blobId of toFetch) {
         const sealed = await sharingClient.getSharedBlob(share.ownerEd, blobId)
         if (!sealed) continue
-        await applySharedSealed(share, known, blobId, sealed)
+        await applyOrSkip(share, known, blobId, sealed)
       }
     } catch (err) {
       // Left for the next pull rather than aborting every other share.
