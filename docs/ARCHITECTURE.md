@@ -394,6 +394,20 @@ stays under its own license instead of being embedded in signed events.
   state a sig mints new statements beside the ones imported before; nothing
   retracts the old ones.
 
+  Work history is imported too, from the C-CDA Social History section (LOINC
+  `29762-2`) and FHIR Occupation / ODH `Observation`s. Each job becomes an
+  `observation` coded `11341-5` (the value `coded` when the source codes it,
+  e.g. O\*NET-SOC, else `text`), plus, sharing the job's exact `effective_at`
+  (its start), an `observation` `86188-0` for the industry and one `87729-0`
+  (text) per occupational hazard: the one-event-per-component convention, and
+  the tie the summary reads. Entries are found by their observation code, not
+  templateId (Basic Occupation 4.503, ODH Past or Present Occupation 4.217; the
+  industry nested or as a sibling entry, tied by start date). The employer is
+  never imported, nor is any other ODH component yet (usual work, employment
+  status; reported as skipped). A job with no start date keeps none, so its
+  hazards cannot attach and the importer warns; two jobs with one start date
+  are warned about, not offset, because signed history reflects the source.
+
   `crates/import` is deliberately its own crate, not part of `core`: EHR mapping
   is churny domain logic (new section quirks, evolving code-system tables) that
   will keep changing long after the trust contract is frozen, and `core` stays

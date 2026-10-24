@@ -251,14 +251,16 @@ export const MINUTES = ucum('min')
 export const OCCUPATION = loinc('11341-5', 'History of Occupation')
 export const OCCUPATIONAL_HAZARD = loinc('87729-0', 'History of Occupational hazard')
 
-/** LOINC codes that classify an observation as work history. 86188-0
- * (occupation industry) is listed by bare code on purpose: nothing logs it
- * yet (import will), and a `Code` constant would pin a display string into
- * event ids before that import exists. */
+/** Written by import only (the Work log form has no industry field). The
+ * display string matches `crates/import/src/work.rs`, so an imported industry
+ * is recognised by system and code alone. */
+export const OCCUPATION_INDUSTRY = loinc('86188-0', 'History of Occupation industry')
+
+/** LOINC codes that classify an observation as work history. */
 export const WORK_LOINC_CODES: ReadonlySet<string> = new Set([
   OCCUPATION.code,
   OCCUPATIONAL_HAZARD.code,
-  '86188-0',
+  OCCUPATION_INDUSTRY.code,
 ])
 
 /** The work codes whose concept key carries the value (see `conceptKey` in

@@ -15,6 +15,7 @@ use svastha_core::event::{Code, Dosage, EventKind, EventValue, PeriodUnit, Quant
 
 use crate::dosage;
 use crate::systems::{LOINC, SNOMED, UCUM};
+use crate::work::{self, Job};
 use crate::{EventDraft, ImportError, ImportResult, Skipped};
 
 pub fn import(json: &str) -> Result<ImportResult, ImportError> {
@@ -24,6 +25,7 @@ pub fn import(json: &str) -> Result<ImportResult, ImportError> {
     }
 
     let mut result = ImportResult::default();
+    let mut jobs: Vec<Job> = Vec::new();
     for entry in bundle
         .get("entry")
         .and_then(Value::as_array)
@@ -31,13 +33,14 @@ pub fn import(json: &str) -> Result<ImportResult, ImportError> {
         .flatten()
     {
         if let Some(resource) = entry.get("resource") {
-            import_resource(resource, &mut result);
+            import_resource(resource, &mut result, &mut jobs);
         }
     }
+    work::flush(jobs, &mut result);
     Ok(result)
 }
 
-fn import_resource(resource: &Value, result: &mut ImportResult) {
+fn import_resource(resource: &Value, result: &mut ImportResult, jobs: &mut Vec<Job>) {
     let resource_type = resource
         .get("resourceType")
         .and_then(Value::as_str)
@@ -45,7 +48,7 @@ fn import_resource(resource: &Value, result: &mut ImportResult) {
     let id = resource.get("id").and_then(Value::as_str).unwrap_or("?");
 
     match resource_type {
-        "Observation" => import_observation(resource, result),
+        "Observation" => import_observation(resource, result, jobs),
         "Condition" => import_condition(resource, result),
         "AllergyIntolerance" => import_allergy(resource, result),
         "Immunization" => import_immunization(resource, result),
@@ -65,8 +68,14 @@ fn import_resource(resource: &Value, result: &mut ImportResult) {
 
 // --- Observation ---
 
-fn import_observation(res: &Value, result: &mut ImportResult) {
+fn import_observation(res: &Value, result: &mut ImportResult, jobs: &mut Vec<Job>) {
     let id = res.get("id").and_then(Value::as_str).unwrap_or("?");
+    // A job is routed here and only here: falling through to the generic panel
+    // path below would import its components a second time.
+    if has_loinc(res.get("code"), work::OCCUPATION) {
+        import_job(res, id, result, jobs);
+        return;
+    }
     let code = res.get("code").and_then(best_coding);
     let effective_at = effective_datetime(res);
 
@@ -124,6 +133,108 @@ fn observation_value(res: &Value) -> Option<EventValue> {
         return Some(EventValue::Text(s.to_string()));
     }
     None
+}
+
+// --- occupation (US Core Occupation / ODH PastOrPresentJob) ---
+//
+// Only `value[x]`, `effective[x]` and the industry/hazard components are read.
+// The employer lives in `extension`s and is never looked at (see `work.rs`).
+
+fn has_loinc(cc: Option<&Value>, wanted: &str) -> bool {
+    cc.and_then(|cc| cc.get("coding"))
+        .and_then(Value::as_array)
+        .is_some_and(|codings| {
+            codings.iter().any(|c| {
+                c.get("system").and_then(Value::as_str) == Some(LOINC)
+                    && c.get("code").and_then(Value::as_str) == Some(wanted)
+            })
+        })
+}
+
+fn clean(s: &str) -> Option<String> {
+    let s = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!s.is_empty()).then_some(s)
+}
+
+/// Coded when the source codes it, else the text it wrote.
+fn work_value(v: &Value) -> Option<EventValue> {
+    if let Some(cc) = v.get("valueCodeableConcept") {
+        if let Some(code) = best_coding(cc) {
+            return Some(EventValue::Coded(code));
+        }
+        let text = cc.get("text").and_then(Value::as_str).and_then(clean);
+        if let Some(text) = text {
+            return Some(EventValue::Text(text));
+        }
+    }
+    v.get("valueString")
+        .and_then(Value::as_str)
+        .and_then(clean)
+        .map(EventValue::Text)
+}
+
+fn hazard_text(v: &Value) -> Option<String> {
+    match work_value(v)? {
+        EventValue::Text(t) => Some(t),
+        EventValue::Coded(c) => c.display.as_deref().and_then(clean),
+        _ => None,
+    }
+}
+
+fn import_job(res: &Value, id: &str, result: &mut ImportResult, jobs: &mut Vec<Job>) {
+    let what = format!("Observation/{id}");
+    if res.get("dataAbsentReason").is_some() {
+        result.skipped.push(Skipped {
+            what,
+            why: "occupation has dataAbsentReason".into(),
+        });
+        return;
+    }
+    let Some(value) = work_value(res) else {
+        result.skipped.push(Skipped {
+            what,
+            why: "occupation has no usable value[x]".into(),
+        });
+        return;
+    };
+    let mut job = Job {
+        value,
+        start: effective_datetime(res),
+        industry: None,
+        hazards: Vec::new(),
+    };
+    for (i, comp) in res
+        .get("component")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let what = format!("Observation/{id} component {i}");
+        if has_loinc(comp.get("code"), work::INDUSTRY) {
+            match (work_value(comp), &job.industry) {
+                (Some(v), None) => job.industry = Some(v),
+                _ => result.skipped.push(Skipped {
+                    what,
+                    why: "industry has no usable value or is a second industry".into(),
+                }),
+            }
+        } else if has_loinc(comp.get("code"), work::HAZARD) {
+            match hazard_text(comp) {
+                Some(t) => job.hazards.push(t),
+                None => result.skipped.push(Skipped {
+                    what,
+                    why: "occupational hazard has no text".into(),
+                }),
+            }
+        } else {
+            result.skipped.push(Skipped {
+                what,
+                why: "occupational data component not mapped (v1)".into(),
+            });
+        }
+    }
+    jobs.push(job);
 }
 
 // --- Condition ---
