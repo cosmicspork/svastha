@@ -27,6 +27,12 @@ import {
   hiddenConceptsFrom,
   getPriority,
   allPriorities,
+  getAllergy,
+  allAllergies,
+  normalizeAllergy,
+  allergyMapFrom,
+  allergyChanged,
+  ALLERGY_REACTION_MAX,
   type CurationRecord,
   type SignedCurationRecord,
   type CurationSigner,
@@ -816,5 +822,102 @@ describe('priorityMapFrom', () => {
   it('hiddenConceptsFrom keeps only the hides', () => {
     const map = priorityMapFrom([rec(`priority:${A}`, { priority: 'pinned' }), rec(`priority:${B}`, { priority: 'hidden' })])
     expect(hiddenConceptsFrom(map)).toEqual(new Set([B]))
+  })
+})
+
+describe('allergy read helpers', () => {
+  const CONCEPT = 'allergy_intolerance|http://www.nlm.nih.gov/research/umls/rxnorm|7980'
+  const sign = signAs(AUTHOR_A)
+
+  it('getAllergy defaults to undefined, round-trips a value and trims the reaction', async () => {
+    expect(await getAllergy(CONCEPT)).toBeUndefined()
+    await writeCuration(
+      `allergy:${CONCEPT}`,
+      { category: 'medication', reaction: '  anaphylaxis ', severity: 'severe' },
+      sign,
+    )
+    expect(await getAllergy(CONCEPT)).toEqual({
+      category: 'medication',
+      reaction: 'anaphylaxis',
+      severity: 'severe',
+    })
+  })
+
+  it('reads a cleared value (the empty object, not a delete) as no details', async () => {
+    await writeCuration(`allergy:${CONCEPT}`, { severity: 'mild' }, sign, 1)
+    await writeCuration(`allergy:${CONCEPT}`, {}, sign, 2)
+    expect(await getAllergy(CONCEPT)).toBeUndefined()
+    expect(await getCuration(`allergy:${CONCEPT}`)).toBeDefined()
+  })
+
+  it('allAllergies keys on the bare concept, drops cleared records and other namespaces', async () => {
+    await writeCuration(`allergy:${CONCEPT}`, { category: 'food' }, sign)
+    await writeCuration('allergy:allergy_intolerance||Latex', {}, sign)
+    await writeCuration(`regimen:${CONCEPT}`, { dose: '10 mg' }, sign)
+    expect(await allAllergies()).toEqual(new Map([[CONCEPT, { category: 'food' }]]))
+  })
+})
+
+// Adversarial fixtures: values chosen to get past the shape check. An `allergy:`
+// value can arrive from a newer build or a doctor-share bundle, and a guessed
+// severity or category on an allergy list is worse than none.
+describe('normalizeAllergy (tolerant shape-check)', () => {
+  it('rejects non-object values outright', () => {
+    for (const value of ['medication', 42, true, null, undefined, ['severe'], [{ severity: 'severe' }]]) {
+      expect(normalizeAllergy(value)).toBeUndefined()
+    }
+  })
+
+  it('matches the enums exactly: no case folding, no trimming, no coercion', () => {
+    for (const category of ['Medication', 'MEDICATION', ' medication', 'drug', '', 1, ['food'], null]) {
+      expect(normalizeAllergy({ category }), JSON.stringify(category)).toBeUndefined()
+    }
+    for (const severity of ['SEVERE', 'Severe', 'severe ', 'critical', 3, true, ['severe'], null]) {
+      expect(normalizeAllergy({ severity }), JSON.stringify(severity)).toBeUndefined()
+    }
+  })
+
+  it('drops a blank or wrong-typed reaction', () => {
+    for (const reaction of ['   ', '', 5, ['rash'], { text: 'rash' }, null]) {
+      expect(normalizeAllergy({ reaction }), JSON.stringify(reaction)).toBeUndefined()
+    }
+  })
+
+  it('caps the reaction length', () => {
+    const out = normalizeAllergy({ reaction: 'x'.repeat(ALLERGY_REACTION_MAX + 50) })
+    expect(out?.reaction).toHaveLength(ALLERGY_REACTION_MAX)
+  })
+
+  it('keeps the valid fields and ignores unknown ones', () => {
+    expect(
+      normalizeAllergy({ category: 'food', severity: 'SEVERE', reaction: 'hives', extra: 1, constructor: 'x' }),
+    ).toEqual({ category: 'food', reaction: 'hives' })
+  })
+
+  it('reads the all-empty value as no details', () => {
+    expect(normalizeAllergy({})).toBeUndefined()
+    expect(normalizeAllergy({ category: '', reaction: '', severity: '' })).toBeUndefined()
+  })
+})
+
+describe('allergyMapFrom / allergyChanged', () => {
+  const rec = (key: string, value: unknown): CurationRecord => ({ key, value, updated_at: 1, author: 'a'.repeat(64) })
+
+  it('keeps only real allergy details, tolerant of a mixed array', () => {
+    const map = allergyMapFrom([
+      rec('allergy:k1', { severity: 'severe' }),
+      rec('allergy:k2', {}),
+      rec('allergy:k3', 'severe'),
+      rec('regimen:k4', { dose: '1' }),
+    ])
+    expect([...map]).toEqual([['k1', { severity: 'severe' }]])
+  })
+
+  it('compares normalized values, so an unchanged sheet writes nothing', () => {
+    expect(allergyChanged(undefined, { reaction: '   ' })).toBe(false)
+    expect(allergyChanged({ reaction: 'rash' }, { reaction: ' rash ' })).toBe(false)
+    expect(allergyChanged({ reaction: 'rash' }, undefined)).toBe(true)
+    expect(allergyChanged({ severity: 'mild' }, { severity: 'severe' })).toBe(true)
+    expect(allergyChanged(undefined, { category: 'food' })).toBe(true)
   })
 })

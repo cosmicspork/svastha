@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { buildSummary, medicationFrequency, shelveMedications, splitProblems, conceptKey, conceptKeysForEvents } from '../summary'
+import { buildSummary, allergyBand, allergyGroups, allergyChipText, allergySubline, byAllergyPriority, medicationFrequency, shelveMedications, splitProblems, conceptKey, conceptKeysForEvents } from '../summary'
 import type { StoredEvent } from '../events'
 import type { EventKind, EventValue } from '../drafts'
-import { lwwMerge, priorityMapFrom, type ConceptPriority, type ConceptStatus, type CurationRecord, type Regimen } from '../curation'
+import { lwwMerge, priorityMapFrom, type ConceptPriority, type ConceptStatus, type CurationRecord, type Regimen, type AllergyDetails } from '../curation'
 import { SNOMED, LOINC, OCCUPATION, OCCUPATION_INDUSTRY, OCCUPATIONAL_HAZARD, RXNORM, BP_SYSTOLIC, BP_DIASTOLIC, CYCLE_START, CYCLE_END, type Code } from '../codes'
 
 let nextId = 0
@@ -1149,5 +1149,130 @@ describe('medication frequency', () => {
       expect(row([statement(null, at, { source: 'imported' })]).origin).toBeUndefined()
       expect(row([statement(null, at, { source: 'selfish' })]).origin).toBeUndefined()
     })
+  })
+})
+
+import { allergyMapFrom as allergyMapFromRecords, normalizeAllergy as normalizeForTest } from '../curation'
+
+describe('buildSummary: allergy details', () => {
+  const PENICILLIN: Code = { system: RXNORM, code: '7980', display: 'Penicillin' }
+  const LATEX: Code = { system: SNOMED, code: '111088007', display: 'Latex' }
+  const ASPIRIN: Code = { system: RXNORM, code: '1191', display: 'Aspirin' }
+  const kPen = `allergy_intolerance|${RXNORM}|7980`
+  const kCashew = `allergy_intolerance|${SNOMED}|227493005`
+  const kLatex = `allergy_intolerance|${SNOMED}|111088007`
+  const kAspirin = `allergy_intolerance|${RXNORM}|1191`
+  const events = () =>
+    [PENICILLIN, CASHEW, LATEX, ASPIRIN].map((c) =>
+      ev({ kind: 'allergy_intolerance', value: { coded: c }, effective_at: '2020-01-01T00:00:00+00:00' }),
+    )
+  const details = (...entries: [string, AllergyDetails][]) => new Map(entries)
+  const labels = (a: Parameters<typeof buildSummary>[1], ...[]) => buildSummary(events(), a).allergies.map((r) => r.label)
+
+  it('orders: pinned, severe, medication, other category, uncategorized; alphabetical inside a band', () => {
+    const order = labels({
+      allergy: details(
+        [kPen, { category: 'medication' }],
+        [kAspirin, { category: 'medication' }],
+        [kCashew, { category: 'food' }],
+        [kLatex, { severity: 'severe' }],
+      ),
+      priority: new Map([[kCashew, 'pinned']]),
+    })
+    // Cashew pinned; Latex severe (uncategorized); Aspirin, Penicillin medication.
+    expect(order).toEqual(['Cashew nuts', 'Latex', 'Aspirin', 'Penicillin'])
+  })
+
+  it.each([
+    ['pinned beats severe', { pinned: true }, { severity: 'severe' as const }],
+    ['severe beats medication', { severity: 'severe' as const }, { category: 'medication' as const }],
+    ['medication beats another category', { category: 'medication' as const }, { category: 'food' as const }],
+    ['another category beats uncategorized', { category: 'other' as const }, {}],
+  ])('band boundary: %s', (_name, first, second) => {
+    const row = (spec: { pinned?: boolean } & AllergyDetails) => {
+      const { pinned, ...allergy } = spec
+      return { label: 'Same', pinned: !!pinned, allergy: normalizeForTest(allergy), date: null } as never
+    }
+    expect(byAllergyPriority(row(first), row(second))).toBeLessThan(0)
+    expect(byAllergyPriority(row(second), row(first))).toBeGreaterThan(0)
+  })
+
+  it('numbers the bands 0..4', () => {
+    const r = (pinned: boolean, allergy?: AllergyDetails) => ({ pinned, allergy }) as never
+    expect([
+      allergyBand(r(true)),
+      allergyBand(r(false, { severity: 'severe' })),
+      allergyBand(r(false, { category: 'medication' })),
+      allergyBand(r(false, { category: 'environment' })),
+      allergyBand(r(false, { severity: 'mild' })),
+    ]).toEqual([0, 1, 2, 3, 4])
+  })
+
+  it('a pinned uncategorized allergy beats an unpinned severe one', () => {
+    const order = labels({
+      allergy: details([kLatex, { severity: 'severe' }]),
+      priority: new Map([[kCashew, 'pinned']]),
+    })
+    expect(order.slice(0, 2)).toEqual(['Cashew nuts', 'Latex'])
+  })
+
+  it('severity without a category still sorts as severe and does not start grouping', () => {
+    const summary = buildSummary(events(), { allergy: details([kLatex, { severity: 'severe' }]) })
+    expect(summary.allergies[0].label).toBe('Latex')
+    expect(allergyGroups(summary.allergies)).toBeNull()
+  })
+
+  it('shows no groups until at least one allergy has a category', () => {
+    expect(allergyGroups(buildSummary(events()).allergies)).toBeNull()
+    expect(allergyGroups(buildSummary(events(), { allergy: details([kPen, { reaction: 'rash' }]) }).allergies)).toBeNull()
+  })
+
+  it('groups Medications / Other once one has a category, pinned leading within its group', () => {
+    const summary = buildSummary(events(), {
+      allergy: details([kPen, { category: 'medication' }], [kCashew, { category: 'food' }]),
+      priority: new Map([[kLatex, 'pinned']]),
+    })
+    const groups = allergyGroups(summary.allergies)!
+    expect(groups.map((g) => g.title)).toEqual(['Medications', 'Other'])
+    expect(groups[0].rows.map((r) => r.label)).toEqual(['Penicillin'])
+    // Pinned (uncategorized) Latex leads Other, ahead of categorized Cashew.
+    expect(groups[1].rows.map((r) => r.label)).toEqual(['Latex', 'Cashew nuts', 'Aspirin'])
+  })
+
+  it('omits an empty group', () => {
+    const summary = buildSummary(events(), { allergy: details([kCashew, { category: 'food' }]) })
+    expect(allergyGroups(summary.allergies)!.map((g) => g.id)).toEqual(['other'])
+  })
+
+  it('sub-line: category word for non-medication, reaction, and Not categorized only when grouped', () => {
+    const rows = buildSummary(events(), {
+      allergy: details([kCashew, { category: 'food', reaction: 'throat swelling' }], [kPen, { category: 'medication', reaction: 'rash' }]),
+    }).allergies
+    const by = (l: string) => rows.find((r) => r.label === l)!
+    expect(allergySubline(by('Cashew nuts'), true)).toBe('Food · throat swelling')
+    expect(allergySubline(by('Penicillin'), true)).toBe('rash')
+    expect(allergySubline(by('Latex'), true)).toBe('Not categorized')
+    expect(allergySubline(by('Latex'), false)).toBe('')
+  })
+
+  it('chip text: reaction and a severe marker only for severe', () => {
+    const rows = buildSummary(events(), {
+      allergy: details([kPen, { reaction: 'anaphylaxis', severity: 'severe' }], [kLatex, { reaction: 'rash', severity: 'moderate' }], [kAspirin, { severity: 'severe' }]),
+    }).allergies
+    const text = rows.map(allergyChipText)
+    expect(text).toContain('Penicillin — anaphylaxis (severe)')
+    expect(text).toContain('Latex — rash')
+    expect(text).toContain('Aspirin (severe)')
+    expect(text).toContain('Cashew nuts')
+  })
+
+  it('renders a recipient carried map the same as the owner map', () => {
+    const carried = allergyMapFromRecords([
+      { key: `allergy:${kPen}`, value: { category: 'medication', reaction: 'hives', severity: 'severe' }, updated_at: 1, author: 'a'.repeat(64) },
+      { key: `allergy:${kLatex}`, value: { severity: 'SEVERE', category: 'Medication' }, updated_at: 1, author: 'a'.repeat(64) },
+    ])
+    const rows = buildSummary(events(), { allergy: carried }).allergies
+    expect(rows[0]).toMatchObject({ label: 'Penicillin', allergy: { category: 'medication', reaction: 'hives', severity: 'severe' } })
+    expect(rows.find((r) => r.label === 'Latex')!.allergy).toBeUndefined()
   })
 })

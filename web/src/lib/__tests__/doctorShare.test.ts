@@ -658,3 +658,39 @@ describe('work history in a doctor share', () => {
     expect(applyMedScope([job, hazard], statuses, false)).toEqual([job, hazard])
   })
 })
+
+describe('curationForBundle: allergy:', () => {
+  const pen = ev('a1', 'allergy_intolerance', '2024-01-01T00:00:00Z', null, {
+    coded: { system: 'rxnorm', code: '7980', display: 'Penicillin' },
+  })
+  const latex = ev('a2', 'allergy_intolerance', '2024-01-01T00:00:00Z', null, {
+    coded: { system: 'snomed', code: '111088007', display: 'Latex' },
+  })
+  const events = [pen]
+  const kPen = conceptKey(pen.event)
+  const kLatex = conceptKey(latex.event)
+
+  it('carries an allergy record for a concept in the bundle', () => {
+    const r = rec(`allergy:${kPen}`, { category: 'medication', severity: 'severe' })
+    expect(curationForBundle(events, [r])).toEqual([r])
+  })
+
+  it('never carries one for a concept outside the bundle', () => {
+    expect(curationForBundle(events, [rec(`allergy:${kLatex}`, { severity: 'severe' })])).toEqual([])
+  })
+
+  it('drops an unsigned record', () => {
+    expect(curationForBundle(events, [rec(`allergy:${kPen}`, { severity: 'severe' }, '')])).toEqual([])
+  })
+
+  it('never carries the details of a hidden allergy', () => {
+    const records = [
+      rec(`priority:${kLatex}`, { priority: 'hidden' }),
+      rec(`allergy:${kLatex}`, { reaction: 'anaphylaxis', severity: 'severe' }),
+      rec(`allergy:${kPen}`, { reaction: 'rash' }),
+    ]
+    const hidden = hiddenConceptsFrom(priorityMapFrom(records))
+    const visible = shareableEvents([pen, latex], new Set(), hidden)
+    expect(curationForBundle(visible, records).map((r) => r.key)).toEqual([`allergy:${kPen}`])
+  })
+})

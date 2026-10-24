@@ -1,7 +1,7 @@
 <script lang="ts">
   import { buildPharmacyGroups, pharmacyRowCount } from '../lib/pharmacy'
   import type { ListSize } from '../lib/pharmacyPrefs'
-  import type { SummaryRow } from '../lib/summary'
+  import { allergyChipText, type SummaryRow } from '../lib/summary'
 
   // The pharmacy handoff, rendered identically wherever it appears: the owner's
   // export page, and (later) a share recipient's cold-loaded view. One numbered
@@ -94,7 +94,7 @@
     {:else}
       <ul class="allergy-chips" data-testid="pharmacy-allergies">
         {#each allergies as allergy (allergy.key)}
-          <li class="chip danger">{allergy.label}</li>
+          <li class="chip danger" data-testid="pharmacy-allergy-chip">{allergyChipText(allergy)}</li>
         {/each}
       </ul>
     {/if}

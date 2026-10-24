@@ -5,7 +5,7 @@
 // is handed over it is a copy, exactly like a paper folder. The UI says so.
 //
 // The bundle itself is byte-for-byte the relay path's bundle (`assembleShareBundle`
-// in doctorShare.ts): same scope filter, same `status:`/`name:`/`regimen:`/`priority:`
+// in doctorShare.ts): same scope filter, same `status:`/`name:`/`regimen:`/`allergy:`/`priority:`
 // curation, same
 // inlined `att-`/`doc-` bytes, same `WasmDataKey` sealing. This file changes only
 // two things — where the ciphertext travels (a file, not the relay) and where its

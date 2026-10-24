@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { medicationFrequency, type SummaryRow } from '../lib/summary'
-  import { REGIMEN_ROUTE_LABELS } from '../lib/curation'
+  import { medicationFrequency, allergySubline, type AllergyGroup, type SummaryRow } from '../lib/summary'
+  import { REGIMEN_ROUTE_LABELS, ALLERGY_CATEGORY_LABELS } from '../lib/curation'
   import {
     startSwipe,
     trackSwipe,
@@ -25,6 +25,8 @@
     curateLabel = 'Edit',
     detailLabel = 'Value',
     inactiveChip = '',
+    allergy = false,
+    groups,
     onrowtap,
     onviewtimeline,
   }: {
@@ -69,6 +71,12 @@
      * the active Problems list rather than hiding behind the resolved toggle,
      * and must not read as active there. Empty renders no chip. */
     inactiveChip?: string
+    /** Allergy rows: the reaction/category sub-line, the severe chip, and the
+     * recorded details in the panel. */
+    allergy?: boolean
+    /** Allergies only, once at least one has a category (see summary.ts's
+     * `allergyGroups`): sub-headings over `rows`, which is ignored then. */
+    groups?: AllergyGroup[] | null
     /** Owner-only: opens the status/name action sheet. Reached by the panel's
      * curate button or a swipe right — never a plain tap, which expands the
      * row. Absent (or `readonly`) drops both affordances. */
@@ -82,6 +90,7 @@
   // expand and link to the timeline but never offer the action sheet.
   const canCurate = $derived(!readonly && onrowtap !== undefined)
   const canViewTimeline = $derived(onviewtimeline !== undefined)
+  const grouped = $derived(allergy && !!groups)
 
   // Which rows are expanded. A Set, not a single key: comparing two labs means
   // reading both panels at once.
@@ -197,9 +206,20 @@
     </svelte:element>
     {#if rows.length === 0}
       <p class="empty muted" data-testid="summary-empty">{emptyText}</p>
+    {:else if groups}
+      {#each groups as group (group.id)}
+        <h3 class="group-head" data-testid="summary-group-{group.id}">{group.title}</h3>
+        {@render rowList(group.rows)}
+      {/each}
     {:else}
+      {@render rowList(rows)}
+    {/if}
+  </section>
+{/if}
+
+{#snippet rowList(list: SummaryRow[])}
       <ul class="rows">
-        {#each rows as row (row.key)}
+        {#each list as row (row.key)}
           {@const open = expanded.has(row.key)}
           {@const dx = offset(row)}
           <li
@@ -297,9 +317,18 @@
                     {#if row.subline}
                       <span class="subline muted" data-testid="summary-subline">{row.subline}</span>
                     {/if}
+                    {#if allergy}
+                      {@const line = allergySubline(row, grouped)}
+                      {#if line}
+                        <span class="subline muted" data-testid="summary-allergy-line">{line}</span>
+                      {/if}
+                    {/if}
                   </span>
                   {#if row.chip}
                     <span class="prn" data-testid="summary-status-chip">{row.chip}</span>
+                  {/if}
+                  {#if allergy && row.allergy?.severity === 'severe'}
+                    <span class="severe" data-testid="summary-severe-chip">Severe</span>
                   {/if}
                   {#if row.regimen?.as_needed}
                     <span class="prn" data-testid="summary-prn-chip">As needed</span>
@@ -351,6 +380,29 @@
                       <dt>{detailLabel}</dt>
                       <dd class="data">{row.detail}</dd>
                     </div>
+                  {/if}
+                  {#if allergy && row.allergy}
+                    {@const a = row.allergy}
+                    <!-- Mild and moderate live here only: the face marks the one
+                         severity that changes what a reader does. -->
+                    {#if a.category}
+                      <div class="prow" data-testid="summary-allergy-category">
+                        <dt>Category</dt>
+                        <dd>{ALLERGY_CATEGORY_LABELS[a.category]}</dd>
+                      </div>
+                    {/if}
+                    {#if a.reaction}
+                      <div class="prow" data-testid="summary-allergy-reaction">
+                        <dt>Reaction</dt>
+                        <dd>{a.reaction}</dd>
+                      </div>
+                    {/if}
+                    {#if a.severity}
+                      <div class="prow" data-testid="summary-allergy-severity">
+                        <dt>Severity</dt>
+                        <dd>{a.severity[0].toUpperCase() + a.severity.slice(1)}</dd>
+                      </div>
+                    {/if}
                   {/if}
                   {#if row.regimen}
                     {@const r = row.regimen}
@@ -441,9 +493,7 @@
           </li>
         {/each}
       </ul>
-    {/if}
-  </section>
-{/if}
+{/snippet}
 
 <style>
   .section {
@@ -650,6 +700,25 @@
       color: inherit;
       text-decoration: none;
     }
+  }
+
+  /* An allergy group's sub-heading: quieter than the section's, like the
+     Current/Past sub-groups. */
+  .group-head {
+    font-family: var(--font-display);
+    font-size: var(--text-md);
+    margin: var(--space-3) 0 var(--space-1);
+  }
+
+  .severe {
+    flex: none;
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-full);
+    background: var(--danger-muted);
+    color: var(--danger);
+    font-size: var(--text-xs);
+    font-weight: 700;
+    white-space: nowrap;
   }
 
   /* "As needed" is a chip, not a shelf: it qualifies a current medication
