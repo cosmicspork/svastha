@@ -253,6 +253,44 @@ describe('curationCodec (cur-)', () => {
     expect(syncRecords?.state).toBe('pending')
   })
 
+  it('remoteApply leaves an echo of this device\'s own record alone (no re-push loop)', async () => {
+    await writeCuration('note:evt-echo', { text: 'mine', b: 1, a: 2 }, signAs(AUTHOR_A), 900)
+    const blobId = await blobIdFor('note:evt-echo')
+    // The push completed; the relay's poke makes the next pull fetch it back.
+    await put('sync', { id: blobId, state: 'done', updated_at: new Date().toISOString() })
+    const echo = JSON.parse(new TextDecoder().decode((await curationCodec.localLoad(blobId))!))
+    // Key order inside `value` is not part of the identity.
+    echo.value = { a: 2, b: 1, text: 'mine' }
+
+    await curationCodec.remoteApply(blobId, new TextEncoder().encode(JSON.stringify(echo)))
+
+    expect((await get<{ state: string }>('sync', blobId))?.state).toBe('done')
+  })
+
+  it('remoteApply still re-pushes a same-clock, same-author record whose value differs', async () => {
+    // Not an echo: the relay holds something else under our clock and author,
+    // so the tie goes to lwwMerge and the local record is pushed back.
+    await writeCuration('note:evt-tie', { text: 'local' }, signAs(AUTHOR_A), 900)
+    const blobId = await blobIdFor('note:evt-tie')
+    await put('sync', { id: blobId, state: 'done', updated_at: new Date().toISOString() })
+    const other = signed({ key: 'note:evt-tie', value: { text: 'other' }, updated_at: 900, author: AUTHOR_A })
+
+    await curationCodec.remoteApply(blobId, new TextEncoder().encode(JSON.stringify(other)))
+
+    expect((await get<{ state: string }>('sync', blobId))?.state).toBe('pending')
+  })
+
+  it('remoteApply treats an unsigned twin of a signed local record as different', async () => {
+    await writeCuration('note:evt-unsigned', { text: 'same' }, signAs(AUTHOR_A), 900)
+    const blobId = await blobIdFor('note:evt-unsigned')
+    await put('sync', { id: blobId, state: 'done', updated_at: new Date().toISOString() })
+    const unsigned: CurationRecord = { key: 'note:evt-unsigned', value: { text: 'same' }, updated_at: 900, author: AUTHOR_A }
+
+    await curationCodec.remoteApply(blobId, new TextEncoder().encode(JSON.stringify(unsigned)))
+
+    expect((await get<{ state: string }>('sync', blobId))?.state).toBe('pending')
+  })
+
   it('remoteApply rejects a record whose embedded key does not hash to the blob id', async () => {
     const wrongBlobId = await blobIdFor('tag:evt-5')
     const mismatched = signed({ key: 'tag:some-other-event', value: { tags: ['x'] }, updated_at: 1 })
