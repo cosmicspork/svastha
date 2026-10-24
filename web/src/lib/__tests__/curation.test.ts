@@ -22,6 +22,11 @@ import {
   regimenChanged,
   hiddenIdsFrom,
   loadHiddenIds,
+  normalizePriority,
+  priorityMapFrom,
+  hiddenConceptsFrom,
+  getPriority,
+  allPriorities,
   type CurationRecord,
   type SignedCurationRecord,
   type CurationSigner,
@@ -658,5 +663,120 @@ describe('loadHiddenIds', () => {
 
     await writeCuration('hide:evt-1', { hidden: false }, sign, 2000)
     expect([...(await loadHiddenIds())]).toEqual(['evt-2'])
+  })
+})
+
+describe('priority read helpers', () => {
+  const CONCEPT = 'condition|http://snomed.info/sct|73211009'
+  const sign = signAs(AUTHOR_A)
+
+  it('getPriority defaults to normal and round-trips pin, hide, and the clear', async () => {
+    expect(await getPriority(CONCEPT)).toBe('')
+    await writeCuration(`priority:${CONCEPT}`, { priority: 'pinned' }, sign, 1)
+    expect(await getPriority(CONCEPT)).toBe('pinned')
+    await writeCuration(`priority:${CONCEPT}`, { priority: 'hidden' }, sign, 2)
+    expect(await getPriority(CONCEPT)).toBe('hidden')
+    // A clear writes the empty value — the record survives, the sync model has
+    // no delete.
+    await writeCuration(`priority:${CONCEPT}`, { priority: '' }, sign, 3)
+    expect(await getPriority(CONCEPT)).toBe('')
+    expect(await getCuration(`priority:${CONCEPT}`)).toBeDefined()
+  })
+
+  it('allPriorities keys on the bare concept and drops normal records', async () => {
+    await writeCuration(`priority:${CONCEPT}`, { priority: 'hidden' }, sign)
+    await writeCuration('priority:condition||Bad knee', { priority: '' }, sign)
+    await writeCuration(`status:${CONCEPT}`, { status: 'inactive' }, sign)
+    expect(await allPriorities()).toEqual(new Map([[CONCEPT, 'hidden']]))
+  })
+})
+
+// Adversarial fixtures: values chosen to get a hide or a pin PAST the shape
+// check. A `priority:` value can come from a second device on a newer build or
+// out of a doctor-share bundle, and a hide misread here silently removes a
+// problem from the owner's summary and every share they make.
+describe('normalizePriority (tolerant shape-check)', () => {
+  it('accepts exactly the two written values', () => {
+    expect(normalizePriority({ priority: 'pinned' })).toBe('pinned')
+    expect(normalizePriority({ priority: 'hidden' })).toBe('hidden')
+  })
+
+  it('reads a wrong case, type, or shape as normal', () => {
+    for (const value of [
+      { priority: 'HIDDEN' },
+      { priority: 'Pinned' },
+      { priority: 'hidden ' },
+      { priority: true },
+      { priority: 1 },
+      { priority: null },
+      { priority: ['hidden'] },
+      { priority: { value: 'hidden' } },
+      'hidden',
+      'pinned',
+      ['hidden'],
+      [{ priority: 'hidden' }],
+      null,
+      undefined,
+      42,
+      true,
+    ]) {
+      expect(normalizePriority(value), JSON.stringify(value)).toBe('')
+    }
+  })
+
+  it('reads extra fields that only look like a hide as normal', () => {
+    expect(normalizePriority({ hidden: true })).toBe('')
+    expect(normalizePriority({ status: 'hidden', pinned: true })).toBe('')
+    expect(normalizePriority({ priority: '', hidden: true })).toBe('')
+  })
+
+  it('ignores unknown sibling fields on a real value rather than rejecting it', () => {
+    // Drop, not repair (as normalizeRegimen does): a newer build adding a field
+    // to a hide must still hide here, or this build would show — and share —
+    // what the owner put away.
+    expect(normalizePriority({ priority: 'hidden', since: '2026-10-01' })).toBe('hidden')
+    expect(normalizePriority({ priority: 'pinned', note: 'oncology' })).toBe('pinned')
+  })
+})
+
+describe('priorityMapFrom', () => {
+  const A = 'condition|http://snomed.info/sct|1'
+  const B = 'condition|http://snomed.info/sct|2'
+
+  function rec(key: string, value: unknown, updated_at = 1, author = AUTHOR_A): CurationRecord {
+    return { key, value, updated_at, author }
+  }
+
+  it('strips the prefix, skips other namespaces, and drops normal and garbage values', () => {
+    const map = priorityMapFrom([
+      rec(`priority:${A}`, { priority: 'pinned' }),
+      rec(`priority:${B}`, { priority: '' }),
+      rec('priority:condition||x', 'hidden'),
+      rec(`status:${B}`, { status: 'inactive' }),
+      rec(`hide:${B}`, { hidden: true }),
+    ])
+    expect(map).toEqual(new Map([[A, 'pinned']]))
+  })
+
+  it('resolves two records for one concept by LWW, not by array order', () => {
+    const older = rec(`priority:${A}`, { priority: 'hidden' }, 1)
+    const newer = rec(`priority:${A}`, { priority: 'pinned' }, 2)
+    expect(priorityMapFrom([older, newer])).toEqual(new Map([[A, 'pinned']]))
+    expect(priorityMapFrom([newer, older])).toEqual(new Map([[A, 'pinned']]))
+    // A newer clear wins over an older hide too: unhiding sticks.
+    const cleared = rec(`priority:${A}`, { priority: '' }, 3)
+    expect(priorityMapFrom([cleared, older])).toEqual(new Map())
+  })
+
+  it('breaks a same-clock pin/hide tie on the author, deterministically', () => {
+    const pin = rec(`priority:${A}`, { priority: 'pinned' }, 5, AUTHOR_A)
+    const hide = rec(`priority:${A}`, { priority: 'hidden' }, 5, AUTHOR_B)
+    expect(priorityMapFrom([pin, hide])).toEqual(new Map([[A, 'hidden']]))
+    expect(priorityMapFrom([hide, pin])).toEqual(new Map([[A, 'hidden']]))
+  })
+
+  it('hiddenConceptsFrom keeps only the hides', () => {
+    const map = priorityMapFrom([rec(`priority:${A}`, { priority: 'pinned' }), rec(`priority:${B}`, { priority: 'hidden' })])
+    expect(hiddenConceptsFrom(map)).toEqual(new Set([B]))
   })
 })

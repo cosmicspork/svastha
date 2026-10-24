@@ -17,7 +17,14 @@ import { buildCodeNameIndex, resolveDisplay } from './code-names'
 import { quantityOf, renderQuantity } from './timeline'
 import { cycleStats, type CycleStats } from './cycle'
 import type { StoredEvent } from './events'
-import { REGIMEN_ROUTES, type ConceptStatus, type Regimen, type RegimenRoute } from './curation'
+import {
+  REGIMEN_ROUTES,
+  hiddenConceptsFrom,
+  type ConceptPriority,
+  type ConceptStatus,
+  type Regimen,
+  type RegimenRoute,
+} from './curation'
 import { isoToMillis } from './time'
 
 /** The cycle section's shape: exactly {@link cycleStats}' non-null result. */
@@ -86,6 +93,9 @@ export interface SummaryRow {
    * namespace), absent when there is none. Only medication rows are expected to
    * carry one; elsewhere it is inert data the view simply never renders. */
   regimen?: Regimen
+  /** Whether the owner pinned this concept (curation.ts's `priority:`). Only
+   * problems and allergies are reordered on it; elsewhere it is inert. */
+  pinned: boolean
 }
 
 export interface ClinicianSummary {
@@ -95,6 +105,13 @@ export interface ClinicianSummary {
    * read end to end. */
   medications: SummaryRow[]
   allergies: SummaryRow[]
+  /** The problems and allergies the owner hid (curation.ts's `priority:`),
+   * folded so the owner's "N hidden · manage" list can name them. They are in
+   * no other section. A hidden concept of another kind is dropped the same way
+   * but listed nowhere: this build offers the control on these two only. A
+   * recipient's render has none to list — see doctorShare.ts's
+   * `shareableEvents` and `curationForBundle`. */
+  hidden: { problems: SummaryRow[]; allergies: SummaryRow[] }
   immunizations: WindowedSection
   latestVitals: WindowedSection
   recentResults: WindowedSection
@@ -164,6 +181,22 @@ export function shelveMedications(rows: SummaryRow[]): MedShelves {
   return { unrouted, shelves, past }
 }
 
+/** The Problems section's two lists: the main one and the collapsed
+ * "resolved" group. A pinned problem stays in the main list whatever its
+ * status — the owner pinned it because it matters at a visit, and behind "Show
+ * 3 resolved" it would be the one thing nobody opens — and the view marks it
+ * resolved there with a chip. Order in equals order out, so pinned rows still
+ * lead `active`. */
+export function splitProblems(rows: SummaryRow[]): { active: SummaryRow[]; resolved: SummaryRow[] } {
+  const active: SummaryRow[] = []
+  const resolved: SummaryRow[] = []
+  for (const row of rows) {
+    if (row.status === 'active' || row.pinned) active.push(row)
+    else resolved.push(row)
+  }
+  return { active, resolved }
+}
+
 type Ev = StoredEvent['event']
 
 /** The coding that identifies an event's clinical concept: the event's own
@@ -222,6 +255,14 @@ export function conceptKey(event: Ev): string {
   return keyFor(event)
 }
 
+/** Drop every event of a hidden concept (curation.ts's `priority:` hide). The
+ * one rule the summary and the doctor-share sheet both apply, so the owner's
+ * summary, the share preview, and the bundle agree on what a hide removes. */
+export function withoutHiddenConcepts(events: StoredEvent[], hiddenConcepts: Set<string>): StoredEvent[] {
+  if (hiddenConcepts.size === 0) return events
+  return events.filter((se) => !hiddenConcepts.has(keyFor(se.event)))
+}
+
 /** The distinct concept keys present across a set of events — the intersection
  * target when selecting which `status:`/`name:` curation records a share bundle
  * should carry. */
@@ -272,6 +313,13 @@ function byLabel(a: SummaryRow, b: SummaryRow): number {
   )
 }
 
+/** Pinned rows first, each group keeping the order it arrived in — so pinned
+ * problems stay newest-first among themselves and pinned allergies stay
+ * alphabetical. */
+function pinnedFirst(rows: SummaryRow[]): SummaryRow[] {
+  return [...rows.filter((r) => r.pinned), ...rows.filter((r) => !r.pinned)]
+}
+
 /** The start of the recency window: `months` before `nowMs`. Month arithmetic,
  * not a 365-day approximation, so "the last 12 months" means the same calendar
  * date a year ago however the leap years fall. */
@@ -294,13 +342,14 @@ function splitByWindow(rows: SummaryRow[], cutoffMillis: number): WindowedSectio
 }
 
 /** Curation layered over the folded concepts: the owner's per-concept status,
- * display-name overrides, and medication regimens (see curation.ts's
- * `status:`/`name:`/`regimen:` namespaces), keyed on the same
+ * display-name overrides, medication regimens, and priorities (see curation.ts's
+ * `status:`/`name:`/`regimen:`/`priority:` namespaces), keyed on the same
  * `${kind}|${system}|${code}` as {@link keyFor}. */
 interface Curation {
   status: Map<string, ConceptStatus>
   names: Map<string, string>
   regimen: Map<string, Regimen>
+  priority: Map<string, ConceptPriority>
 }
 
 /** Fold a set of same-kind events into one row per clinical concept. */
@@ -342,6 +391,7 @@ function foldSection(
       focusId: (rep ?? ls).id,
       status: curation.status.get(key) ?? 'active',
       regimen: curation.regimen.get(key),
+      pinned: curation.priority.get(key) === 'pinned',
     })
   }
   return rows
@@ -413,6 +463,7 @@ function buildVitals(observations: Ev[]): SummaryRow[] {
         eventIds: [...sys, ...dia].map((e) => e.id),
         focusId: rep.id,
         status: 'active',
+        pinned: false,
       })
     } else {
       const evs = byCode.get(def.loinc.code) ?? []
@@ -429,6 +480,7 @@ function buildVitals(observations: Ev[]): SummaryRow[] {
         eventIds: evs.map((e) => e.id),
         focusId: latest.id,
         status: 'active',
+        pinned: false,
       })
     }
   }
@@ -455,6 +507,10 @@ export function buildSummary(
     status?: Map<string, ConceptStatus>
     names?: Map<string, string>
     regimen?: Map<string, Regimen>
+    /** The owner's per-concept priority (curation.ts's `priority:`): pinned
+     * problems and allergies lead their section, and a hidden concept's events
+     * are dropped before anything folds, leaving it only in `hidden`. */
+    priority?: Map<string, ConceptPriority>
     /** "Now" for the recency window, injectable so the split is testable
      * without freezing the clock. */
     now?: number
@@ -477,14 +533,27 @@ export function buildSummary(
     status: opts.status ?? new Map(),
     names: opts.names ?? new Map(),
     regimen: opts.regimen ?? new Map(),
+    priority: opts.priority ?? new Map(),
   }
   // Subtract hides before grouping; dropped silently — a clinical summary
   // shouldn't advertise redactions with a "hidden entry" placeholder. The name
   // index is built from this same visible set, so a hidden event's display
   // can't leak into another row's label either.
   const visible = hiddenIds ? events.filter((se) => !hiddenIds.has(se.event.id)) : events
-  const nameIndex = buildCodeNameIndex(visible)
-  const evs = visible.map((se) => se.event)
+  // A hidden concept is a presentation choice, not a redaction like the above:
+  // it leaves every section, but the owner still lists it to unhide. So its
+  // events are dropped from `shown` (and from `shown`'s name index, so the
+  // summary names rows the way the share preview does — the preview never sees
+  // them), while its own manage-list rows are named from the wider `visible` set.
+  const hiddenConcepts = hiddenConceptsFrom(curation.priority)
+  const shown = withoutHiddenConcepts(visible, hiddenConcepts)
+  const nameIndex = buildCodeNameIndex(shown)
+  const evs = shown.map((se) => se.event)
+  const hiddenEvs =
+    hiddenConcepts.size === 0
+      ? []
+      : visible.map((se) => se.event).filter((e) => hiddenConcepts.has(keyFor(e)))
+  const hiddenNameIndex = hiddenEvs.length === 0 ? nameIndex : buildCodeNameIndex(visible)
 
   const conditions = evs.filter((e) => e.kind === 'condition')
   const meds = evs.filter((e) => e.kind === 'medication_statement')
@@ -498,11 +567,13 @@ export function buildSummary(
 
   // Undefined (not an empty object) when there are no cycle events, so the
   // section is absent — not a blank shell — from a share that didn't opt in.
-  const cycle = cycleStats(visible) ?? undefined
+  const cycle = cycleStats(shown) ?? undefined
 
   return {
-    problems: foldSection(conditions, 'earliest', () => '', nameIndex, dictionary, curation).sort(
-      byDateDescNullLast,
+    problems: pinnedFirst(
+      foldSection(conditions, 'earliest', () => '', nameIndex, dictionary, curation).sort(
+        byDateDescNullLast,
+      ),
     ),
     medications: foldSection(
       meds,
@@ -515,9 +586,27 @@ export function buildSummary(
       dictionary,
       curation,
     ).sort(byLabel),
-    allergies: foldSection(allergyEvents, 'latest', () => '', nameIndex, dictionary, curation).sort(
-      byLabel,
+    allergies: pinnedFirst(
+      foldSection(allergyEvents, 'latest', () => '', nameIndex, dictionary, curation).sort(byLabel),
     ),
+    hidden: {
+      problems: foldSection(
+        hiddenEvs.filter((e) => e.kind === 'condition'),
+        'earliest',
+        () => '',
+        hiddenNameIndex,
+        dictionary,
+        curation,
+      ).sort(byDateDescNullLast),
+      allergies: foldSection(
+        hiddenEvs.filter((e) => e.kind === 'allergy_intolerance'),
+        'latest',
+        () => '',
+        hiddenNameIndex,
+        dictionary,
+        curation,
+      ).sort(byLabel),
+    },
     immunizations: splitByWindow(
       foldSection(
         immunizations,

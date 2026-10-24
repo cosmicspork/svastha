@@ -23,6 +23,7 @@
     headingHidden = false,
     curateLabel = 'Edit',
     detailLabel = 'Value',
+    inactiveChip = '',
     onrowtap,
     onviewtimeline,
   }: {
@@ -59,6 +60,11 @@
     /** What `row.detail` is called in the expanded panel — "Dose" for meds,
      * "Doses" for immunizations, a measured "Value" elsewhere. */
     detailLabel?: string
+    /** A chip naming an inactive row's status ("Resolved"), for a section that
+     * lists inactive rows among active ones — a pinned resolved problem leads
+     * the active Problems list rather than hiding behind the resolved toggle,
+     * and must not read as active there. Empty renders no chip. */
+    inactiveChip?: string
     /** Owner-only: opens the status/name action sheet. Reached by the panel's
      * curate button or a swipe right — never a plain tap, which expands the
      * row. Absent (or `readonly`) drops both affordances. */
@@ -194,7 +200,12 @@
         {#each rows as row (row.key)}
           {@const open = expanded.has(row.key)}
           {@const dx = offset(row)}
-          <li class="row-item" data-testid="summary-row" data-status={row.status}>
+          <li
+            class="row-item"
+            data-testid="summary-row"
+            data-status={row.status}
+            data-pinned={row.pinned ? 'true' : undefined}
+          >
             <div class="swipe-frame">
               <!-- Swipe affordances, revealed as the face slides off them. -->
               {#if canCurate}
@@ -223,6 +234,14 @@
                 data-testid="summary-row-trigger"
               >
                 <span class="row-main">
+                  {#if row.pinned}
+                    <span class="pin" data-testid="summary-pinned">
+                      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M12 17v5" /><path d="M9 10.76V6h6v4.76l2 3.24H7z" /><path d="M8 3h8" />
+                      </svg>
+                      <span class="visually-hidden">Pinned:</span>
+                    </span>
+                  {/if}
                   <span class="label-stack">
                     {#if row.nameResolved}
                       <span class="label" data-testid="summary-label">{row.label}</span>
@@ -248,6 +267,9 @@
                   </span>
                   {#if row.regimen?.as_needed}
                     <span class="prn" data-testid="summary-prn-chip">As needed</span>
+                  {/if}
+                  {#if inactiveChip && row.status === 'inactive'}
+                    <span class="prn" data-testid="summary-inactive-chip">{inactiveChip}</span>
                   {/if}
                   {#if row.coding && row.nameResolved}
                     <!-- Print only (see ClinicianSummary's @media print): paper
@@ -572,7 +594,16 @@
     white-space: nowrap;
   }
 
+  /* A pinned row's mark: the row leads its section, and the mark says why. */
+  .pin {
+    flex: none;
+    align-self: center;
+    display: inline-flex;
+    color: var(--action);
+  }
+
   /* Off-screen but in the accessibility tree — see `headingHidden`. */
+  .visually-hidden,
   .section-head.visually-hidden {
     position: absolute;
     width: 1px;

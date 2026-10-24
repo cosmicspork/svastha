@@ -13,8 +13,8 @@
 import { WasmDataKey, type WasmIdentity } from './svastha'
 import type { RelayClient } from './relay'
 import type { StoredEvent } from './events'
-import type { SignedCurationRecord, ConceptStatus } from './curation'
-import { conceptKey, conceptKeysForEvents } from './summary'
+import { normalizePriority, type SignedCurationRecord, type ConceptStatus } from './curation'
+import { conceptKey, conceptKeysForEvents, withoutHiddenConcepts } from './summary'
 import { categorize, CATEGORIES, CATEGORY_META, type Category } from './category'
 import { isoToMillis } from './time'
 import { fromHex } from './hex'
@@ -182,7 +182,7 @@ export interface ShareBundle {
   events: StoredEvent[]
   attachments?: Record<string, string>
   documents?: Record<string, { name: string; bytes: string }>
-  /** The owner's `status:`/`name:`/`regimen:` concept curation for the concepts
+  /** The owner's `status:`/`name:`/`regimen:`/`priority:` concept curation for the concepts
    * these events fold into — signed records the recipient verifies-or-drops
    * against `signer`, exactly as it does the events. Only those namespaces
    * cross the vault boundary (never tags/hides/notes/favorites), and only for
@@ -219,7 +219,7 @@ export function referencedDocumentShas(events: StoredEvent[]): string[] {
   return [...shas].sort()
 }
 
-/** The only curation namespaces a share bundle may carry. All three are
+/** The only curation namespaces a share bundle may carry. All four are
  * *concept*-keyed, which is what makes the in-bundle-concept check below
  * meaningful: the suffix after the prefix is a concept key that either folds
  * out of an event in this bundle or does not exist here at all. Event-keyed and
@@ -230,9 +230,9 @@ export function referencedDocumentShas(events: StoredEvent[]): string[] {
  * DoctorShareSheet's curation read): this list narrows what is carried, it does
  * not fetch anything, so a namespace listed here but never loaded ships
  * nothing. */
-const BUNDLE_CURATION_PREFIXES = ['status:', 'name:', 'regimen:'] as const
+const BUNDLE_CURATION_PREFIXES = ['status:', 'name:', 'regimen:', 'priority:'] as const
 
-/** The concept `status:`/`name:`/`regimen:` curation records to carry alongside
+/** The concept `status:`/`name:`/`regimen:`/`priority:` curation records to carry alongside
  * a bundle's events: only those namespaces
  * ({@link BUNDLE_CURATION_PREFIXES}), and only for a concept some event in the
  * bundle folds into. Tags, hides, notes, and favorites never leave the vault
@@ -255,9 +255,32 @@ export function curationForBundle(
     const prefix = BUNDLE_CURATION_PREFIXES.find((p) => r.key.startsWith(p))
     if (!prefix) continue
     if (typeof r.signature !== 'string' || r.signature.length === 0) continue
+    // Only a pin tells the recipient anything. A hidden concept's events never
+    // reach `events` (see `shareableEvents`), so its record already fails the
+    // concept check below — this keeps a hide out even if some caller skipped
+    // that filter, and a cleared (normal) record is simply nothing to carry.
+    if (prefix === 'priority:' && normalizePriority(r.value) !== 'pinned') continue
     if (concepts.has(r.key.slice(prefix.length))) carried.push(r)
   }
   return carried
+}
+
+/** The events a share may draw from at all: everything minus the owner's
+ * hidden entries (`hide:`, by event id) and every event of a hidden concept
+ * (`priority:` hide, by concept key). Hiding is how the owner takes something
+ * off their own screens, and a share that carried it anyway would hand a
+ * stranger what they had already put away. The sheet applies this before the
+ * scope filter, so the count, the preview, the carried curation, and both
+ * delivery paths all see one visible set. Guaranteed by
+ * e2e/doctor-share.spec.ts's "a hidden entry never reaches the bundle" and
+ * "a hidden problem never reaches the bundle". */
+export function shareableEvents(
+  events: StoredEvent[],
+  hiddenIds: Set<string>,
+  hiddenConcepts: Set<string>,
+): StoredEvent[] {
+  const unhidden = hiddenIds.size === 0 ? events : events.filter((se) => !hiddenIds.has(se.event.id))
+  return withoutHiddenConcepts(unhidden, hiddenConcepts)
 }
 
 /** Apply the meds scope choice: unless `includePastMeds`, drop the events of a
@@ -284,7 +307,7 @@ export function applyMedScope(
  * every event's `author` (and every carried curation record's `author`) to the
  * one signer named by the bundle. `attachments` (sha256 → base64 plaintext
  * bytes), `documents` (sha256 → name + base64 plaintext bytes), and `curation`
- * (signed `status:`/`name:`/`regimen:` records) are inlined only when
+ * (signed `status:`/`name:`/`regimen:`/`priority:` records) are inlined only when
  * non-empty. */
 export function buildBundle(
   events: StoredEvent[],
@@ -400,7 +423,7 @@ export async function createDoctorShare(params: {
   relay: RelayClient
   identity: WasmIdentity
   events: StoredEvent[]
-  /** The signed `status:`/`name:`/`regimen:` records to carry — already
+  /** The signed `status:`/`name:`/`regimen:`/`priority:` records to carry — already
    * narrowed to the concepts in `events` (see {@link curationForBundle}). */
   curation?: SignedCurationRecord[]
   scopeDescription: string

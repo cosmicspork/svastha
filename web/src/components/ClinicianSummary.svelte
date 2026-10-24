@@ -6,10 +6,13 @@
     allStatuses,
     allNames,
     allRegimens,
+    allPriorities,
+    setPriority,
+    type ConceptPriority,
     type ConceptStatus,
     type Regimen,
   } from '../lib/curation'
-  import { buildSummary, type SummaryRow, type WindowedSection } from '../lib/summary'
+  import { buildSummary, splitProblems, type SummaryRow, type WindowedSection } from '../lib/summary'
   import { loadDictionaryIndex, dictionaryStatus } from '../lib/dictionary'
   import { shortenSystem } from '../lib/codes'
   import { focusedEventId } from '../lib/spine-focus'
@@ -22,10 +25,11 @@
   // own-vault fetch and all local curation reads. A read-only view never reads
   // the local `cur-*` store (curation is owner-only in v1 — see
   // docs/ARCHITECTURE.md, "Curation overlay"), but a doctor-share recipient MAY
-  // be handed the owner's `status:`/`name:`/`regimen:` overlay for the shared
-  // concepts, already verified, via `status`/`names`/`regimen` — so it renders
-  // the same Current/Past and Active/Resolved grouping, name overrides, and
-  // regimen detail the owner sees, just inert (no action sheet). Person-view
+  // be handed the owner's `status:`/`name:`/`regimen:`/`priority:` overlay for
+  // the shared concepts, already verified, via `status`/`names`/`regimen`/
+  // `priority` — so it renders the same Current/Past and Active/Resolved
+  // grouping, name overrides, regimen detail, and pinned order the owner sees,
+  // just inert (no action sheet, no hidden-concept list). Person-view
   // (no maps) shows a single current/active group, as before. A grant-based
   // person view still passes none of them: only a doctor-share bundle carries
   // curation out of the vault.
@@ -35,6 +39,7 @@
     status: providedStatus,
     names: providedNames,
     regimen: providedRegimen,
+    priority: providedPriority,
     heading,
     timelineHref,
   }: {
@@ -46,6 +51,10 @@
      * read-only mode. Drives the same sub-line, "As needed" chip/sub-group and
      * panel rows the owner sees — the recipient just cannot edit them. */
     regimen?: Map<string, Regimen>
+    /** The verified `priority:` overlay a doctor-share bundle carried, in
+     * read-only mode — pins only, so the recipient's Problems and Allergies
+     * lead with what the owner pinned. */
+    priority?: Map<string, ConceptPriority>
     /** When set, the summary owns its page title and renders it inline with the
      * Print action (the own Summary page). Left unset where the host already
      * has an h1 (the shared-person screen), so the Print action sits alone. */
@@ -62,6 +71,7 @@
   let statusMap = $state<Map<string, ConceptStatus>>(new Map())
   let nameMap = $state<Map<string, string>>(new Map())
   let regimenMap = $state<Map<string, Regimen>>(new Map())
+  let priorityMap = $state<Map<string, ConceptPriority>>(new Map())
   let loaded = $state(false)
 
   const events = $derived(readonly ? (providedEvents ?? []) : ownEvents)
@@ -71,6 +81,7 @@
   const effectiveStatus = $derived(readonly ? (providedStatus ?? new Map()) : statusMap)
   const effectiveNames = $derived(readonly ? (providedNames ?? new Map()) : nameMap)
   const effectiveRegimen = $derived(readonly ? (providedRegimen ?? new Map()) : regimenMap)
+  const effectivePriority = $derived(readonly ? (providedPriority ?? new Map()) : priorityMap)
 
   // The offline code dictionary (see lib/dictionary.ts): empty unless enabled.
   // Hydrated once and re-hydrated when the Settings toggle bumps the version.
@@ -96,6 +107,7 @@
       status: effectiveStatus,
       names: effectiveNames,
       regimen: effectiveRegimen,
+      priority: effectivePriority,
     }),
   )
 
@@ -129,8 +141,11 @@
   // taken twice a year.
   const scheduledMeds = $derived(currentMeds.filter((r) => r.regimen?.as_needed !== true))
   const prnMeds = $derived(currentMeds.filter((r) => r.regimen?.as_needed === true))
-  const activeProblems = $derived(keep(summary.problems.filter((r) => r.status === 'active')))
-  const resolvedProblems = $derived(keep(summary.problems.filter((r) => r.status === 'inactive')))
+  // A pinned resolved problem stays in the main list (with a "Resolved" chip);
+  // see `splitProblems`.
+  const problemLists = $derived(splitProblems(summary.problems))
+  const activeProblems = $derived(keep(problemLists.active))
+  const resolvedProblems = $derived(keep(problemLists.resolved))
   const allergies = $derived(keep(summary.allergies))
   const immunizations = $derived(keepWindowed(summary.immunizations))
   const vitals = $derived(keepWindowed(summary.latestVitals))
@@ -161,6 +176,8 @@
       results.older.length,
   )
 
+  let hiddenProblemsOpen = $state(false)
+  let hiddenAllergiesOpen = $state(false)
   let pastMedsOpen = $state(false)
   let resolvedOpen = $state(false)
   let olderImmunizationsOpen = $state(false)
@@ -200,7 +217,7 @@
 
   // The row-action sheet: which row was tapped and which section it belongs to
   // (meds vs. problems drives the status wording). Null when closed.
-  type Section = 'med' | 'problem'
+  type Section = 'med' | 'problem' | 'allergy'
   let action = $state<{ row: SummaryRow; section: Section } | null>(null)
 
   function openAction(row: SummaryRow, section: Section) {
@@ -215,7 +232,19 @@
    * summary re-splits, re-labels, and re-doses — the same way the dictionary
    * effect re-hydrates. */
   async function reloadCuration() {
-    ;[statusMap, nameMap, regimenMap] = await Promise.all([allStatuses(), allNames(), allRegimens()])
+    ;[statusMap, nameMap, regimenMap, priorityMap] = await Promise.all([
+      allStatuses(),
+      allNames(),
+      allRegimens(),
+      allPriorities(),
+    ])
+  }
+
+  /** Back to normal: the empty value, not a delete (see curation.ts's
+   * `ConceptPriority`). */
+  async function unhide(row: SummaryRow) {
+    await setPriority(row.key, '')
+    await reloadCuration()
   }
 
   /** date-part only, parsed as local midnight to avoid a timezone shift on a
@@ -243,6 +272,45 @@
     loaded = true
   })
 </script>
+
+<!-- The owner's way back to a hidden concept: quiet, at the end of its
+     section, and never on paper or in a read-only render (a recipient's bundle
+     holds no hidden concept to list). -->
+{#snippet hiddenManage(rows: SummaryRow[], noun: 'problems' | 'allergies', open: boolean, toggle: () => void)}
+  {#if rows.length > 0}
+    <div class="hidden-manage" data-testid="hidden-{noun}">
+      <button
+        type="button"
+        class="ghost collapse-toggle"
+        aria-expanded={open}
+        onclick={toggle}
+        data-testid="hidden-{noun}-toggle"
+      >
+        {rows.length} hidden · manage
+      </button>
+      {#if open}
+        <p class="hidden-note muted">
+          Hidden {noun} stay on your timeline. They leave this summary and any doctor link you make.
+        </p>
+        <ul class="hidden-list">
+          {#each rows as row (row.key)}
+            <li class="hidden-row" data-testid="hidden-row">
+              <span class="hidden-label">{row.label}</span>
+              <button
+                type="button"
+                class="ghost hidden-unhide"
+                onclick={() => unhide(row)}
+                data-testid="hidden-unhide"
+              >
+                Unhide
+              </button>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
+  {/if}
+{/snippet}
 
 {#if loaded}
   <div class="summary" data-testid="clinician-summary">
@@ -274,17 +342,29 @@
 
     <!-- Allergies lead: they are the one section a clinician must not miss,
          and "None recorded" is itself the answer they came for. -->
-    <SummarySection
-      title="Allergies"
-      rows={allergies}
-      hueClass="cat-symptom"
-      alwaysShow={needle === ''}
-      emptyText="None recorded"
-      dictionaryEnabled={$dictionaryStatus.enabled}
-          {coveredSystems}
-      {readonly}
-      {onviewtimeline}
-    />
+    <div class="split-group">
+      <SummarySection
+        title="Allergies"
+        rows={allergies}
+        hueClass="cat-symptom"
+        alwaysShow={needle === ''}
+        emptyText="None recorded"
+        dictionaryEnabled={$dictionaryStatus.enabled}
+        {coveredSystems}
+        curateLabel="Pin, hide, or rename"
+        {readonly}
+        {onviewtimeline}
+        onrowtap={readonly ? undefined : (row) => openAction(row, 'allergy')}
+      />
+      {#if !readonly}
+        {@render hiddenManage(
+          summary.hidden.allergies,
+          'allergies',
+          hiddenAllergiesOpen,
+          () => (hiddenAllergiesOpen = !hiddenAllergiesOpen),
+        )}
+      {/if}
+    </div>
 
     <!-- Problems: Active (always shown) then a collapsed Resolved group. The
          same layout for owner and recipient; a recipient's rows are inert
@@ -299,7 +379,8 @@
         emptyText="None recorded"
         dictionaryEnabled={$dictionaryStatus.enabled}
           {coveredSystems}
-        curateLabel="Resolve or rename"
+        curateLabel="Resolve, pin, or rename"
+        inactiveChip="Resolved"
         {readonly}
         {onviewtimeline}
         onrowtap={readonly ? undefined : (row) => openAction(row, 'problem')}
@@ -323,12 +404,20 @@
             heading="h3"
             dictionaryEnabled={$dictionaryStatus.enabled}
           {coveredSystems}
-            curateLabel="Reactivate or rename"
+            curateLabel="Reactivate, pin, or rename"
             {readonly}
             {onviewtimeline}
             onrowtap={readonly ? undefined : (row) => openAction(row, 'problem')}
           />
         {/if}
+      {/if}
+      {#if !readonly}
+        {@render hiddenManage(
+          summary.hidden.problems,
+          'problems',
+          hiddenProblemsOpen,
+          () => (hiddenProblemsOpen = !hiddenProblemsOpen),
+        )}
       {/if}
     </div>
 
@@ -593,6 +682,7 @@
       section={action.section}
       name={nameMap.get(action.row.key) ?? ''}
       regimen={regimenMap.get(action.row.key)}
+      priority={priorityMap.get(action.row.key) ?? ''}
       onclose={closeAction}
       onsaved={reloadCuration}
     />
@@ -664,6 +754,41 @@
     padding: var(--space-1) var(--space-2);
     font-size: var(--text-sm);
     margin-bottom: var(--space-2);
+  }
+
+  .hidden-note {
+    margin: 0 0 var(--space-2);
+    font-size: var(--text-xs);
+  }
+
+  .hidden-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .hidden-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) 0;
+    border-bottom: 1px solid var(--border);
+    font-size: var(--text-sm);
+  }
+
+  .hidden-label {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    color: var(--muted);
+  }
+
+  .hidden-unhide {
+    flex: none;
+    min-height: 36px;
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--text-sm);
+    color: var(--action);
   }
 
   .all-meds {
@@ -765,6 +890,7 @@
     .print-btn,
     .filter-row,
     .collapse-toggle,
+    .hidden-manage,
     .all-meds {
       display: none;
     }

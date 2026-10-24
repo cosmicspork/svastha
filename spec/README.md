@@ -434,7 +434,7 @@ version-bumped contract change).
 
 The event log above is immutable; a thin **curation overlay** carries the mutable
 state layered on top (tags, hides, notes, favorite quick-log templates, and
-concept-level status/name records). Each entry is a small, namespace-defined
+concept-level status/name/regimen/priority records). Each entry is a small, namespace-defined
 value under an app-level key, merged last-writer-wins. `core` is namespace-
 agnostic: `key` and `value` are opaque to the contract. The overlay's app-level
 conventions (which key namespaces exist, the mutable `cur-*` blob mapping, and its
@@ -1244,14 +1244,19 @@ The bundle's internal structure is app-level (opaque to the relay, documented in
 `docs/ARCHITECTURE.md`). A bundle **MAY** carry an optional `curation` array of
 `SignedCurationRecord`s (see "Curation record" above) alongside its `events`, so
 a share can include the owner's per-concept **status** (current/past,
-active/resolved), **name** overrides, and **regimen** (how a medication is
-actually taken):
+active/resolved), **name** overrides, **regimen** (how a medication is
+actually taken), and **priority** (which concepts the owner pinned):
 
-- Only the `status:`, `name:`, and `regimen:` namespaces cross the vault
-  boundary — never `tag:`/`hide:`/`note:`/`fav:` (the owner's private working
-  state) — and only for a concept some event in the same bundle folds into. A
-  record for an excluded concept is never carried, so the array cannot leak the
-  shape of what the scope left out.
+- Only the `status:`, `name:`, `regimen:`, and `priority:` namespaces cross the
+  vault boundary — never `tag:`/`hide:`/`note:`/`fav:` (the owner's private
+  working state) — and only for a concept some event in the same bundle folds
+  into. A record for an excluded concept is never carried, so the array cannot
+  leak the shape of what the scope left out.
+- A `priority:` value is `{ priority: 'pinned' | 'hidden' | '' }`, and only a
+  pin is ever carried. A concept the owner hid is excluded from the bundle's
+  events outright, like an event-level hide, so no record about it can ride
+  along. A recipient **MUST** read any value other than exactly `'pinned'` or
+  `'hidden'` as normal.
 - A `regimen:` value is `{ dose?, schedule?, route?, as_needed?, prescriber?,
   started?, stopped?, instructions? }` — `route` one of `mouth | nose | eyes |
   skin | inhaled | injection | other`, `started`/`stopped` ISO `YYYY-MM-DD`,

@@ -217,3 +217,117 @@ test('edit a medication regimen from the action sheet', async ({ page }) => {
   await expect(lisinopril().getByTestId('summary-regimen-route')).toHaveCount(0)
   await expect(lisinopril().getByTestId('summary-regimen-instructions')).toHaveCount(0)
 })
+
+const SNOMED = 'http://snomed.info/sct'
+
+/** Seed four coded problems (one a minor complaint the owner will hide) and
+ * two allergies, through the signing path. Problems list newest-first, so the
+ * seeded order on screen is Asthma, Diabetes, Hypertension, Ingrown toenail. */
+async function seedProblemsAndAllergies(page: Page): Promise<void> {
+  await page.evaluate(
+    async ({ snomed, rxnorm }) => {
+      const { logEvent } = await import('/src/lib/events.ts')
+      await logEvent([
+        { kind: 'condition', code: { system: snomed, code: '195967001', display: 'Asthma' }, effective_at: '2023-01-01T00:00:00+00:00', value: null },
+        { kind: 'condition', code: { system: snomed, code: '73211009', display: 'Diabetes' }, effective_at: '2021-01-01T00:00:00+00:00', value: null },
+        { kind: 'condition', code: { system: snomed, code: '38341003', display: 'Hypertension' }, effective_at: '2019-01-01T00:00:00+00:00', value: null },
+        { kind: 'condition', code: { system: snomed, code: '400200009', display: 'Ingrown toenail' }, effective_at: '2018-01-01T00:00:00+00:00', value: null },
+        { kind: 'allergy_intolerance', code: null, effective_at: '2019-01-01T00:00:00+00:00', value: { coded: { system: snomed, code: '227493005', display: 'Cashew nuts' } } },
+        { kind: 'allergy_intolerance', code: null, effective_at: '2020-01-01T00:00:00+00:00', value: { coded: { system: rxnorm, code: '7980', display: 'Penicillin' } } },
+      ])
+    },
+    { snomed: SNOMED, rxnorm: RXNORM },
+  )
+}
+
+function problems(page: Page) {
+  return page.getByTestId('summary-section-problems').getByTestId('summary-row')
+}
+function allergies(page: Page) {
+  return page.getByTestId('summary-section-allergies').getByTestId('summary-row')
+}
+async function labels(rows: Locator): Promise<string[]> {
+  return rows.getByTestId('summary-label').allInnerTexts()
+}
+
+test('pin and hide a problem from the action sheet; both persist, and a hidden one can be unhidden', async ({ page }) => {
+  await onboardViaUI(page)
+  await seedProblemsAndAllergies(page)
+  await page.reload()
+  await unlock(page)
+  await openSummary(page)
+
+  await expect.poll(() => labels(problems(page))).toEqual(['Asthma', 'Diabetes', 'Hypertension', 'Ingrown toenail'])
+  await expect(page.getByTestId('hidden-problems-toggle')).toHaveCount(0)
+
+  // --- pin: the oldest problem leads ---
+  await openCurate(problems(page).filter({ hasText: 'Hypertension' }))
+  await expect(page.getByTestId('action-priority-normal')).toHaveAttribute('aria-pressed', 'true')
+  await page.getByTestId('action-priority-pinned').click()
+  await page.getByTestId('action-save').click()
+  await expect(page.getByTestId('row-action-sheet')).toBeHidden()
+  await expect.poll(() => labels(problems(page))).toEqual(['Hypertension', 'Asthma', 'Diabetes', 'Ingrown toenail'])
+  await expect(problems(page).first()).toHaveAttribute('data-pinned', 'true')
+
+  // --- hide: the sheet says plainly what a hide does and doesn't do ---
+  await openCurate(problems(page).filter({ hasText: 'Ingrown toenail' }))
+  await page.getByTestId('action-priority-hidden').click()
+  await expect(page.getByTestId('action-priority-hint')).toContainText(
+    'Hidden problems stay on your timeline. They leave this summary and any doctor link you make.',
+  )
+  await page.getByTestId('action-save').click()
+  await expect(page.getByTestId('row-action-sheet')).toBeHidden()
+  await expect.poll(() => labels(problems(page))).toEqual(['Hypertension', 'Asthma', 'Diabetes'])
+  await expect(page.getByTestId('hidden-problems-toggle')).toHaveText('1 hidden · manage')
+
+  // --- a pinned resolved problem stays in the main list, marked resolved ---
+  await openCurate(problems(page).filter({ hasText: 'Asthma' }))
+  await page.getByTestId('action-toggle-status').click()
+  await expect.poll(() => labels(problems(page))).toEqual(['Hypertension', 'Diabetes'])
+  await page.getByTestId('problems-resolved-toggle').click()
+  const resolvedAsthma = page.getByTestId('summary-section-resolved').getByTestId('summary-row').filter({ hasText: 'Asthma' })
+  await openCurate(resolvedAsthma)
+  await page.getByTestId('action-priority-pinned').click()
+  await page.getByTestId('action-save').click()
+  await expect(page.getByTestId('row-action-sheet')).toBeHidden()
+  // Both pins lead, newest-first between themselves.
+  await expect.poll(() => labels(problems(page))).toEqual(['Asthma', 'Hypertension', 'Diabetes'])
+  await expect(problems(page).first().getByTestId('summary-inactive-chip')).toHaveText('Resolved')
+  await expect(page.getByTestId('problems-resolved-toggle')).toHaveCount(0)
+
+  // --- allergies get the same control, without a status ---
+  await openCurate(allergies(page).filter({ hasText: 'Penicillin' }))
+  await expect(page.getByTestId('action-toggle-status')).toHaveCount(0)
+  await page.getByTestId('action-priority-pinned').click()
+  await page.getByTestId('action-save').click()
+  await expect(page.getByTestId('row-action-sheet')).toBeHidden()
+  await expect.poll(() => labels(allergies(page))).toEqual(['Penicillin', 'Cashew nuts'])
+
+  // --- all of it persists across a reload (signed cur- records on disk) ---
+  await page.reload()
+  await unlock(page)
+  await openSummary(page)
+  await expect.poll(() => labels(problems(page))).toEqual(['Asthma', 'Hypertension', 'Diabetes'])
+  await expect.poll(() => labels(allergies(page))).toEqual(['Penicillin', 'Cashew nuts'])
+  await expect(page.getByTestId('hidden-problems-toggle')).toHaveText('1 hidden · manage')
+
+  // --- the manage list names it; paper carries neither it nor the list ---
+  await page.getByTestId('hidden-problems-toggle').click()
+  const hiddenRow = page.getByTestId('hidden-problems').getByTestId('hidden-row')
+  await expect(hiddenRow).toHaveCount(1)
+  await expect(hiddenRow).toContainText('Ingrown toenail')
+  await page.emulateMedia({ media: 'print' })
+  await expect(page.getByTestId('hidden-problems')).toBeHidden()
+  await expect(page.getByTestId('clinician-summary')).not.toContainText('Ingrown toenail', { useInnerText: true })
+  await page.emulateMedia({ media: 'screen' })
+
+  // --- unhide from the manage list ---
+  await hiddenRow.getByTestId('hidden-unhide').click()
+  await expect.poll(() => labels(problems(page))).toEqual(['Asthma', 'Hypertension', 'Diabetes', 'Ingrown toenail'])
+  await expect(page.getByTestId('hidden-problems-toggle')).toHaveCount(0)
+
+  await page.reload()
+  await unlock(page)
+  await openSummary(page)
+  await expect.poll(() => labels(problems(page))).toEqual(['Asthma', 'Hypertension', 'Diabetes', 'Ingrown toenail'])
+})
