@@ -159,6 +159,35 @@ describe('buildTimeline: med/food/note formatting', () => {
     expect(bare.label).toBe('medication statement')
   })
 
+  it('renders a dosage value by its dose, the way a dose quantity renders', () => {
+    const events = [
+      ev({
+        kind: 'medication_statement',
+        effective_at: at,
+        code: { system: 'http://www.nlm.nih.gov/research/umls/rxnorm', code: '860975', display: 'Metformin 500 MG' },
+        value: { dosage: { dose: { value: '500', unit: { system: UCUM, code: 'mg' } }, text: 'twice daily' } },
+      }),
+    ]
+    const entry = buildTimeline(events, 'all')[0].entries[0]
+    expect(entry.label).toBe('Metformin 500 MG')
+    expect(entry.value).toBe('500 mg')
+  })
+
+  it('files a medication dose under meds, like a med entry', () => {
+    const events = [
+      ev({
+        kind: 'medication_dose',
+        effective_at: at,
+        code: { system: 'http://www.nlm.nih.gov/research/umls/rxnorm', code: '745679', display: 'Albuterol inhaler' },
+        value: { quantity: { value: '2', unit: { system: UCUM, code: '{puff}' } } },
+      }),
+    ]
+    const entry = buildTimeline(events, 'all')[0].entries[0]
+    expect(entry.category).toBe('med')
+    expect(entry.label).toBe('Albuterol inhaler')
+    expect(entry.value).toBe('2 {puff}')
+  })
+
   it('resolves a display-less imported med from the same RxNorm code named elsewhere', () => {
     const rxnorm = 'http://www.nlm.nih.gov/research/umls/rxnorm'
     const events = [

@@ -1,5 +1,5 @@
 {
-  "contract_version": 2,
+  "contract_version": 3,
   "events": [
     {
       "note": "observation with quantity value, signed",
@@ -172,6 +172,104 @@
       },
       "canon_hex": "00000008646f63756d656e74000100000014323032362d30312d30325431353a30343a30355a010200000016474920636f6e73756c7420e280942044722e2052616f",
       "id_hex": "8200ecda8f37273c735dbf21d8475e67cb5f61134e911ccc78c1a37925adb9e1"
+    },
+    {
+      "note": "medication_dose: one self-reported dose at a time, signed",
+      "event": {
+        "id": "25ce66316613d5c87ec0605d0e41517f0913cc883179e72d98121925fb065c01",
+        "kind": "medication_dose",
+        "code": {
+          "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+          "code": "745679",
+          "display": null
+        },
+        "effective_at": "2026-10-23T14:05:00-05:00",
+        "value": {
+          "quantity": {
+            "value": "2",
+            "unit": {
+              "system": "http://unitsofmeasure.org",
+              "code": "{puff}",
+              "display": null
+            }
+          }
+        },
+        "provenance": {
+          "source": "self",
+          "source_doc": null
+        }
+      },
+      "canon_hex": "0000000f6d656469636174696f6e5f646f7365010000002b687474703a2f2f7777772e6e6c6d2e6e69682e676f762f72657365617263682f756d6c732f72786e6f726d00000006373435363739000100000019323032362d31302d32335431343a30353a30302d30353a3030010000000001320100000019687474703a2f2f756e6974736f666d6561737572652e6f7267000000067b707566667d00",
+      "id_hex": "25ce66316613d5c87ec0605d0e41517f0913cc883179e72d98121925fb065c01",
+      "signer_seed_hex": "0102030405060708090a0b0c0d0e0f10",
+      "author_hex": "0b1b59fe721ec4f782ea1343e7a6db66a84289de7d626838f24571b389384f5e",
+      "signature_hex": "c05bdb4b9b11ecac11d611bbb02449e9487a1a4c2cf2c05d611798f37ec6e0bf06f3c9cab72379c256c2f05aa1babc8b5e363c7f30f13598f2735e7684b28a03"
+    },
+    {
+      "note": "medication_statement with a dosage value, every field present, signed",
+      "event": {
+        "id": "795f5ab36ff8a41427bfd570b5244b9810e27c8288eed31ea9dbaad489bec068",
+        "kind": "medication_statement",
+        "code": {
+          "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+          "code": "860975",
+          "display": null
+        },
+        "effective_at": "2026-01-02",
+        "value": {
+          "dosage": {
+            "dose": {
+              "value": "500",
+              "unit": {
+                "system": "http://unitsofmeasure.org",
+                "code": "mg",
+                "display": null
+              }
+            },
+            "text": "Take 1 tablet by mouth twice daily with meals",
+            "frequency": "2",
+            "period": "1",
+            "period_unit": "d",
+            "when": "C",
+            "as_needed": false
+          }
+        },
+        "provenance": {
+          "source": "Nebraska Medicine",
+          "source_doc": "sha256:deadbeef"
+        }
+      },
+      "canon_hex": "000000146d656469636174696f6e5f73746174656d656e74010000002b687474703a2f2f7777772e6e6c6d2e6e69682e676f762f72657365617263682f756d6c732f72786e6f726d0000000638363039373500010000000a323032362d30312d3032010401000000033530300100000019687474703a2f2f756e6974736f666d6561737572652e6f7267000000026d6700010000002d54616b652031207461626c6574206279206d6f757468207477696365206461696c792077697468206d65616c730100000001320100000001310100000001640100000001430100",
+      "id_hex": "795f5ab36ff8a41427bfd570b5244b9810e27c8288eed31ea9dbaad489bec068",
+      "signer_seed_hex": "0102030405060708090a0b0c0d0e0f10",
+      "author_hex": "0b1b59fe721ec4f782ea1343e7a6db66a84289de7d626838f24571b389384f5e",
+      "signature_hex": "bc06d54fd317ae500992a28b10e2b9b1ef3454fefc0e9ea9120c172555e0f883e60c19cd393c9d3aadac2fe89a1c7824e8f680f584bf047eb70d26ce8a302b08"
+    },
+    {
+      "note": "dosage with only text and as_needed: absent fields are 0x00 presence bytes",
+      "event": {
+        "id": "620eb515f922a8e36172a4245bcbb345ad7e62bbb0d949c8a2ea7dbac7f2e140",
+        "kind": "medication_statement",
+        "code": null,
+        "effective_at": null,
+        "value": {
+          "dosage": {
+            "dose": null,
+            "text": "2 puffs every 4 hours as needed for wheezing",
+            "frequency": null,
+            "period": null,
+            "period_unit": null,
+            "when": null,
+            "as_needed": true
+          }
+        },
+        "provenance": {
+          "source": "Nebraska Medicine",
+          "source_doc": null
+        }
+      },
+      "canon_hex": "000000146d656469636174696f6e5f73746174656d656e740000010400010000002c32207075666673206576657279203420686f757273206173206e656564656420666f7220776865657a696e67000000000101",
+      "id_hex": "620eb515f922a8e36172a4245bcbb345ad7e62bbb0d949c8a2ea7dbac7f2e140"
     }
   ]
 }

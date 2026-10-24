@@ -1,5 +1,5 @@
 {
-  "contract_version": 2,
+  "contract_version": 3,
   "genesis_legacy": {
     "data_key_hex": "d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3",
     "legacy_vault_key_hex": "627967ac833d07ad274bdfb6fb7ba2a336780e721e82f1447e859bf90a69ad625050505050505050505050505050505050505050505050508bffdfd3ea6521d514eed92fd44291cde123b9bac121f0c44089527eca3915b77c383d72d81bb8a4b94f03f059691aca",

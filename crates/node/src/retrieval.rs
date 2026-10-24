@@ -159,6 +159,76 @@ mod tests {
     }
 
     #[test]
+    fn a_dose_and_a_dosage_reach_the_context_rendered() {
+        use svastha_core::event::{Dosage, DosageFields, PeriodUnit};
+        let o = owner();
+        let albuterol = Code {
+            system: "http://www.nlm.nih.gov/research/umls/rxnorm".into(),
+            code: "745679".into(),
+            display: Some("albuterol inhaler".into()),
+        };
+        let puffs = EventValue::Quantity {
+            value: "2".into(),
+            unit: Some(Code {
+                system: "http://unitsofmeasure.org".into(),
+                code: "{puff}".into(),
+                display: None,
+            }),
+        };
+        let dose = o.sign_event(Event::new(
+            EventKind::MedicationDose,
+            Some(albuterol.clone()),
+            Some("2026-10-23T14:05:00-05:00".into()),
+            Some(puffs),
+            Provenance {
+                source: "self".into(),
+                source_doc: None,
+            },
+        ));
+        let statement = o.sign_event(Event::new(
+            EventKind::MedicationStatement,
+            Some(albuterol),
+            Some("2026-01-02".into()),
+            Some(EventValue::Dosage(
+                Dosage::new(DosageFields {
+                    frequency: Some("6".into()),
+                    period: Some("1".into()),
+                    period_unit: Some(PeriodUnit::Day),
+                    as_needed: Some(true),
+                    ..Default::default()
+                })
+                .unwrap(),
+            )),
+            Provenance {
+                source: "import".into(),
+                source_doc: None,
+            },
+        ));
+        let idx = idx(&o, &[dose.clone(), statement.clone()]);
+        let hits = retrieve(
+            &idx,
+            &AnswerScope::default(),
+            "when did I last take albuterol?",
+            10,
+        );
+        let line = |id: &SignedEvent| {
+            hits.iter()
+                .find(|h| h.event_id == id.event.id.to_hex())
+                .map(|h| h.text.clone())
+                .unwrap_or_else(|| panic!("missing from context: {hits:?}"))
+        };
+        assert_eq!(
+            line(&dose),
+            "medication_dose took albuterol inhaler 2 {puff} at 2026-10-23T14:05:00-05:00"
+        );
+        assert!(
+            line(&statement).ends_with("albuterol inhaler 6 times per 1 d, as needed"),
+            "{}",
+            line(&statement)
+        );
+    }
+
+    #[test]
     fn unrelated_question_returns_nothing() {
         let o = owner();
         let idx = idx(&o, &[med(&o, "197361", "Lisinopril", "2025-01-01")]);

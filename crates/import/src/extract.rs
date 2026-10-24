@@ -680,8 +680,16 @@ fn to_draft(f: Finding) -> Option<EventDraft> {
 
 /// A `kind` string to an [`EventKind`], via the same serde `snake_case` names the
 /// contract pins. An unknown kind drops the finding.
+///
+/// `medication_dose` is a kind the contract knows but a page reader must not
+/// propose: a dose is the owner's own report of taking something, and a med list
+/// read off paper is standing statements. It is absent from [`USER_PROMPT`], and
+/// refused here too so a model that names it anyway cannot slip a dose log into
+/// the approval queue.
 fn parse_kind(kind: &str) -> Option<EventKind> {
-    serde_json::from_value(serde_json::Value::String(kind.trim().to_string())).ok()
+    serde_json::from_value(serde_json::Value::String(kind.trim().to_string()))
+        .ok()
+        .filter(|k| *k != EventKind::MedicationDose)
 }
 
 /// A `Code` from a finding's `system`/`code`/`display`, or `None` when either the
@@ -834,6 +842,23 @@ mod tests {
         let ex = parse(answer);
         assert_eq!(ex.drafts.len(), 1, "only the third is meaningful");
         assert_eq!(ex.dropped, 2);
+    }
+
+    #[test]
+    fn a_reader_cannot_propose_a_medication_dose() {
+        // A known contract kind, a code, a value: everything a finding needs,
+        // and still refused — the reader never proposes doses.
+        let answer = r#"{"findings":[
+            {"kind":"medication_dose","system":"http://www.nlm.nih.gov/research/umls/rxnorm",
+             "code":"745679","display":"albuterol","value_quantity":"2","unit":"{puff}"},
+            {"kind":" medication_dose ","value_text":"took albuterol"},
+            {"kind":"medication_statement","value_text":"albuterol inhaler"}
+        ]}"#;
+        let ex = parse(answer);
+        assert_eq!(ex.drafts.len(), 1);
+        assert_eq!(ex.drafts[0].kind, EventKind::MedicationStatement);
+        assert_eq!(ex.dropped, 2);
+        assert!(!USER_PROMPT.contains("medication_dose"));
     }
 
     #[test]

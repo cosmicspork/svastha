@@ -46,6 +46,7 @@ export function categorize(event: Categorizable): Category {
     case 'nutrition_intake':
       return 'food'
     case 'medication_statement':
+    case 'medication_dose':
       return 'med'
     case 'document':
       // A text document is a personal note, and a captured paper record (an

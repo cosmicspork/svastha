@@ -248,22 +248,24 @@ mod tests {
     #[test]
     fn a_non_observation_in_the_app_local_system_is_not_sensitive() {
         // `categorize` reaches the cycle/mind split only through `observation`;
-        // a medication statement is a med whatever system its code names.
-        let med = Event::new(
-            EventKind::MedicationStatement,
-            Some(Code {
-                system: SVASTHA_SYSTEM.into(),
-                code: "mood".into(),
-                display: None,
-            }),
-            None,
-            None,
-            Provenance {
-                source: "self".into(),
-                source_doc: None,
-            },
-        );
-        assert_eq!(sensitive_category(&med), None);
+        // a medication statement or dose is a med whatever system its code names.
+        for kind in [EventKind::MedicationStatement, EventKind::MedicationDose] {
+            let med = Event::new(
+                kind.clone(),
+                Some(Code {
+                    system: SVASTHA_SYSTEM.into(),
+                    code: "mood".into(),
+                    display: None,
+                }),
+                None,
+                None,
+                Provenance {
+                    source: "self".into(),
+                    source_doc: None,
+                },
+            );
+            assert_eq!(sensitive_category(&med), None, "{kind:?}");
+        }
     }
 
     #[test]

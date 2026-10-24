@@ -113,6 +113,187 @@ pub enum EventValue {
         mime: String,
         size: u64,
     },
+    /// How a medication is taken, as the source states it (FHIR `Dosage`, a
+    /// C-CDA sig): written by import on a `medication_statement`. Validated on
+    /// construction and on decode — see [`Dosage`].
+    Dosage(Dosage),
+}
+
+/// A measured amount inside a [`Dosage`]: the same `value ‖ unit?` fields, and
+/// the same canonical encoding, as the [`EventValue::Quantity`] variant. A
+/// struct of its own only because the variant's fields are inline.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Quantity {
+    pub value: String,
+    pub unit: Option<Code>,
+}
+
+/// The repeat-period unit of a [`Dosage`]: a closed UCUM subset. A sig's period
+/// is hours, days, weeks, or months; anything else (`min`, `s`, `a`, a
+/// mis-cased `H`) is refused at decode as an unknown variant rather than carried
+/// as an opaque string a later reader would have to second-guess.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PeriodUnit {
+    #[serde(rename = "h")]
+    Hour,
+    #[serde(rename = "d")]
+    Day,
+    #[serde(rename = "wk")]
+    Week,
+    #[serde(rename = "mo")]
+    Month,
+}
+
+impl PeriodUnit {
+    /// The stable wire name (matches the serde form). Used in the canonical
+    /// encoding so renaming a variant cannot silently change ids.
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            PeriodUnit::Hour => "h",
+            PeriodUnit::Day => "d",
+            PeriodUnit::Week => "wk",
+            PeriodUnit::Month => "mo",
+        }
+    }
+}
+
+/// The fields of a [`Dosage`], all optional, in canonical-encoding order.
+/// Numbers are strings, never floats (as with [`EventValue::Quantity`]).
+/// Build one and pass it to [`Dosage::new`], which validates it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DosageFields {
+    /// The amount per administration, e.g. `500` `mg`.
+    pub dose: Option<Quantity>,
+    /// The free-text sig (FHIR `dosage.text`, a C-CDA free-text sig).
+    pub text: Option<String>,
+    /// Administrations per period (FHIR `timing.repeat.frequency`).
+    pub frequency: Option<String>,
+    /// The repeat period's length (FHIR `timing.repeat.period`).
+    pub period: Option<String>,
+    /// The repeat period's unit (FHIR `timing.repeat.periodUnit`).
+    pub period_unit: Option<PeriodUnit>,
+    /// An event-timing code (FHIR `timing.repeat.when`), e.g. `AC`, `HS`.
+    pub when: Option<String>,
+    /// Taken as needed (FHIR `asNeededBoolean`). Tri-state: absent is "the
+    /// source did not say", `false` is "scheduled".
+    pub as_needed: Option<bool>,
+}
+
+/// Why a [`Dosage`] was refused.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum DosageError {
+    #[error("a dosage must carry at least one field")]
+    Empty,
+    #[error("dosage `{0}` must not be blank")]
+    Blank(&'static str),
+    #[error(
+        "dosage `frequency` must be a positive integer in ASCII digits, without a leading zero"
+    )]
+    BadFrequency,
+    #[error(
+        "dosage `{0}` must be an unsigned ASCII decimal (`0`, `12`, `0.5`): no sign, exponent, or leading zero"
+    )]
+    BadDecimal(&'static str),
+    #[error("dosage `period` and `period_unit` must be given together")]
+    UnpairedPeriod,
+}
+
+/// A validated dosage: [`DosageFields`] that passed [`Dosage::new`]. The inner
+/// fields are private and decode goes through the same check (`try_from`), so
+/// an invalid dosage cannot be built, deserialized, hashed, or signed.
+///
+/// The rules (`spec/README.md`, "Event schema", is authoritative):
+/// - at least one field is present — an empty dosage says nothing, and a blank
+///   `text` or `when` would let one through, so those must be non-blank;
+/// - `frequency` is a positive integer in ASCII digits, no leading zero;
+/// - `period` and `dose.value` are unsigned ASCII decimals,
+///   `(0|[1-9][0-9]*)(\.[0-9]+)?`, so one amount has one spelling the content
+///   id can rely on and any reader can parse it without a float;
+/// - `period` and `period_unit` appear together or not at all.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "DosageFields", into = "DosageFields")]
+pub struct Dosage(DosageFields);
+
+impl Dosage {
+    pub fn new(fields: DosageFields) -> Result<Self, DosageError> {
+        let DosageFields {
+            dose,
+            text,
+            frequency,
+            period,
+            period_unit,
+            when,
+            as_needed,
+        } = &fields;
+        if dose.is_none()
+            && text.is_none()
+            && frequency.is_none()
+            && period.is_none()
+            && period_unit.is_none()
+            && when.is_none()
+            && as_needed.is_none()
+        {
+            return Err(DosageError::Empty);
+        }
+        if let Some(dose) = dose {
+            if !is_unsigned_decimal(&dose.value) {
+                return Err(DosageError::BadDecimal("dose.value"));
+            }
+        }
+        for (name, value) in [("text", text), ("when", when)] {
+            if value.as_deref().is_some_and(|s| s.trim().is_empty()) {
+                return Err(DosageError::Blank(name));
+            }
+        }
+        if let Some(frequency) = frequency {
+            if !is_positive_integer(frequency) {
+                return Err(DosageError::BadFrequency);
+            }
+        }
+        if let Some(period) = period {
+            if !is_unsigned_decimal(period) {
+                return Err(DosageError::BadDecimal("period"));
+            }
+        }
+        if period.is_some() != period_unit.is_some() {
+            return Err(DosageError::UnpairedPeriod);
+        }
+        Ok(Self(fields))
+    }
+
+    pub fn fields(&self) -> &DosageFields {
+        &self.0
+    }
+}
+
+impl TryFrom<DosageFields> for Dosage {
+    type Error = DosageError;
+
+    fn try_from(fields: DosageFields) -> Result<Self, DosageError> {
+        Self::new(fields)
+    }
+}
+
+impl From<Dosage> for DosageFields {
+    fn from(dosage: Dosage) -> Self {
+        dosage.0
+    }
+}
+
+// Byte-wise, so a non-ASCII digit (`٣`, a full-width `２`) is refused rather
+// than accepted by a Unicode-aware `is_numeric`.
+fn is_positive_integer(s: &str) -> bool {
+    let b = s.as_bytes();
+    !b.is_empty() && b[0] != b'0' && b.iter().all(u8::is_ascii_digit)
+}
+
+fn is_unsigned_decimal(s: &str) -> bool {
+    let (int, frac) = match s.split_once('.') {
+        Some((int, frac)) => (int, Some(frac)),
+        None => (s, None),
+    };
+    let digits = |p: &str| !p.is_empty() && p.bytes().all(|c| c.is_ascii_digit());
+    digits(int) && (int.len() == 1 || !int.starts_with('0')) && frac.is_none_or(digits)
 }
 
 /// A content-addressed event id: SHA-256 over [`Event::canonical_content`].
@@ -275,6 +456,7 @@ impl Event {
 pub enum EventKind {
     Observation,
     Condition,
+    /// "I take / was on this medication": a standing statement.
     MedicationStatement,
     Immunization,
     Encounter,
@@ -284,6 +466,12 @@ pub enum EventKind {
     /// Self-reported food or drink intake (FHIR R5 NutritionIntake is the
     /// model). One event per item; a multi-item meal shares an `effective_at`.
     NutritionIntake,
+    /// "I took this, at this time": one self-reported dose (a rescue-inhaler
+    /// puff), dated by `effective_at`. Distinct from `medication_statement` so a
+    /// log of doses never reads as a list of standing medications. Exports as a
+    /// FHIR MedicationStatement with `effectiveDateTime`, not a
+    /// MedicationAdministration (that resource is for clinician-given doses).
+    MedicationDose,
 }
 
 impl EventKind {
@@ -300,6 +488,7 @@ impl EventKind {
             EventKind::AllergyIntolerance => "allergy_intolerance",
             EventKind::Document => "document",
             EventKind::NutritionIntake => "nutrition_intake",
+            EventKind::MedicationDose => "medication_dose",
         }
     }
 }
@@ -420,7 +609,43 @@ fn put_opt_value(out: &mut Vec<u8>, value: &Option<EventValue>) {
                     put_str(out, mime);
                     put_u64(out, *size);
                 }
+                EventValue::Dosage(dosage) => {
+                    out.push(4);
+                    put_dosage(out, dosage.fields());
+                }
             }
+        }
+    }
+}
+
+/// `dose? ‖ text? ‖ frequency? ‖ period? ‖ period_unit? ‖ when? ‖ as_needed?`,
+/// every field an option. A present `dose` is the quantity variant's own
+/// `value ‖ unit?`, so the two spell an amount identically.
+fn put_dosage(out: &mut Vec<u8>, d: &DosageFields) {
+    match &d.dose {
+        None => out.push(0),
+        Some(q) => {
+            out.push(1);
+            put_str(out, &q.value);
+            put_opt_code(out, &q.unit);
+        }
+    }
+    put_opt_str(out, &d.text);
+    put_opt_str(out, &d.frequency);
+    put_opt_str(out, &d.period);
+    match d.period_unit {
+        None => out.push(0),
+        Some(unit) => {
+            out.push(1);
+            put_str(out, unit.wire_name());
+        }
+    }
+    put_opt_str(out, &d.when);
+    match d.as_needed {
+        None => out.push(0),
+        Some(b) => {
+            out.push(1);
+            out.push(u8::from(b));
         }
     }
 }
@@ -491,9 +716,19 @@ mod tests {
             EventKind::AllergyIntolerance,
             EventKind::Document,
             EventKind::NutritionIntake,
+            EventKind::MedicationDose,
         ] {
             let json = serde_json::to_value(&kind).unwrap();
             assert_eq!(json.as_str().unwrap(), kind.wire_name());
+        }
+        for unit in [
+            PeriodUnit::Hour,
+            PeriodUnit::Day,
+            PeriodUnit::Week,
+            PeriodUnit::Month,
+        ] {
+            let json = serde_json::to_value(unit).unwrap();
+            assert_eq!(json.as_str().unwrap(), unit.wire_name());
         }
     }
 
@@ -726,6 +961,343 @@ mod tests {
         let parsed: SignedEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.event, signed.event);
         assert!(parsed.verify());
+    }
+
+    // --- medication_dose kind and dosage value ---
+
+    fn ucum(code: &str) -> Code {
+        Code {
+            system: "http://unitsofmeasure.org".into(),
+            code: code.into(),
+            display: None,
+        }
+    }
+
+    fn self_reported() -> Provenance {
+        Provenance {
+            source: "self".into(),
+            source_doc: None,
+        }
+    }
+
+    fn twice_daily() -> DosageFields {
+        DosageFields {
+            dose: Some(Quantity {
+                value: "500".into(),
+                unit: Some(ucum("mg")),
+            }),
+            text: Some("1 tab twice daily".into()),
+            frequency: Some("2".into()),
+            period: Some("1".into()),
+            period_unit: Some(PeriodUnit::Day),
+            when: Some("C".into()),
+            as_needed: Some(false),
+        }
+    }
+
+    fn dosage_event(fields: DosageFields) -> Event {
+        Event::new(
+            EventKind::MedicationStatement,
+            None,
+            None,
+            Some(EventValue::Dosage(Dosage::new(fields).unwrap())),
+            self_reported(),
+        )
+    }
+
+    /// Decode a dosage from its JSON form — the path an event from another
+    /// device takes — so the decode-side check is exercised, not just `new`.
+    fn decode(json: serde_json::Value) -> Result<Dosage, serde_json::Error> {
+        serde_json::from_value(json)
+    }
+
+    #[test]
+    fn dosage_canon_layout() {
+        // tag 0x01 (present value) ‖ 0x04 (dosage) ‖ every field as an option.
+        // Pinned so a reimplementation matches exactly.
+        let canon = dosage_event(twice_daily()).canonical_content();
+        let start = canon
+            .windows(2)
+            .rposition(|w| w == [0x01, 0x04])
+            .expect("present-dosage tag pair");
+        let mut want = vec![0x01, 0x04];
+        want.extend([1, 0, 0, 0, 3, b'5', b'0', b'0']); // dose.value "500"
+        want.extend([1, 0, 0, 0, 25]); // dose.unit present, system
+        want.extend(b"http://unitsofmeasure.org");
+        want.extend([0, 0, 0, 2, b'm', b'g', 0]); // code "mg", no display
+        want.extend([1, 0, 0, 0, 17]); // text
+        want.extend(b"1 tab twice daily");
+        want.extend([1, 0, 0, 0, 1, b'2']); // frequency "2"
+        want.extend([1, 0, 0, 0, 1, b'1']); // period "1"
+        want.extend([1, 0, 0, 0, 1, b'd']); // period_unit "d"
+        want.extend([1, 0, 0, 0, 1, b'C']); // when "C"
+        want.extend([1, 0]); // as_needed false
+        assert_eq!(&canon[start..], &want[..]);
+    }
+
+    #[test]
+    fn dosage_absent_fields_are_presence_bytes() {
+        let canon = dosage_event(DosageFields {
+            as_needed: Some(true),
+            ..Default::default()
+        })
+        .canonical_content();
+        assert_eq!(
+            &canon[canon.len() - 10..],
+            &[0x01, 0x04, 0, 0, 0, 0, 0, 0, 1, 1],
+            "six absent fields, then as_needed = true"
+        );
+    }
+
+    #[test]
+    fn dosage_serde_shape_and_round_trip() {
+        let event = dosage_event(twice_daily());
+        let json = serde_json::to_value(&event).unwrap();
+        let dosage = &json["value"]["dosage"];
+        assert_eq!(dosage["dose"]["value"], "500");
+        assert_eq!(dosage["period_unit"], "d");
+        assert_eq!(dosage["as_needed"], false);
+        let parsed: Event = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed, event);
+        assert_eq!(parsed.content_id(), event.id);
+    }
+
+    #[test]
+    fn dosage_decode_treats_missing_fields_as_absent() {
+        let parsed = decode(serde_json::json!({ "text": "as directed" })).unwrap();
+        assert_eq!(parsed.fields().text.as_deref(), Some("as directed"));
+        assert_eq!(parsed.fields().frequency, None);
+    }
+
+    #[test]
+    fn period_unit_is_a_closed_set() {
+        for good in ["h", "d", "wk", "mo"] {
+            decode(serde_json::json!({ "period": "1", "period_unit": good }))
+                .unwrap_or_else(|e| panic!("{good:?} should decode: {e}"));
+        }
+        for bad in ["min", "H", "", "D", "wk ", "s", "a", "day"] {
+            assert!(
+                decode(serde_json::json!({ "period": "1", "period_unit": bad })).is_err(),
+                "{bad:?} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn frequency_is_a_positive_ascii_integer() {
+        for good in ["1", "2", "12", "100"] {
+            let fields = DosageFields {
+                frequency: Some(good.into()),
+                ..Default::default()
+            };
+            assert!(Dosage::new(fields).is_ok(), "{good:?}");
+        }
+        for bad in [
+            "1.5", "-1", " 2", "2 ", "٣", "２", "0", "01", "", "+1", "1e1", "0x2",
+        ] {
+            let fields = DosageFields {
+                frequency: Some(bad.into()),
+                ..Default::default()
+            };
+            assert_eq!(
+                Dosage::new(fields),
+                Err(DosageError::BadFrequency),
+                "{bad:?}"
+            );
+            assert!(
+                decode(serde_json::json!({ "frequency": bad })).is_err(),
+                "{bad:?} must not decode either"
+            );
+        }
+    }
+
+    #[test]
+    fn period_and_dose_are_unsigned_ascii_decimals() {
+        let with_period = |p: &str| DosageFields {
+            period: Some(p.into()),
+            period_unit: Some(PeriodUnit::Hour),
+            ..Default::default()
+        };
+        let with_dose = |v: &str| DosageFields {
+            dose: Some(Quantity {
+                value: v.into(),
+                unit: None,
+            }),
+            ..Default::default()
+        };
+        for good in ["0", "1", "24", "0.5", "1.50", "10.25"] {
+            assert!(Dosage::new(with_period(good)).is_ok(), "period {good:?}");
+            assert!(Dosage::new(with_dose(good)).is_ok(), "dose {good:?}");
+        }
+        for bad in [
+            "1e3", "1E3", "1.5e2", "1.", ".5", "-1", "+1", "01", "00.5", "1.2.3", "1,5", "NaN",
+            "inf", "٣", " 1", "1 ", "",
+        ] {
+            assert_eq!(
+                Dosage::new(with_period(bad)),
+                Err(DosageError::BadDecimal("period")),
+                "period {bad:?}"
+            );
+            assert_eq!(
+                Dosage::new(with_dose(bad)),
+                Err(DosageError::BadDecimal("dose.value")),
+                "dose {bad:?}"
+            );
+            assert!(decode(serde_json::json!({ "period": bad, "period_unit": "h" })).is_err());
+        }
+    }
+
+    #[test]
+    fn empty_dosage_is_refused() {
+        assert_eq!(
+            Dosage::new(DosageFields::default()),
+            Err(DosageError::Empty)
+        );
+        assert!(decode(serde_json::json!({})).is_err());
+        assert!(decode(serde_json::json!({
+            "dose": null, "text": null, "frequency": null, "period": null,
+            "period_unit": null, "when": null, "as_needed": null
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn blank_strings_cannot_smuggle_an_empty_dosage_past_the_guard() {
+        for blank in ["", " ", "\t\n"] {
+            let text = DosageFields {
+                text: Some(blank.into()),
+                ..Default::default()
+            };
+            assert_eq!(Dosage::new(text), Err(DosageError::Blank("text")));
+            let when = DosageFields {
+                when: Some(blank.into()),
+                ..Default::default()
+            };
+            assert_eq!(Dosage::new(when), Err(DosageError::Blank("when")));
+        }
+    }
+
+    #[test]
+    fn period_and_unit_come_together() {
+        let period_only = DosageFields {
+            period: Some("1".into()),
+            ..Default::default()
+        };
+        assert_eq!(Dosage::new(period_only), Err(DosageError::UnpairedPeriod));
+        let unit_only = DosageFields {
+            period_unit: Some(PeriodUnit::Day),
+            ..Default::default()
+        };
+        assert_eq!(Dosage::new(unit_only), Err(DosageError::UnpairedPeriod));
+    }
+
+    #[test]
+    fn an_invalid_dosage_fails_the_whole_event_decode() {
+        // The decode a device runs on a synced blob: a signed event carrying a
+        // dosage that would not pass `Dosage::new` must not parse at all.
+        let signed = Identity::from_seed(b"author seed").sign_event(dosage_event(twice_daily()));
+        let mut json = serde_json::to_value(&signed).unwrap();
+        json["event"]["value"]["dosage"]["frequency"] = "1.5".into();
+        assert!(serde_json::from_value::<SignedEvent>(json).is_err());
+    }
+
+    #[test]
+    fn dosage_is_not_tied_to_a_kind() {
+        // Core is schema-agnostic about kind/value pairing (an attachment is not
+        // restricted to `document` either); which kinds carry a dosage is the
+        // writer's convention, so another kind still hashes, signs, and decodes.
+        let event = Event::new(
+            EventKind::Observation,
+            None,
+            None,
+            Some(EventValue::Dosage(Dosage::new(twice_daily()).unwrap())),
+            self_reported(),
+        );
+        let signed = Identity::from_seed(b"author seed").sign_event(event);
+        let parsed: SignedEvent =
+            serde_json::from_str(&serde_json::to_string(&signed).unwrap()).unwrap();
+        assert!(parsed.verify());
+    }
+
+    #[test]
+    fn a_dose_quantity_and_a_dosage_dose_are_different_facts() {
+        // The same "500 mg" as a quantity value and as a dosage's dose canonicalize
+        // differently (tag 0x00 vs 0x04 plus the dosage's option bytes), so they
+        // have different ids. Pinned so nobody "optimizes" the dosage encoding
+        // into the quantity one and silently collapses the two on union.
+        let as_quantity = Event::new(
+            EventKind::MedicationStatement,
+            None,
+            None,
+            Some(EventValue::Quantity {
+                value: "500".into(),
+                unit: Some(ucum("mg")),
+            }),
+            self_reported(),
+        );
+        let as_dosage = dosage_event(DosageFields {
+            dose: Some(Quantity {
+                value: "500".into(),
+                unit: Some(ucum("mg")),
+            }),
+            ..Default::default()
+        });
+        assert_ne!(as_quantity.id, as_dosage.id);
+    }
+
+    #[test]
+    fn medication_dose_is_not_a_medication_statement() {
+        // The kind is part of the id: a dose and a standing statement with the
+        // same code, time, and value are different facts.
+        let at = |kind| {
+            Event::new(
+                kind,
+                None,
+                Some("2026-10-23T14:05:00-05:00".into()),
+                Some(EventValue::Text("albuterol".into())),
+                self_reported(),
+            )
+        };
+        assert_ne!(
+            at(EventKind::MedicationDose).id,
+            at(EventKind::MedicationStatement).id
+        );
+    }
+
+    #[test]
+    fn medication_dose_and_dosage_sign_verify_and_reject_tampering() {
+        let id = Identity::from_seed(b"author seed");
+        for event in [
+            Event::new(
+                EventKind::MedicationDose,
+                None,
+                Some("2026-10-23T14:05:00-05:00".into()),
+                Some(EventValue::Quantity {
+                    value: "2".into(),
+                    unit: Some(ucum("{puff}")),
+                }),
+                self_reported(),
+            ),
+            dosage_event(twice_daily()),
+        ] {
+            let signed = id.sign_event(event);
+            assert!(signed.verify());
+            let parsed: SignedEvent =
+                serde_json::from_str(&serde_json::to_string(&signed).unwrap()).unwrap();
+            assert!(parsed.verify());
+            // Relabelling a dose as a statement (or back) breaks the signature.
+            let mut tampered = signed.clone();
+            tampered.event.kind = match signed.event.kind {
+                EventKind::MedicationDose => EventKind::MedicationStatement,
+                _ => EventKind::MedicationDose,
+            };
+            assert!(!tampered.verify());
+        }
+        let mut signed = id.sign_event(dosage_event(twice_daily()));
+        let mut fields = twice_daily();
+        fields.as_needed = Some(true);
+        signed.event.value = Some(EventValue::Dosage(Dosage::new(fields).unwrap()));
+        assert!(!signed.verify());
     }
 
     // --- pinned spec vectors ---

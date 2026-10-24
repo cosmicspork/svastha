@@ -29,6 +29,23 @@ export type EventKind =
   | 'allergy_intolerance'
   | 'document'
   | 'nutrition_intake'
+  | 'medication_dose'
+
+/** The JSON form of core's `Dosage`: how a medication is taken, as an import
+ * source states it. Core serializes every key (absent as `null`) and validates
+ * on decode and on signing — `sign_event` refuses an empty dosage, a
+ * `frequency` that is not a positive ASCII integer, a `period`/`dose.value`
+ * that is not an unsigned ASCII decimal, or a `period` without its unit (see
+ * crates/core/src/event.rs). */
+export interface Dosage {
+  dose?: { value: string; unit: Code | null } | null
+  text?: string | null
+  frequency?: string | null
+  period?: string | null
+  period_unit?: 'h' | 'd' | 'wk' | 'mo' | null
+  when?: string | null
+  as_needed?: boolean | null
+}
 
 /** The JSON form of core's `EventValue` — externally tagged with snake_case
  * variant names, pinned by spec/vectors/event.json. Quantities are decimal
@@ -38,6 +55,7 @@ export type EventValue =
   | { coded: Code }
   | { text: string }
   | { attachment: { sha256: string; mime: string; size: number } }
+  | { dosage: Dosage }
 
 /** An event ready to sign: everything but `id` (derived) and `provenance`
  * (stamped by logEvent). Quick-log always dates its facts. `value` is
