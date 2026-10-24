@@ -107,3 +107,27 @@ describe('CATEGORY_META', () => {
     }
   })
 })
+
+describe('work category', () => {
+  const t = (code: string, text: string) =>
+    categorize({ kind: 'observation', code: { system: LOINC, code }, value: { text } })
+
+  it('routes occupation, occupational hazard and industry observations to work, not clinical', () => {
+    expect(t('11341-5', 'welder')).toBe('work')
+    expect(t('87729-0', 'asbestos')).toBe('work')
+    expect(t('86188-0', 'construction')).toBe('work')
+  })
+
+  it('does not route the same code under another system, or a neighbouring LOINC text observation', () => {
+    expect(
+      categorize({ kind: 'observation', code: { system: 'urn:other', code: '11341-5' }, value: { text: 'x' } }),
+    ).toBe('clinical')
+    expect(t('11342-3', 'x')).toBe('clinical')
+  })
+
+  it('is a non-sensitive category, so a default doctor share carries it', () => {
+    expect(CATEGORIES).toContain('work')
+    expect(CATEGORY_META.work.sensitive).toBeFalsy()
+    expect(CATEGORY_META.work.hueClass).toBe('cat-work')
+  })
+})

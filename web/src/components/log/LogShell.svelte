@@ -16,6 +16,7 @@
     onPrefill,
     onReset,
     saveLabel = 'Save',
+    afterSave,
     children,
   }: {
     title: string
@@ -30,6 +31,10 @@
      * varies by pane (e.g. CycleForm's "Log flow" / "Log period start") can
      * override it. */
     saveLabel?: string
+    /** Runs after a form save (not a favorite's one-tap log) has been
+     * written, for state that rides beside the events — a work entry's
+     * current/past status. */
+    afterSave?: (drafts: Draft[]) => Promise<void>
     children: Snippet
   } = $props()
 
@@ -75,11 +80,12 @@
     clearTimeout(toastTimer)
   })
 
-  async function saveDrafts(drafts: Draft[], label: string, stay: boolean) {
+  async function saveDrafts(drafts: Draft[], label: string, stay: boolean, fromForm = false) {
     saving = true
     error = ''
     try {
       await logEvent(drafts)
+      if (fromForm) await afterSave?.(drafts)
       favorited = false
       toast = { label, templates: drafts.map(toTemplate) }
       if (stay) {
@@ -102,7 +108,7 @@
   function save(stay: boolean) {
     const drafts = buildDrafts(effectiveAt())
     if (!drafts) return
-    void saveDrafts(drafts, favoriteLabel(), stay)
+    void saveDrafts(drafts, favoriteLabel(), stay, true)
   }
 
   async function favoriteThis() {

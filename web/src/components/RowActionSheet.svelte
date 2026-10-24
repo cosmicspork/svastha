@@ -30,9 +30,10 @@
     onsaved,
   }: {
     row: SummaryRow
-    /** Which controls the sheet offers: meds and problems carry a status (in
-     * different wording), problems and allergies a priority, meds a regimen. */
-    section: 'med' | 'problem' | 'allergy'
+    /** Which controls the sheet offers: meds, problems and jobs carry a status
+     * (problems resolve; meds and jobs become past), problems and allergies a
+     * priority, meds a regimen. */
+    section: 'med' | 'problem' | 'allergy' | 'work'
     /** The concept's current name override, `''` when there is none. */
     name?: string
     /** The concept's current regimen, seeded into the fields on open. */
@@ -48,7 +49,7 @@
 
   const isMed = $derived(section === 'med')
   const hasStatus = $derived(section !== 'allergy')
-  const hasPriority = $derived(section !== 'med')
+  const hasPriority = $derived(section === 'problem' || section === 'allergy')
   const noun = $derived(section === 'allergy' ? 'allergies' : 'problems')
 
   const PRIORITY_CHOICES: { value: ConceptPriority; label: string }[] = [
@@ -56,6 +57,7 @@
     { value: 'pinned', label: 'Pin' },
     { value: 'hidden', label: 'Hide' },
   ]
+  const isProblem = $derived(section === 'problem')
 
   // Seeded once, at open: the sheet is a form over a snapshot, and the host
   // unmounts it on close rather than re-pointing it at another row. `untrack`
@@ -118,9 +120,9 @@
     {#if hasStatus}
       <button type="button" class="tonal action" onclick={toggleStatus} data-testid="action-toggle-status">
         {#if row.status === 'active'}
-          {isMed ? 'Mark as past' : 'Mark as resolved'}
+          {isProblem ? 'Mark as resolved' : 'Mark as past'}
         {:else}
-          {isMed ? 'Mark as current' : 'Mark as active'}
+          {isProblem ? 'Mark as active' : 'Mark as current'}
         {/if}
       </button>
     {/if}

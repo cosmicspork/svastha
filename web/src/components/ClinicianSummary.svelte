@@ -119,7 +119,9 @@
   function matches(row: SummaryRow): boolean {
     if (needle === '') return true
     return (
-      row.label.toLowerCase().includes(needle) || row.detail.toLowerCase().includes(needle)
+      row.label.toLowerCase().includes(needle) ||
+      row.detail.toLowerCase().includes(needle) ||
+      (row.subline ?? '').toLowerCase().includes(needle)
     )
   }
   const keep = (rows: SummaryRow[]): SummaryRow[] => (needle === '' ? rows : rows.filter(matches))
@@ -150,6 +152,7 @@
   const immunizations = $derived(keepWindowed(summary.immunizations))
   const vitals = $derived(keepWindowed(summary.latestVitals))
   const results = $derived(keepWindowed(summary.recentResults))
+  const work = $derived(keep(summary.work))
 
   /** "older than 12 months" — the windowed sections' collapsed-group wording,
    * named from the window the summary was actually built with. */
@@ -173,7 +176,8 @@
       vitals.recent.length +
       vitals.older.length +
       results.recent.length +
-      results.older.length,
+      results.older.length +
+      work.length,
   )
 
   let hiddenProblemsOpen = $state(false)
@@ -217,7 +221,7 @@
 
   // The row-action sheet: which row was tapped and which section it belongs to
   // (meds vs. problems drives the status wording). Null when closed.
-  type Section = 'med' | 'problem' | 'allergy'
+  type Section = 'med' | 'problem' | 'allergy' | 'work'
   let action = $state<{ row: SummaryRow; section: Section } | null>(null)
 
   function openAction(row: SummaryRow, section: Section) {
@@ -579,6 +583,23 @@
           </div>
         {/if}
       </div>
+    {/if}
+
+    <!-- A job's exposures ride its row; hidden entirely when there is no work
+         history, like vitals, rather than claiming "None recorded". -->
+    {#if work.length > 0}
+      <SummarySection
+        title="Work & exposures"
+        rows={work}
+        hueClass="cat-work"
+        dictionaryEnabled={$dictionaryStatus.enabled}
+        {coveredSystems}
+        curateLabel="Mark past or rename"
+        detailLabel="Duration"
+        {readonly}
+        {onviewtimeline}
+        onrowtap={readonly ? undefined : (row) => openAction(row, 'work')}
+      />
     {/if}
 
     <!-- Immunizations trail vitals and results: a visit asks what has been
