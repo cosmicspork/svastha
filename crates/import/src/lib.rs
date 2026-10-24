@@ -21,6 +21,7 @@ pub mod dates;
 mod dosage;
 pub mod extract;
 pub mod fhir;
+pub mod work;
 
 /// Terminology system URIs shared by both mappers (also mirrored in
 /// `web/src/lib/codes.ts` — keep the strings identical so a fact mapped from

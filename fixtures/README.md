@@ -13,7 +13,8 @@ before sharing it.
   `crates/import/src/ccda.rs` maps (allergy, problem, medication, immunization,
   result, vital, procedure, encounter), plus one nullFlavor'd entry with no
   usable translation (must be skipped, not silently dropped) and one section
-  (`29762-2`, Social History) the mapping deliberately doesn't handle yet. The
+  (`29762-2`, Social History) whose only entry is a non-work observation (must
+  skip, never import). The
   Encounters section also nests three `entryRelationship` candidates — a
   `<procedure>` with its own `effectiveTime`, a Procedure Activity Act that
   falls back to the encounter's, and a Procedure Activity Observation with an
@@ -30,6 +31,11 @@ before sharing it.
   note). The header `<effectiveTime>` deliberately carries a birth-date-shaped
   value the mapping must ignore in favor of the encounter date. Fictional
   patient "Alex Example", fictional codes and values.
+- `ccda/occupation-ccd.xml` and `fhir/occupation-bundle.json` — Social History
+  only: jobs in the Basic Occupation (4.503) and older ODH (4.217) shapes, with
+  industry nested and as a sibling entry, hazards (one blank), an undated job,
+  an unusable job, and fictional employer names and addresses that must reach
+  no event (`crates/import/tests/work.rs`).
 - `fhir/bundle-minimal.json` — a small FHIR R4 `Bundle` with one of each
   resourceType `crates/import/src/fhir.rs` maps, a `Patient` (unmapped) and an
   `Appointment` (unmapped), and a `valueQuantity` of `98.60` — the trailing

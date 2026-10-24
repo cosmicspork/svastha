@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Synthetic C-CDA fixture: fictional patient, fictional employers, codes and
+  dates. Social History only. Exercises the occupation / industry /
+  occupational hazard mapping in crates/import/src/ccda.rs. See
+  fixtures/README.md.
+-->
+<ClinicalDocument xmlns="urn:hl7-org:v3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <realmCode code="US"/>
+  <templateId root="2.16.840.1.113883.10.20.22.1.1"/>
+  <id root="1.2.3.4.5.6.7.8.9" extension="occupation-ccd-fixture"/>
+  <code code="34133-9" codeSystem="2.16.840.1.113883.6.1" displayName="Summary of episode note"/>
+  <title>Occupation -- Synthetic Fixture</title>
+  <recordTarget>
+    <patientRole>
+      <id root="2.16.840.1.113883.19.5" extension="fixture-patient-1"/>
+      <patient><name><given>Alex</given><family>Example</family></name></patient>
+    </patientRole>
+  </recordTarget>
+  <component>
+    <structuredBody>
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.17"/>
+          <code code="29762-2" codeSystem="2.16.840.1.113883.6.1" displayName="Social history"/>
+          <title>Social History</title>
+          <text>
+            <paragraph ID="job2text">Phlebotomist</paragraph>
+          </text>
+
+          <!-- Basic Occupation Observation (4.503), coded O*NET-SOC, with the
+               Basic Industry Observation (4.504) nested. -->
+          <entry>
+            <observation classCode="OBS" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.503"/>
+              <code code="11341-5" codeSystem="2.16.840.1.113883.6.1" displayName="History of Occupation"/>
+              <effectiveTime><low value="20190304"/></effectiveTime>
+              <value xsi:type="CD" code="29-1141.00" codeSystem="2.16.840.1.113883.6.243" displayName="Registered Nurses"/>
+              <participant typeCode="IND">
+                <participantRole>
+                  <addr><streetAddressLine>100 Fictional Way</streetAddressLine><city>Exampleville</city></addr>
+                  <playingEntity><name>Example Memorial Hospital</name></playingEntity>
+                </participantRole>
+              </participant>
+              <entryRelationship typeCode="COMP">
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.504"/>
+                  <code code="86188-0" codeSystem="2.16.840.1.113883.6.1" displayName="History of Occupation industry"/>
+                  <value xsi:type="CD" code="622110" codeSystem="2.16.840.1.113883.6.85" displayName="General Medical and Surgical Hospitals"/>
+                </observation>
+              </entryRelationship>
+            </observation>
+          </entry>
+
+          <!-- A second current job: value only as text (nullFlavor code with
+               originalText by narrative reference), industry as a SIBLING
+               entry sharing the job's start date. -->
+          <entry>
+            <observation classCode="OBS" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.503"/>
+              <code code="11341-5" codeSystem="2.16.840.1.113883.6.1"/>
+              <effectiveTime><low value="20220815"/></effectiveTime>
+              <value xsi:type="CD" nullFlavor="OTH">
+                <originalText><reference value="#job2text"/></originalText>
+              </value>
+            </observation>
+          </entry>
+          <entry>
+            <observation classCode="OBS" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.504"/>
+              <code code="86188-0" codeSystem="2.16.840.1.113883.6.1"/>
+              <effectiveTime><low value="20220815"/></effectiveTime>
+              <value xsi:type="ST">Outpatient care centers</value>
+            </observation>
+          </entry>
+
+          <!-- Older ODH Past or Present Occupation Observation (4.217) with
+               nested industry and two hazards plus a blank one and an
+               unmapped component. -->
+          <entry>
+            <observation classCode="OBS" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.217"/>
+              <code code="11341-5" codeSystem="2.16.840.1.113883.6.1"/>
+              <effectiveTime><low value="20100101"/><high value="20150101"/></effectiveTime>
+              <value xsi:type="ST">Welder</value>
+              <participant typeCode="IND">
+                <participantRole>
+                  <addr><streetAddressLine>9 Placeholder Road</streetAddressLine></addr>
+                  <playingEntity><name>Acme Shipyards</name></playingEntity>
+                </participantRole>
+              </participant>
+              <entryRelationship typeCode="COMP">
+                <observation classCode="OBS" moodCode="EVN">
+                  <code code="86188-0" codeSystem="2.16.840.1.113883.6.1"/>
+                  <value xsi:type="ST">Shipbuilding</value>
+                </observation>
+              </entryRelationship>
+              <entryRelationship typeCode="COMP">
+                <observation classCode="OBS" moodCode="EVN">
+                  <code code="87729-0" codeSystem="2.16.840.1.113883.6.1"/>
+                  <value xsi:type="ST">Welding fumes</value>
+                </observation>
+              </entryRelationship>
+              <entryRelationship typeCode="COMP">
+                <observation classCode="OBS" moodCode="EVN">
+                  <code code="87729-0" codeSystem="2.16.840.1.113883.6.1"/>
+                  <value xsi:type="ST">  Noise  </value>
+                </observation>
+              </entryRelationship>
+              <entryRelationship typeCode="COMP">
+                <observation classCode="OBS" moodCode="EVN">
+                  <code code="87729-0" codeSystem="2.16.840.1.113883.6.1"/>
+                  <value xsi:type="ST">   </value>
+                </observation>
+              </entryRelationship>
+              <entryRelationship typeCode="COMP">
+                <observation classCode="OBS" moodCode="EVN">
+                  <code code="74165-2" codeSystem="2.16.840.1.113883.6.1" displayName="Employment status"/>
+                  <value xsi:type="CD" code="full-time" codeSystem="2.16.840.1.113883.5.1"/>
+                </observation>
+              </entryRelationship>
+            </observation>
+          </entry>
+
+          <!-- No start date at all. -->
+          <entry>
+            <observation classCode="OBS" moodCode="EVN">
+              <code code="11341-5" codeSystem="2.16.840.1.113883.6.1"/>
+              <value xsi:type="ST">Volunteer firefighter</value>
+              <entryRelationship typeCode="COMP">
+                <observation classCode="OBS" moodCode="EVN">
+                  <code code="87729-0" codeSystem="2.16.840.1.113883.6.1"/>
+                  <value xsi:type="ST">Smoke</value>
+                </observation>
+              </entryRelationship>
+            </observation>
+          </entry>
+
+          <!-- Nothing usable: must be skipped, not become an empty job. -->
+          <entry>
+            <observation classCode="OBS" moodCode="EVN">
+              <code code="11341-5" codeSystem="2.16.840.1.113883.6.1"/>
+              <effectiveTime><low value="20000101"/></effectiveTime>
+              <value xsi:type="CD" nullFlavor="UNK"/>
+            </observation>
+          </entry>
+
+          <!-- Not imported yet: usual work, and a non-work observation. -->
+          <entry>
+            <observation classCode="OBS" moodCode="EVN">
+              <code code="21843-8" codeSystem="2.16.840.1.113883.6.1" displayName="History of Usual occupation"/>
+              <value xsi:type="ST">Nurse</value>
+            </observation>
+          </entry>
+          <entry>
+            <observation classCode="OBS" moodCode="EVN">
+              <code code="72166-2" codeSystem="2.16.840.1.113883.6.1" displayName="Tobacco smoking status"/>
+              <value xsi:type="CD" code="266919005" codeSystem="2.16.840.1.113883.6.96" displayName="Never smoker"/>
+            </observation>
+          </entry>
+        </section>
+      </component>
+    </structuredBody>
+  </component>
+</ClinicalDocument>

@@ -3,7 +3,7 @@ import { buildSummary, medicationFrequency, shelveMedications, splitProblems, co
 import type { StoredEvent } from '../events'
 import type { EventKind, EventValue } from '../drafts'
 import { lwwMerge, priorityMapFrom, type ConceptPriority, type ConceptStatus, type CurationRecord, type Regimen } from '../curation'
-import { SNOMED, LOINC, OCCUPATION, OCCUPATIONAL_HAZARD, RXNORM, BP_SYSTOLIC, BP_DIASTOLIC, CYCLE_START, CYCLE_END, type Code } from '../codes'
+import { SNOMED, LOINC, OCCUPATION, OCCUPATION_INDUSTRY, OCCUPATIONAL_HAZARD, RXNORM, BP_SYSTOLIC, BP_DIASTOLIC, CYCLE_START, CYCLE_END, type Code } from '../codes'
 
 let nextId = 0
 function ev(partial: {
@@ -928,6 +928,31 @@ describe('work & exposures', () => {
     expect(rows.map((r) => r.label)).toEqual(['welder', 'dust', 'radiation'])
     expect(rows[0].subline).toBe('noise')
     expect(rows.slice(1).every((r) => r.subline === '')).toBe(true)
+  })
+
+  it('leads the sub-line with the job\'s industry, before its exposures', () => {
+    const ind = (v: EventValue, at: string) => ev({ code: OCCUPATION_INDUSTRY, value: v, effective_at: T(at) })
+    const rows = work([
+      job('nurse', '2019-03-04'),
+      ind({ text: 'Hospitals' }, '2019-03-04'),
+      haz('needlesticks', '2019-03-04'),
+      haz('night shifts', '2019-03-04'),
+      job('welder', '2010-01-01'),
+      ind({ coded: { system: 'urn:oid:2.16.840.1.113883.6.85', code: '336611', display: 'Ship building' } }, '2010-01-01'),
+      job('cook', '2001-01-01'),
+    ])
+    expect(rows.map((r) => [r.label, r.subline])).toEqual([
+      ['nurse', 'Hospitals · needlesticks, night shifts'],
+      ['welder', 'Ship building'],
+      ['cook', ''],
+    ])
+  })
+
+  it('leaves an industry that matches no job off the summary, and never shows its code', () => {
+    const ind = (at: string | null) =>
+      ev({ code: OCCUPATION_INDUSTRY, value: { text: 'Hospitals' }, effective_at: at ? T(at) : null })
+    const rows = work([job('nurse', '2019-03-04'), ind('2020-01-01'), ind(null)])
+    expect(rows.map((r) => [r.label, r.subline])).toEqual([['nurse', '']])
   })
 
   it('folds the same job logged twice and keeps the earliest start', () => {

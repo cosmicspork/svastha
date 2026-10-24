@@ -16,6 +16,7 @@ use svastha_core::event::{Code, Dosage, EventKind, EventValue, PeriodUnit, Quant
 use crate::dates::hl7_ts_to_iso;
 use crate::dosage;
 use crate::systems::{CVX, ICD10CM, LOINC, RXNORM, SNOMED, UCUM};
+use crate::work::{self, Job};
 use crate::{EventDraft, ImportError, ImportResult, Skipped};
 
 pub fn import(xml: &str) -> Result<ImportResult, ImportError> {
@@ -35,13 +36,17 @@ pub fn import(xml: &str) -> Result<ImportResult, ImportError> {
     // `document_visit_date`), dates the narrative prose sections — they carry
     // no per-entry effectiveTime of their own.
     let visit_date = document_visit_date(root);
+    // Jobs from every social-history section are flushed together so a shared
+    // start date is noticed across sections too.
+    let mut jobs: Vec<Job> = Vec::new();
 
     for section_wrapper in children_named(structured_body, "component") {
         let Some(section) = find_child(section_wrapper, "section") else {
             continue;
         };
-        import_section(section, visit_date.as_deref(), &mut result);
+        import_section(section, visit_date.as_deref(), &mut result, &mut jobs);
     }
+    work::flush(jobs, &mut result);
 
     Ok(result)
 }
@@ -76,7 +81,12 @@ fn document_visit_date(root: Node) -> Option<String> {
     None
 }
 
-fn import_section(section: Node, visit_date: Option<&str>, result: &mut ImportResult) {
+fn import_section(
+    section: Node,
+    visit_date: Option<&str>,
+    result: &mut ImportResult,
+    jobs: &mut Vec<Job>,
+) {
     let Some(code) = section_code(section) else {
         result.skipped.push(Skipped {
             what: section_title(section),
@@ -95,6 +105,7 @@ fn import_section(section: Node, visit_date: Option<&str>, result: &mut ImportRe
         "11369-6" => import_immunizations(section, result),
         "30954-2" => import_results(section, result),
         "8716-3" => import_vitals(section, result),
+        "29762-2" => import_social_history(section, result, jobs),
         "47519-4" => import_procedures(section, result),
         "46240-8" => import_encounters(section, result),
         // Narrative prose sections — the human-written parts of a visit note.
@@ -608,6 +619,204 @@ fn value_to_event_value(
                 why: format!("unhandled value type {other:?}"),
             });
             None
+        }
+    }
+}
+
+// --- social history (29762-2): occupation, industry, occupational hazards ---
+//
+// Entries are recognised by their observation `code` (11341-5 job, 86188-0
+// industry, 87729-0 hazard), not by templateId, so the Basic Occupation (4.503)
+// and older ODH Past or Present Occupation (4.217) templates and a vendor's
+// variant all import. Industry and hazards are either nested under the job
+// through `entryRelationship` or, for the Basic Industry Observation (4.504),
+// possibly a sibling entry. Nothing outside those value/date fields is read,
+// so an employer `participant` never reaches an event (see `work.rs`).
+
+fn is_loinc_obs(obs: Node, wanted: &str) -> bool {
+    find_child(obs, "code")
+        .and_then(extract_code)
+        .is_some_and(|c| c.system == LOINC && c.code == wanted)
+}
+
+fn obs_work_code(obs: Node) -> Option<String> {
+    find_child(obs, "code")
+        .and_then(extract_code)
+        .filter(|c| c.system == LOINC)
+        .map(|c| c.code)
+}
+
+/// The words a work value is written in: inline text, else `originalText`
+/// (inline or a narrative reference), else a reference on the value itself,
+/// else `displayName`.
+fn work_text(value_el: Node, section: Node) -> Option<String> {
+    let resolve = |el: Node| {
+        let inline = flatten_text(el);
+        if !inline.is_empty() {
+            return Some(inline);
+        }
+        narrative_reference_id(el).and_then(|id| resolve_narrative_reference(section, &id))
+    };
+    let inline = value_el
+        .text()
+        .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|t| !t.is_empty());
+    inline
+        .or_else(|| find_child(value_el, "originalText").and_then(resolve))
+        .or_else(|| {
+            narrative_reference_id(value_el)
+                .and_then(|id| resolve_narrative_reference(section, &id))
+        })
+        .or_else(|| {
+            value_el
+                .attribute("displayName")
+                .map(|d| d.split_whitespace().collect::<Vec<_>>().join(" "))
+                .filter(|d| !d.is_empty())
+        })
+}
+
+/// Coded when the source codes it, else the text it wrote.
+fn work_value(obs: Node, section: Node) -> Option<EventValue> {
+    let value_el = find_child(obs, "value")?;
+    if let Some(mut code) = extract_code(value_el) {
+        if code.display.is_none() {
+            code.display = find_child(value_el, "originalText")
+                .map(flatten_text)
+                .filter(|t| !t.is_empty());
+        }
+        return Some(EventValue::Coded(code));
+    }
+    work_text(value_el, section).map(EventValue::Text)
+}
+
+fn apply_satellite(job: &mut Job, obs: Node, code: &str, section: Node, result: &mut ImportResult) {
+    let Some(value_el) = find_child(obs, "value") else {
+        result.skipped.push(Skipped {
+            what: format!("work observation ({code})"),
+            why: "no <value>".into(),
+        });
+        return;
+    };
+    if code == work::HAZARD {
+        match work_text(value_el, section) {
+            Some(text) => job.hazards.push(text),
+            None => result.skipped.push(Skipped {
+                what: format!("work observation ({code})"),
+                why: "occupational hazard has no text".into(),
+            }),
+        }
+    } else {
+        match work_value(obs, section) {
+            Some(v) if job.industry.is_none() => job.industry = Some(v),
+            Some(_) => result.skipped.push(Skipped {
+                what: format!("work observation ({code})"),
+                why: "occupation already has an industry".into(),
+            }),
+            None => result.skipped.push(Skipped {
+                what: format!("work observation ({code})"),
+                why: "industry has no usable value".into(),
+            }),
+        }
+    }
+}
+
+fn import_social_history(section: Node, result: &mut ImportResult, jobs: &mut Vec<Job>) {
+    let first_job = jobs.len();
+    let mut loose: Vec<(Node, String)> = Vec::new();
+    let mut any_entry = false;
+
+    for entry in children_named(section, "entry") {
+        any_entry = true;
+        let observations: Vec<Node> = descendants_named(entry, "observation").collect();
+        let job_obs: Vec<Node> = observations
+            .iter()
+            .copied()
+            .filter(|o| is_loinc_obs(*o, work::OCCUPATION))
+            .collect();
+
+        let mut handled: Vec<Node> = Vec::new();
+        for job_el in &job_obs {
+            handled.extend(
+                job_el
+                    .descendants()
+                    .filter(|n| n.has_tag_name("observation")),
+            );
+            let what = "occupation observation";
+            let Some(value) = work_value(*job_el, section) else {
+                result.skipped.push(Skipped {
+                    what: what.into(),
+                    why: "no usable value (nullFlavor and no text)".into(),
+                });
+                continue;
+            };
+            if job_el.attribute("negationInd") == Some("true") {
+                result.warnings.push(format!("{what}: negated, skipping"));
+                continue;
+            }
+            let start = effective_time(*job_el, what, result);
+            let mut job = Job {
+                value,
+                start,
+                industry: None,
+                hazards: Vec::new(),
+            };
+            for nested in descendants_named(*job_el, "observation").filter(|n| n != job_el) {
+                match obs_work_code(nested) {
+                    Some(c) if c == work::INDUSTRY || c == work::HAZARD => {
+                        apply_satellite(&mut job, nested, &c, section, result)
+                    }
+                    Some(c) => result.skipped.push(Skipped {
+                        what: format!("work observation ({c})"),
+                        why: "occupational data component not mapped (v1)".into(),
+                    }),
+                    None => {}
+                }
+            }
+            jobs.push(job);
+        }
+
+        for obs in observations {
+            if handled.contains(&obs) {
+                continue;
+            }
+            match obs_work_code(obs) {
+                Some(c) if c == work::INDUSTRY || c == work::HAZARD => loose.push((obs, c)),
+                other => result.skipped.push(Skipped {
+                    what: format!(
+                        "social history entry {} (29762-2)",
+                        other.unwrap_or_else(|| "without a LOINC code".into())
+                    ),
+                    why: "social history entry not mapped (v1)".into(),
+                }),
+            }
+        }
+    }
+
+    if !any_entry {
+        result.skipped.push(Skipped {
+            what: format!("{} (29762-2)", section_title(section)),
+            why: "section not mapped: no entries".into(),
+        });
+    }
+
+    // A sibling industry/hazard entry names no job. Tie it to the job with the
+    // same start date, or, undated, to the section's only job; anything less
+    // certain is reported rather than guessed.
+    for (obs, code) in loose {
+        let what = format!("work observation ({code})");
+        let start = effective_time(obs, &what, result);
+        let candidates: Vec<usize> = (first_job..jobs.len())
+            .filter(|&i| match &start {
+                Some(s) => jobs[i].start.as_ref() == Some(s),
+                None => true,
+            })
+            .collect();
+        match candidates.as_slice() {
+            [i] => apply_satellite(&mut jobs[*i], obs, &code, section, result),
+            _ => result.skipped.push(Skipped {
+                what,
+                why: "cannot tell which occupation it belongs to".into(),
+            }),
         }
     }
 }

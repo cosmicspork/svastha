@@ -19,6 +19,7 @@ import {
   LOINC,
   OCCUPATION,
   OCCUPATIONAL_HAZARD,
+  OCCUPATION_INDUSTRY,
   VALUE_KEYED_LOINC_CODES,
   shortenSystem,
   type Code,
@@ -601,11 +602,15 @@ function startYear(iso: string | null): string {
  * logged at. An exposure that matches no job (undated, or dated differently)
  * keeps a row of its own so it is never silently dropped.
  *
- * Industry (86188-0) is not read yet: it arrives with import. */
+ * Industry (86188-0), which only import writes, attaches to a job by the same
+ * shared effective_at and leads its sub-line ("Hospitals · needlesticks, night
+ * shifts"). It is not an exposure, so an industry matching no job is left off
+ * the summary rather than given a row of its own. */
 function buildWork(observations: Ev[], curation: Curation): SummaryRow[] {
   const isCode = (e: Ev, c: Code) => e.code?.system === c.system && e.code.code === c.code
   const jobs = observations.filter((e) => isCode(e, OCCUPATION))
   const hazards = observations.filter((e) => isCode(e, OCCUPATIONAL_HAZARD))
+  const industries = observations.filter((e) => isCode(e, OCCUPATION_INDUSTRY))
 
   const chipFor = (key: string) => (curation.status.get(key) === 'inactive' ? 'past' : 'current')
   const rowFor = (key: string, group: Ev[], subline: string): SummaryRow => {
@@ -654,11 +659,21 @@ function buildWork(observations: Ev[], curation: Curation): SummaryRow[] {
       a.localeCompare(b, undefined, { sensitivity: 'base' }),
     )
 
+  // A coded industry is shown by its display; one without a display has no words to show.
+  const industryNames = (evs: Ev[]): string[] =>
+    [
+      ...new Set(
+        evs.map((e) => (e.value && 'coded' in e.value ? e.value.coded.display : textOf(e))?.trim()).filter((t): t is string => !!t),
+      ),
+    ].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+
   const rows: SummaryRow[] = []
   for (const [key, group] of jobGroups) {
     const times = jobTimes.get(key)!
     const attached = hazards.filter((h) => h.effective_at && times.has(h.effective_at))
-    rows.push(rowFor(key, group, exposureNames(attached).join(', ')))
+    const industry = industryNames(industries.filter((i) => i.effective_at && times.has(i.effective_at)))
+    const subline = [industry.join(' / '), exposureNames(attached).join(', ')].filter(Boolean).join(' · ')
+    rows.push(rowFor(key, group, subline))
   }
   rows.sort(byDateDescNullLast)
 

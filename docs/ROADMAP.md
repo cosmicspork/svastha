@@ -23,8 +23,9 @@ harvest a PR's "## Deferred" notes into the list.
 
 ## Import
 
-- Import occupation, industry, and occupational hazards from C-CDA social
-  history and FHIR (US Core occupation / ODH)
+- Import the rest of the ODH components (usual work, employment status, work
+  schedule) and the C-CDA social-history observations beyond work (tobacco,
+  alcohol)
 - Deeper NOTE sections (H&P, ED, Consult, Nursing, OR, Discharge)
 - Goals, Care Teams, Functional Status, Medical Devices, Patient Instructions
 - FHIR DiagnosticReport / DocumentReference / CarePlan
