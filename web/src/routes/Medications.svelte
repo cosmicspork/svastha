@@ -143,7 +143,8 @@
         No medications on record yet. Imported records and anything you add here both land on this
         page.
       </p>
-    {:else}
+    {/if}
+    {#if summary.medications.length > 0 || summary.takenRecently.length > 0}
       <div class="split-group">
         <!-- The catch-all leads. A route is only ever set by hand — nothing
              parses one out of a drug name — so these are the meds still asking
@@ -184,6 +185,21 @@
             onrowtap={(row) => (action = row)}
           />
         {/each}
+
+        <!-- One-off doses with no standing medication: after the shelves, never
+             on one — nothing here is something the person is on. -->
+        {#if summary.takenRecently.length > 0}
+          <SummarySection
+            title="Taken recently"
+            rows={summary.takenRecently}
+            hueClass="cat-med"
+            heading="h3"
+            dictionaryEnabled={$dictionaryStatus.enabled}
+            {coveredSystems}
+            detailLabel="Dose"
+            onviewtimeline={viewOnTimeline}
+          />
+        {/if}
 
         {#if shelves.past.length > 0}
           <button

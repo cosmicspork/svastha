@@ -323,6 +323,7 @@
            on record". -->
       <PharmacyMedList
         medications={medSummary.medications}
+        takenRecently={medSummary.takenRecently}
         allergies={null}
         createdAt={bundle.createdAt}
       />

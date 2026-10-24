@@ -184,8 +184,31 @@ describe('buildTimeline: med/food/note formatting', () => {
     ]
     const entry = buildTimeline(events, 'all')[0].entries[0]
     expect(entry.category).toBe('med')
-    expect(entry.label).toBe('Albuterol inhaler')
-    expect(entry.value).toBe('2 {puff}')
+    expect(entry.label).toBe('Took Albuterol inhaler')
+    // The dose form's UCUM annotation reads as the word it stands for.
+    expect(entry.value).toBe('2 puffs')
+  })
+
+  it('says "Took" for a free-text dose and not for a statement', () => {
+    const dose = buildTimeline([ev({ kind: 'medication_dose', effective_at: at, value: { text: 'Ibuprofen' } })], 'all')
+    expect(dose[0].entries[0].label).toBe('Took Ibuprofen')
+    const statement = buildTimeline(
+      [ev({ kind: 'medication_statement', effective_at: at, value: { text: 'Ibuprofen' } })],
+      'all',
+    )
+    expect(statement[0].entries[0].label).toBe('Ibuprofen')
+  })
+
+  it('gives a same-minute dose and statement a row each, and does not call the statement a dose', () => {
+    const events = [
+      ev({ kind: 'medication_dose', effective_at: at, value: { text: 'Ibuprofen' } }),
+      ev({ kind: 'medication_statement', effective_at: at, value: { text: 'Magnesium' } }),
+      ev({ kind: 'medication_dose', effective_at: at, value: { text: 'Antacid' } }),
+    ]
+    const entries = buildTimeline(events, 'all')[0].entries
+    expect(entries.map((e) => e.label).sort()).toEqual(['Magnesium', 'Took Antacid, Ibuprofen'])
+    // Same time, same category: the spine keys its rows on an event each holds.
+    expect(new Set(entries.map((e) => e.eventIds[0])).size).toBe(entries.length)
   })
 
   it('resolves a display-less imported med from the same RxNorm code named elsewhere', () => {

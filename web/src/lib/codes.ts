@@ -100,6 +100,30 @@ function svastha(code: string, display: string): Code {
   return { system: SVASTHA, code, display }
 }
 
+// --- medication doses ---
+
+/** The amounts the dose form offers. UCUM spells several of these in ways
+ * nobody reads ("ug", "[IU]", "{puff}"), so each carries the word a person
+ * would write; {@link unitLabel} renders it. */
+export const DOSE_UNITS: { label: string; unit: Code }[] = [
+  { label: 'mg', unit: ucum('mg') },
+  { label: 'mcg', unit: ucum('ug') },
+  { label: 'g', unit: ucum('g') },
+  { label: 'mL', unit: ucum('mL') },
+  { label: 'IU', unit: ucum('[IU]') },
+  { label: 'puffs', unit: ucum('{puff}') },
+  { label: 'tablets', unit: ucum('{tbl}') },
+]
+
+const UNIT_WORDS = new Map(DOSE_UNITS.map((d) => [d.unit.code, d.label]))
+
+/** A quantity's unit as a person reads it: a dose-form UCUM code by its word
+ * ("2 puffs", not "2 {puff}"), anything else by its code, as before. */
+export function unitLabel(unit: Code | null | undefined): string {
+  if (!unit) return ''
+  return (unit.system === UCUM && UNIT_WORDS.get(unit.code)) || unit.code
+}
+
 // --- vitals ---
 
 /** A selectable unit plus its soft plausibility range (used for warnings only,

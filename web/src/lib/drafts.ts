@@ -158,6 +158,72 @@ export function standingMedDraft(name: string, effectiveAt: string): Draft {
   return { kind: 'medication_statement', effective_at: effectiveAt, value: text(name.trim()) }
 }
 
+/** What a dose copies from the standing medication it is a dose of: the
+ * statement's `code` when it is coded, else its free text — exactly, never
+ * re-typed, because the copy is what links the two (summary.ts's
+ * `standingKeyForDose`). */
+export type DoseIdentity = { code: Code } | { text: string }
+
+/** A statement's dose identity, or null when it has neither a code nor a text
+ * value (nothing a dose could copy to link back to it). */
+export function doseIdentityOf(statement: { code?: Code | null; value?: EventValue | null }): DoseIdentity | null {
+  if (statement.code) return { code: statement.code }
+  if (statement.value && 'text' in statement.value) return { text: statement.value.text }
+  return null
+}
+
+/** An amount is an unsigned decimal with one spelling — the rule core applies
+ * to a dosage's `dose.value` — so "2", "0.5" and "12.5" pass and "02", "1.",
+ * ".5" and "-1" do not. */
+export const DOSE_AMOUNT = /^(0|[1-9][0-9]*)(\.[0-9]+)?$/
+
+/**
+ * One `medication_dose`: "I took this, at this time".
+ *
+ * A coded medication's dose carries its code and, when given, the amount as a
+ * `quantity` value — the shape spec/vectors/event.json pins for a dose, and the
+ * one every dose column already reads (timeline.ts's `quantityOf`). Not a
+ * `dosage`: that is how a medication is taken, a sig, and a single dose has
+ * none. A free-text medication's dose is that same text and nothing else, so
+ * its amount is the dose in the medication's regimen.
+ */
+export function doseDraft(
+  identity: DoseIdentity,
+  effectiveAt: string,
+  amount?: { value: string; unit: Code },
+): Draft {
+  if ('code' in identity) {
+    return {
+      kind: 'medication_dose',
+      code: identity.code,
+      effective_at: effectiveAt,
+      value: amount ? quantity(amount.value, amount.unit) : null,
+    }
+  }
+  return { kind: 'medication_dose', effective_at: effectiveAt, value: text(identity.text) }
+}
+
+/**
+ * A Meds quick-log template as the dose form logs it.
+ *
+ * Favorites saved before the form logged doses are `medication_statement`
+ * templates ("Ibuprofen — 400 mg"). They stay stored as they are — a favorite
+ * is the owner's record, and rewriting it behind their back would be a silent
+ * migration — but logging one now records a dose: same code or text, kind
+ * `medication_dose`. A coded template keeps a quantity amount and drops any
+ * other value (a dosage is a sig, which a single dose does not have). The text
+ * is kept whole, so "Ibuprofen — 400 mg" logs as that text and links to a
+ * standing medication only if one has that exact name.
+ */
+export function asDoseTemplate(template: DraftTemplate): DraftTemplate {
+  if (template.kind !== 'medication_statement') return template
+  if (template.code) {
+    const value = template.value && 'quantity' in template.value ? template.value : null
+    return { kind: 'medication_dose', code: template.code, value }
+  }
+  return { ...template, kind: 'medication_dose' }
+}
+
 // --- food ---
 
 /** One nutrition_intake per item (matching core's "one event per item; a

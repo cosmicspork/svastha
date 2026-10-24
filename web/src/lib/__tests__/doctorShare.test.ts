@@ -353,6 +353,58 @@ describe('applyMedScope', () => {
   })
 })
 
+describe('applyMedScope with logged doses', () => {
+  const dose = (id: string, code: StoredEvent['event']['code'], value: StoredEvent['event']['value'] = null) =>
+    ev(id, 'medication_dose', '2024-01-05T00:00:00Z', code, value)
+  const lisinopril = med('m1', '29046') // past
+  const metformin = med('m2', '6809') // current
+  const lisDose = dose('d1', { system: RXNORM, code: '29046' })
+  const metDose = dose('d2', { system: RXNORM, code: '6809' })
+  const oneOff = dose('d3', null, { text: 'Ibuprofen' })
+  const statuses = new Map<string, ConceptStatus>([[conceptKey(lisinopril.event), 'inactive']])
+
+  it('drops a past medication’s doses with it, and keeps the rest', () => {
+    const ids = applyMedScope([lisinopril, metformin, lisDose, metDose, oneOff], statuses, false).map(
+      (se) => se.event.id,
+    )
+    expect(ids).toEqual(['m2', 'd2', 'd3'])
+  })
+
+  it('drops a past medication’s doses even when its statement is outside the date scope', () => {
+    // The statement never reached this filter (a date range left it out); the
+    // dose alone would still name the past medication.
+    expect(applyMedScope([lisDose, metDose], statuses, false).map((se) => se.event.id)).toEqual(['d2'])
+  })
+
+  it('keeps a dose-only medication, which has no status to be past', () => {
+    expect(applyMedScope([oneOff], statuses, false)).toEqual([oneOff])
+  })
+
+  // Adversarial: the past mark belongs to one exact concept. A dose whose code
+  // shares only the system, or whose text differs in case, is someone else's.
+  it('does not drop a dose that only resembles the past medication', () => {
+    const textPast = ev('m3', 'medication_statement', '2024-01-01T00:00:00Z', null, { text: 'Ibuprofen' })
+    const past = new Map<string, ConceptStatus>([
+      [conceptKey(lisinopril.event), 'inactive'],
+      [conceptKey(textPast.event), 'inactive'],
+    ])
+    const otherCode = dose('d4', { system: RXNORM, code: '290460' })
+    const otherSystem = dose('d5', { system: 'http://hl7.org/fhir/sid/ndc', code: '29046' })
+    const otherCase = dose('d6', null, { text: 'ibuprofen' })
+    const sameText = dose('d7', null, { text: 'Ibuprofen' }) // the past med itself
+    expect(
+      applyMedScope([otherCode, otherSystem, otherCase, sameText], past, false).map((se) => se.event.id),
+    ).toEqual(['d4', 'd5', 'd6'])
+  })
+
+  it('carries a medication’s name override for a bundle holding only its doses', () => {
+    const kMet = conceptKey(metformin.event)
+    const records = [rec(`name:${kMet}`, { display: 'Sugar pill' }), rec(`regimen:${kMet}`, { dose: '500 mg' })]
+    expect(curationForBundle([metDose], records).map((r) => r.key)).toEqual([`name:${kMet}`, `regimen:${kMet}`])
+    expect(curationForBundle([oneOff], records)).toEqual([])
+  })
+})
+
 describe('curationForBundle', () => {
   const lisinopril = med('m1', '29046')
   const metformin = med('m2', '6809')

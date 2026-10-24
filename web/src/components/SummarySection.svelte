@@ -314,6 +314,9 @@
                         {/if}
                       </span>
                     {/if}
+                    {#if row.usage}
+                      <span class="subline muted" data-testid="summary-usage">{row.usage}</span>
+                    {/if}
                     {#if row.subline}
                       <span class="subline muted" data-testid="summary-subline">{row.subline}</span>
                     {/if}
@@ -348,7 +351,7 @@
                   {#if row.detail}
                     <span class="detail data">{row.detail}</span>
                   {/if}
-                  {#if row.count > 1}
+                  {#if row.count > 1 && !row.hideCount}
                     <span class="count muted" title="{row.count} records">×{row.count}</span>
                   {/if}
                 </span>
@@ -664,7 +667,7 @@
     color: var(--flare);
   }
 
-  /* A work row's industry and exposures. */
+  /* A work row's industry and exposures; a medication's usage line. */
   .subline {
     font-size: var(--text-xs);
     overflow-wrap: anywhere;

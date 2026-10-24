@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { buildPharmacyGroups, pharmacyRowCount } from '../lib/pharmacy'
+  import {
+    buildPharmacyGroups,
+    pharmacyRowCount,
+    pharmacyTakenRows,
+    TAKEN_RECENTLY_TITLE,
+  } from '../lib/pharmacy'
   import type { ListSize } from '../lib/pharmacyPrefs'
   import { allergyChipText, type SummaryRow } from '../lib/summary'
 
@@ -11,6 +16,7 @@
 
   let {
     medications,
+    takenRecently = [],
     allergies,
     createdAt,
     size = $bindable('standard'),
@@ -19,6 +25,9 @@
     /** `buildSummary(...).medications` — the host folds, so hidden entries are
      * already gone and this component never reads the vault. */
     medications: SummaryRow[]
+    /** `buildSummary(...).takenRecently`: listed after the numbered list,
+     * unnumbered and uncounted (see `pharmacyTakenRows`). */
+    takenRecently?: SummaryRow[]
     /** The allergies to show, or null when the source cannot carry them (a
      * meds-scoped share). Null and empty say different things and must not be
      * collapsed: `[]` is "nothing on record", null is "not in this export". */
@@ -38,6 +47,7 @@
 
   const groups = $derived(buildPharmacyGroups(medications))
   const total = $derived(pharmacyRowCount(groups))
+  const taken = $derived(pharmacyTakenRows(takenRecently))
   // The past group is always last (see buildPharmacyGroups) and is the only one
   // folded away on screen.
   const pastCount = $derived(groups.find((g) => g.id === 'past')?.rows.length ?? 0)
@@ -155,6 +165,9 @@
                 {#if row.asNeeded}
                   <span class="chips"><span class="chip prn">As needed</span></span>
                 {/if}
+                {#if row.usage}
+                  <span class="usage" data-testid="pharmacy-usage">{row.usage}</span>
+                {/if}
                 {#if row.code}
                   <span class="code data muted" data-testid="pharmacy-code">{row.code}</span>
                 {/if}
@@ -174,6 +187,25 @@
         </ol>
       </section>
     {/each}
+  {/if}
+
+  {#if taken.length > 0}
+    <section class="group taken" aria-labelledby="pharmacy-taken-heading" data-testid="pharmacy-taken">
+      <h3 class="group-head" id="pharmacy-taken-heading">
+        <span class="dot cat-med" aria-hidden="true"></span>
+        {TAKEN_RECENTLY_TITLE}
+      </h3>
+      <p class="taken-note muted">Logged doses of something not on the list above.</p>
+      <ul class="rows">
+        {#each taken as row (row.key)}
+          <li class="taken-row" data-testid="pharmacy-taken-row">
+            <span class="taken-name" data-testid="pharmacy-taken-name">{row.name}</span>
+            {#if row.dose}<span class="taken-dose">{row.dose}</span>{/if}
+            <span class="usage" data-testid="pharmacy-taken-usage">{row.usage}</span>
+          </li>
+        {/each}
+      </ul>
+    </section>
   {/if}
 
     <footer class="provenance">
@@ -344,6 +376,35 @@
     line-height: 1.3;
   }
 
+  .usage {
+    font-size: var(--ph-fact);
+    color: var(--muted);
+  }
+
+  .taken-note {
+    margin: 0 0 var(--space-2);
+    font-size: var(--text-sm);
+  }
+
+  .taken-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-1) var(--space-3);
+    padding: var(--space-2) var(--space-1);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .taken-name {
+    font-size: var(--ph-fact);
+    font-weight: 700;
+    overflow-wrap: anywhere;
+  }
+
+  .taken-dose {
+    font-size: var(--ph-fact);
+  }
+
   .chips {
     display: flex;
     flex-wrap: wrap;
@@ -467,6 +528,8 @@
     .fact dt,
     .fact dd,
     .code,
+    .usage,
+    .taken-note,
     .card-heading,
     .allergy-note,
     .provenance,

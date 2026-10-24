@@ -5,7 +5,13 @@
 // a text measurer, so wrapping, page breaks and ordering are testable without
 // a PDF engine at all; `buildPharmacyPdf` is the thin render over `pdf-lib`,
 // which is imported lazily so its bytes stay out of the app's first load.
-import { buildPharmacyGroups, type PharmacyGroup } from './pharmacy'
+import {
+  buildPharmacyGroups,
+  pharmacyTakenRows,
+  TAKEN_RECENTLY_TITLE,
+  type PharmacyGroup,
+  type PharmacyTakenRow,
+} from './pharmacy'
 import type { SummaryRow } from './summary'
 
 /** Measures a string at a size, in points. Injected so the layout is pure. */
@@ -107,6 +113,7 @@ export function layoutPharmacyPdf(
   createdAt: string,
   measure: MeasureText,
   page: PageMetrics = A4,
+  taken: PharmacyTakenRow[] = [],
 ): PdfPageLayout[] {
   const contentWidth = page.width - page.margin * 2
   const pages: PdfPageLayout[] = []
@@ -159,6 +166,7 @@ export function layoutPharmacyPdf(
       if (row.sig) lines.push({ size: BODY_SIZE })
       if (row.frequencyMissing) lines.push({ size: BODY_SIZE })
       if (row.asNeeded) lines.push({ size: BODY_SIZE })
+      if (row.usage) lines.push({ size: BODY_SIZE })
       lines.push({ size: BODY_SIZE }) // prescriber
       if (row.code) lines.push({ size: SMALL_SIZE })
       if (!room(blockHeight(lines))) newPage()
@@ -168,8 +176,22 @@ export function layoutPharmacyPdf(
       if (row.sig) emit(row.sig, BODY_SIZE, false, 16)
       if (row.frequencyMissing) emit('Frequency not recorded — ask', BODY_SIZE, false, 16)
       if (row.asNeeded) emit('As needed', BODY_SIZE, false, 16)
+      if (row.usage) emit(row.usage, BODY_SIZE, false, 16)
       emit(`Prescribed by: ${row.prescriber || 'Not recorded'}`, BODY_SIZE, false, 16)
       if (row.code) emit(row.code, SMALL_SIZE, false, 16)
+      y += LINE_GAP
+    }
+    y += LINE_GAP
+  }
+
+  if (taken.length > 0) {
+    if (!room(blockHeight([{ size: HEADING_SIZE }, { size: NAME_SIZE }, { size: BODY_SIZE }]))) newPage()
+    emit(TAKEN_RECENTLY_TITLE, HEADING_SIZE, true)
+    for (const row of taken) {
+      const lines = [{ size: NAME_SIZE }, { size: BODY_SIZE }]
+      if (!room(blockHeight(lines))) newPage()
+      emit(row.dose ? `${row.name} · ${row.dose}` : row.name, NAME_SIZE, true)
+      emit(row.usage, BODY_SIZE, false, 16)
       y += LINE_GAP
     }
     y += LINE_GAP
@@ -208,6 +230,8 @@ export async function buildPharmacyPdf(
   allergies: string[] | null,
   createdAt: string,
   page: PageMetrics = A4,
+  /** `ClinicianSummary.takenRecently`, listed after the numbered list. */
+  takenRecently: SummaryRow[] = [],
 ): Promise<Uint8Array> {
   const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib')
   const doc = await PDFDocument.create()
@@ -217,7 +241,14 @@ export async function buildPharmacyPdf(
   const measure: MeasureText = (text, size, isBold) =>
     (isBold ? bold : regular).widthOfTextAtSize(text, size)
 
-  const layout = layoutPharmacyPdf(buildPharmacyGroups(rows), allergies, createdAt, measure, page)
+  const layout = layoutPharmacyPdf(
+    buildPharmacyGroups(rows),
+    allergies,
+    createdAt,
+    measure,
+    page,
+    pharmacyTakenRows(takenRecently),
+  )
   const ink = rgb(0, 0, 0)
   for (const pageLayout of layout) {
     const pdfPage = doc.addPage([page.width, page.height])

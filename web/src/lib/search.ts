@@ -46,6 +46,7 @@ function valueSearchText(
   if ('text' in value) return value.text
   if ('coded' in value) return codeSearchText(value.coded, index, dictionary)
   if ('quantity' in value) return `${value.quantity.value} ${value.quantity.unit?.code ?? ''}`
+  if ('dosage' in value) return value.dosage.text ?? ''
   return ''
 }
 

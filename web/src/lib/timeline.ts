@@ -14,6 +14,7 @@ import {
   CYCLE_FLOW,
   CYCLE_CLOTS,
   shortenSystem,
+  unitLabel,
   type Code,
 } from './codes'
 import { categorize, type Category } from './category'
@@ -100,7 +101,7 @@ type Ev = StoredEvent['event']
 export function quantityOf(e: Ev): { value: string; unit: string } | null {
   if (!e.value) return null
   const q = 'quantity' in e.value ? e.value.quantity : 'dosage' in e.value ? e.value.dosage.dose : null
-  return q ? { value: q.value, unit: q.unit?.code ?? '' } : null
+  return q ? { value: q.value, unit: unitLabel(q.unit) } : null
 }
 
 /** `value unit`, unit-optional — the one place a Quantity becomes a string, so
@@ -243,6 +244,32 @@ function formatCycle(events: Ev[]): { label: string; value: string } {
   return { label, value: '' }
 }
 
+function formatMedOrFood(
+  events: Ev[],
+  nameIndex: Map<string, string>,
+  dictionary: Map<string, string>,
+): { label: string; value: string; hint?: string; flare: false } {
+  // Per-item events carry no sequence (the store returns id order, i.e.
+  // hash order), so sort for a stable join rather than a shuffling one.
+  const texts = events
+    .map(textOf)
+    .filter((t): t is string => t !== null)
+    .sort((a, b) => a.localeCompare(b))
+  if (texts.length > 0) return { label: texts.join(', '), value: '', flare: false }
+
+  // Quick-logged food and free-text meds write a text value, but imported
+  // medications (and the doses logged against them) carry the name in
+  // code.display (and sometimes the dose as a quantity), so
+  // without this fallback an imported med renders as a blank row.
+  const first = events[0]
+  const label =
+    first.code?.display ?? resolveDisplay(nameIndex, first.code, dictionary) ?? first.kind.replace(/_/g, ' ')
+  const q = quantityOf(first)
+  const coding = first.code ? `${shortenSystem(first.code.system)} ${first.code.code}` : null
+  const hint = coding && coding !== label ? coding : undefined
+  return { label, value: q ? renderQuantity(q) : '', hint, flare: false }
+}
+
 function formatGroup(
   category: Category,
   events: Ev[],
@@ -260,27 +287,15 @@ function formatGroup(
       return { ...formatMind(events), flare: false }
     case 'cycle':
       return { ...formatCycle(events), flare: false }
-    case 'med':
-    case 'food': {
-      // Per-item events carry no sequence (the store returns id order, i.e.
-      // hash order), so sort for a stable join rather than a shuffling one.
-      const texts = events
-        .map(textOf)
-        .filter((t): t is string => t !== null)
-        .sort((a, b) => a.localeCompare(b))
-      if (texts.length > 0) return { label: texts.join(', '), value: '', flare: false }
-
-      // Quick-log always writes a text value, but imported medications carry
-      // the name in code.display (and sometimes the dose as a quantity), so
-      // without this fallback an imported med renders as a blank row.
-      const first = events[0]
-      const label =
-        first.code?.display ?? resolveDisplay(nameIndex, first.code, dictionary) ?? first.kind.replace(/_/g, ' ')
-      const q = quantityOf(first)
-      const coding = first.code ? `${shortenSystem(first.code.system)} ${first.code.code}` : null
-      const hint = coding && coding !== label ? coding : undefined
-      return { label, value: q ? renderQuantity(q) : '', hint, flare: false }
+    case 'med': {
+      const med = formatMedOrFood(events, nameIndex, dictionary)
+      // A dose is a moment, and the row says so; a statement keeps its bare
+      // name ("I take this"). buildTimeline never groups the two together;
+      // describeEvent hands over one event at a time.
+      return events.every((e) => e.kind === 'medication_dose') ? { ...med, label: `Took ${med.label}` } : med
     }
+    case 'food':
+      return formatMedOrFood(events, nameIndex, dictionary)
     default: {
       // Encounters, conditions, immunizations, procedures, and uncoded
       // observations. The source often sends no display name, so the label can
@@ -449,7 +464,9 @@ export function buildTimeline(
     if (!event.effective_at) continue
     const category = categorize(event)
     if (filter !== 'all' && category !== filter) continue
-    const key = `${event.effective_at}|${category}`
+    // A dose and a statement logged in the same minute are different facts
+    // ("I took this" / "I take this") and get a row each.
+    const key = `${event.effective_at}|${category}${event.kind === 'medication_dose' ? '|dose' : ''}`
     const group = groups.get(key) ?? { effective_at: event.effective_at, category, events: [] }
     group.events.push(event)
     groups.set(key, group)

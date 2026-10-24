@@ -57,16 +57,14 @@ harvest a PR's "## Deferred" notes into the list.
 
 ## Web
 
-- Log a dose from the Meds form as a `medication_dose` event, and render one on
-  the timeline and in the summary (core and the node already decode and render
-  it; the web only files it under Meds today)
+- Add a "Taken recently" medication to the med list from its row — today the
+  owner adds it by the exact same name on the Medications page, which picks up
+  the doses already logged
 - Coded "Add something I take" — the sheet takes a free-text name, so a
-  supplement or OTC medication the owner adds is never RxNorm-coded
+  supplement or OTC medication the owner adds is never RxNorm-coded and its
+  doses carry no amount of their own
 - Render a `dosage`'s frequency and sig on the timeline — the summary, medications
   page and pharmacy list show it, the timeline shows only its dose
-- Decide how doses ride a meds-scoped doctor share before the app writes them:
-  `applyMedScope` and `isMedicationOnlyBundle` know only `medication_statement`,
-  so a dose in a med list turns the recipient's pharmacy view off
 - NDC in the offline dictionary — `public/dict` ships LOINC, RxNorm, ICD-10-CM,
   CVX and SNOMED, so an NDC-coded event resolves a name at no layer: `codes.ts`
   knows the system well enough to print "NDC", and nothing anywhere knows the

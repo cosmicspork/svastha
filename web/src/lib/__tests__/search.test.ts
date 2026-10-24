@@ -108,4 +108,18 @@ describe('searchEvents', () => {
     expect(hits).toHaveLength(SEARCH_CAP)
     expect(truncated).toBe(true)
   })
+
+  it('finds a logged dose by its name, coded or free text', () => {
+    const events = [
+      ev({ kind: 'medication_dose', value: { text: 'Ibuprofen' }, effective_at: '2026-07-01T00:00:00Z' }),
+      ev({ kind: 'medication_dose', code: { system: RXNORM, code: '745679', display: 'Albuterol inhaler' } }),
+    ]
+    expect(searchEvents(events, 'ibuprofen').hits.map((h) => h.label)).toEqual(['Ibuprofen'])
+    expect(searchEvents(events, 'albuterol').hits.map((h) => h.label)).toEqual(['Albuterol inhaler'])
+  })
+
+  it('searches a dosage by its sig text', () => {
+    const events = [ev({ kind: 'medication_statement', value: { dosage: { text: 'Take one at bedtime' } } })]
+    expect(searchEvents(events, 'bedtime').hits).toHaveLength(1)
+  })
 })

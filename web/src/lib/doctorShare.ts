@@ -14,8 +14,8 @@ import { WasmDataKey, type WasmIdentity } from './svastha'
 import type { RelayClient } from './relay'
 import type { StoredEvent } from './events'
 import { normalizePriority, type SignedCurationRecord, type ConceptStatus } from './curation'
-import { conceptKey, conceptKeysForEvents, withoutHiddenConcepts } from './summary'
-import { categorize, CATEGORIES, CATEGORY_META, type Category } from './category'
+import { conceptKeysForEvents, curationKey, withoutHiddenConcepts } from './summary'
+import { categorize, isMedicationEvent, CATEGORIES, CATEGORY_META, type Category } from './category'
 import { isoToMillis } from './time'
 import { fromHex } from './hex'
 import { bytesToBase64, base64ToBytes } from './base64'
@@ -285,11 +285,15 @@ export function shareableEvents(
 
 /** Apply the meds scope choice: unless `includePastMeds`, drop the events of a
  * medication concept the owner has marked inactive (past), so the default share
- * is a current-only med list. Problems are never dropped here — a resolved
- * problem is clinically informative history, so both active and resolved
- * always ride along (their `status:` records group them for the recipient).
- * Non-medication events pass through untouched. Pure; the sheet reflects its
- * result in the entry count and preview. */
+ * is a current-only med list. A logged dose goes with its standing medication
+ * (see summary.ts's `curationKey`): a past med's doses are dropped with it, so
+ * a usage line cannot betray a medication the share left out. A dose with no
+ * standing medication has no status to be past, so it rides along within the
+ * date scope like any other event. Problems are never dropped here — a
+ * resolved problem is clinically informative history, so both active and
+ * resolved always ride along (their `status:` records group them for the
+ * recipient). Non-medication events pass through untouched. Pure; the sheet
+ * reflects its result in the entry count and preview. */
 export function applyMedScope(
   events: StoredEvent[],
   statuses: Map<string, ConceptStatus>,
@@ -297,8 +301,8 @@ export function applyMedScope(
 ): StoredEvent[] {
   if (includePastMeds) return events
   return events.filter((se) => {
-    if (se.event.kind !== 'medication_statement') return true
-    return (statuses.get(conceptKey(se.event)) ?? 'active') === 'active'
+    if (!isMedicationEvent(se.event)) return true
+    return (statuses.get(curationKey(se.event)) ?? 'active') === 'active'
   })
 }
 

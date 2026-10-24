@@ -46,7 +46,7 @@ vi.mock('../curation', () => ({
 // in-scope one (see the leak regression below). It is pure over `StoredEvent[]`
 // and needs no browser.
 vi.mock('../dictionary', () => ({ loadDictionaryIndex: vi.fn(async () => new Map()) }))
-vi.mock('../summary', () => ({ conceptKey: vi.fn(() => 'k') }))
+vi.mock('../summary', () => ({ curationKey: vi.fn(() => 'k') }))
 
 // The opt-in choice is read on the answering path. The filter itself stays real
 // (it is the thing under test in the scope block below); only the stored answer

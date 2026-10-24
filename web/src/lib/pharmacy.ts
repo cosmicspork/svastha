@@ -29,6 +29,9 @@ export interface PharmacyRow {
    * the view says "Frequency not recorded — ask" rather than leaving a gap. */
   frequencyMissing: boolean
   asNeeded: boolean
+  /** How often the owner logged taking it (`SummaryRow.usage`), '' when no
+   * dose was logged. */
+  usage: string
   prescriber: string
   /** The row's terminology coding, rendered as "RxNorm 6809", or '' when the
    * entry is free text. A pharmacist reads the name, but the code is what
@@ -103,6 +106,7 @@ export function buildPharmacyGroups(rows: SummaryRow[]): PharmacyGroup[] {
         sig: rowSig(row),
         frequencyMissing: medicationFrequency(row).kind === 'missing',
         asNeeded: row.regimen?.as_needed === true,
+        usage: row.usage ?? '',
         prescriber: row.regimen?.prescriber ?? '',
         code: row.coding ? `${row.coding.system} ${row.coding.code}` : '',
         past: row.status === 'inactive',
@@ -122,4 +126,32 @@ export function buildPharmacyGroups(rows: SummaryRow[]): PharmacyGroup[] {
  * flattening them again. */
 export function pharmacyRowCount(groups: PharmacyGroup[]): number {
   return groups.reduce((total, group) => total + group.rows.length, 0)
+}
+
+/** The heading the unnumbered taken-recently lines sit under, on the page and
+ * in the PDF alike. */
+export const TAKEN_RECENTLY_TITLE = 'Also taken recently'
+
+/** A medication taken recently that is not on the list: no standing statement,
+ * only logged doses (`ClinicianSummary.takenRecently`). */
+export interface PharmacyTakenRow {
+  key: string
+  name: string
+  /** The latest dose's recorded amount, '' when none was recorded. */
+  dose: string
+  /** "2 doses in 30 days · last 3 days ago". */
+  usage: string
+}
+
+/**
+ * The "Also taken recently" lines that follow the numbered list.
+ *
+ * Kept off the list itself — unnumbered, uncounted — because the list is what
+ * the person is on, and a one-off ibuprofen is not that. But it is shown,
+ * not dropped: a pharmacist checking an interaction wants to know it was taken,
+ * and a meds-only share carries these doses, so a view that silently skipped
+ * them would carry what nobody can see.
+ */
+export function pharmacyTakenRows(rows: SummaryRow[]): PharmacyTakenRow[] {
+  return rows.map((row) => ({ key: row.key, name: row.label, dose: row.detail, usage: row.usage ?? '' }))
 }

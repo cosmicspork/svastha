@@ -504,6 +504,23 @@ describe('isMedicationOnlyBundle', () => {
     expect(isMedicationOnlyBundle(of(...kinds))).toBe(false)
   })
 
+  it('counts a logged dose as a medication alongside a standing one', () => {
+    expect(isMedicationOnlyBundle(of('medication_statement', 'medication_dose'))).toBe(true)
+    expect(isMedicationOnlyBundle(of('medication_dose', 'medication_statement', 'medication_dose'))).toBe(true)
+  })
+
+  // Doses alone would render an empty numbered list ("No medications on
+  // record") above the doses — so they take the summary view, whose "Taken
+  // recently" group says what they are.
+  it('is false for doses with no standing medication', () => {
+    expect(isMedicationOnlyBundle(of('medication_dose'))).toBe(false)
+    expect(isMedicationOnlyBundle(of('medication_dose', 'medication_dose'))).toBe(false)
+  })
+
+  it('is false when a dose rides with a non-medication', () => {
+    expect(isMedicationOnlyBundle(of('medication_statement', 'medication_dose', 'observation'))).toBe(false)
+  })
+
   it('matches the kind exactly, not by prefix or trimmed text', () => {
     // A bundle is attacker-supplied JSON as far as this function is concerned:
     // a near-miss kind must not open the med-list door.
@@ -513,5 +530,8 @@ describe('isMedicationOnlyBundle', () => {
     const prefixed = of('medication_statement')
     prefixed[0].event.kind = 'medication_statement_note' as StoredEvent['event']['kind']
     expect(isMedicationOnlyBundle(prefixed)).toBe(false)
+    const sneakyDose = of('medication_statement', 'medication_dose')
+    sneakyDose[1].event.kind = 'medication_dose ' as StoredEvent['event']['kind']
+    expect(isMedicationOnlyBundle(sneakyDose)).toBe(false)
   })
 })

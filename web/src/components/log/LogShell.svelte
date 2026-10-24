@@ -17,6 +17,7 @@
     onReset,
     saveLabel = 'Save',
     afterSave,
+    adaptTemplates = (templates) => templates,
     children,
   }: {
     title: string
@@ -35,6 +36,11 @@
      * written, for state that rides beside the events — a work entry's
      * current/past status. */
     afterSave?: (drafts: Draft[]) => Promise<void>
+    /** Reshape a favorite before its one-tap log, for a form whose saved
+     * templates predate what it now writes (the Meds form logs an old
+     * medication_statement favorite as a dose — drafts.ts's `asDoseTemplate`).
+     * A tap that prefills goes through the form's own `onPrefill` instead. */
+    adaptTemplates?: (templates: DraftTemplate[]) => DraftTemplate[]
     children: Snippet
   } = $props()
 
@@ -121,7 +127,7 @@
   }
 
   function instantLog(templates: DraftTemplate[], label: string) {
-    void saveDrafts(fromTemplates(templates, toLocalIso(new Date())), label, false)
+    void saveDrafts(fromTemplates(adaptTemplates(templates), toLocalIso(new Date())), label, false)
   }
 
   function cancel() {

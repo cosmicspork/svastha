@@ -67,6 +67,8 @@
       summary.medications,
       summary.allergies.map(allergyChipText),
       createdAt,
+      undefined,
+      summary.takenRecently,
     )
     void pdfPending
       .then((bytes) => (pdfBytes = bytes))
@@ -79,6 +81,8 @@
         summary.medications,
         summary.allergies.map(allergyChipText),
         createdAt,
+        undefined,
+        summary.takenRecently,
       )))
       const name = pharmacyPdfFilename(new Date())
       // A fresh ArrayBuffer copy: some engines reject a File over a view onto
@@ -183,6 +187,7 @@
          also rendered where there is no vault to write to. -->
     <PharmacyMedList
       medications={summary.medications}
+      takenRecently={summary.takenRecently}
       allergies={summary.allergies}
       {createdAt}
       bind:size={
