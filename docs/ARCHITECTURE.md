@@ -159,7 +159,11 @@ typed, signed, stably-identified events, plus a thin mutable curation overlay
   needed. Core validates a dosage (a closed set of period units, integer and
   decimal strings with one spelling each) so every reader can rely on its shape.
   It is signed history, distinct from the `regimen:` curation below — the
-  owner's own mutable, free-text account of how they take it.
+  owner's own mutable, free-text account of how they take it. The owner adds a
+  standing medication no record imported (a supplement, an over-the-counter
+  regular) with "Add something I take" on the Medications page: one
+  self-sourced statement whose value is the name alone, so its concept never
+  moves when the dose or schedule does, plus a `regimen:` record for those.
 - Only the small curation overlay needs conflict resolution (last-writer-wins or
   similar).
 - An event may optionally attest that it began as an approved **proposal**: an

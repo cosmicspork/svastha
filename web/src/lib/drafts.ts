@@ -132,10 +132,11 @@ export function freeTextSymptomDraft(name: string, effectiveAt: string): Draft {
 // --- meds ---
 
 /** One medication_statement with no code and a text value like
- * "ibuprofen — 400 mg". Folding the dose into the text loses structure, but
- * the alternatives are worse: a quantity value drops the name, and a fake
- * RxNorm code lies about what we know. Proper RxNorm coding arrives with
- * import/curation; until then the text is honest and readable. */
+ * "ibuprofen — 400 mg" — the visit form's "now taking" rows. Folding the dose
+ * into the text loses structure, but the alternatives are worse: a quantity
+ * value drops the name, and a fake RxNorm code lies about what we know. Proper
+ * RxNorm coding arrives with import/curation; until then the text is honest and
+ * readable. */
 export function medDraft(
   name: string,
   effectiveAt: string,
@@ -147,6 +148,14 @@ export function medDraft(
     effective_at: effectiveAt,
     value: text(dose ? `${name} — ${dose} ${unit ?? 'mg'}` : name),
   }
+}
+
+/** "Add something I take": one standing medication_statement whose value is the
+ * name alone, so its concept key (`medication_statement||<name>`) stays the
+ * same however the dose or schedule later changes — those live in the
+ * `regimen:` record beside it, not in signed history. */
+export function standingMedDraft(name: string, effectiveAt: string): Draft {
+  return { kind: 'medication_statement', effective_at: effectiveAt, value: text(name.trim()) }
 }
 
 // --- food ---
