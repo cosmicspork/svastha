@@ -18,12 +18,18 @@ vi.mock('../svastha', () => {
       return sealed
     }
   }
+  // `signature: 'undecodable'` stands in for an event shape this build's core
+  // can't parse (a newer kind or value): the real binding throws a serde error
+  // rather than returning false.
   const verify_event = (json: string): boolean => {
+    let signature: string | undefined
     try {
-      return (JSON.parse(json) as { signature?: string }).signature === 'ok'
+      signature = (JSON.parse(json) as { signature?: string }).signature
     } catch {
       return false
     }
+    if (signature === 'undecodable') throw new Error('unknown variant `medication_dose`')
+    return signature === 'ok'
   }
   return { WasmKeyring: FakeKeyring, verify_event }
 })
@@ -196,8 +202,8 @@ function utf8(s: string): Uint8Array {
 /** A sealed `ev-` blob as the owner's device would have written it: passthrough
  * "ciphertext" (see the keyring mock above) around a signed-event JSON the fake
  * `verify_event` accepts. */
-function sealedEvent(eventId: string, author = OWNER_ED): Uint8Array {
-  return utf8(JSON.stringify({ event: { id: eventId }, author, signature: 'ok' }))
+function sealedEvent(eventId: string, author = OWNER_ED, signature = 'ok'): Uint8Array {
+  return utf8(JSON.stringify({ event: { id: eventId }, author, signature }))
 }
 
 const ATT_BYTES = new Uint8Array([255, 216, 255, 42])
@@ -285,4 +291,55 @@ describe('pullShared batching', () => {
     expect(await sharedEventsFor(OWNER_ED)).toHaveLength(eventIds.length)
     expect(await get('attachments', attSha)).toBeDefined()
   })
+})
+
+describe('pullShared skips a blob it cannot apply', () => {
+  // The middle blob of three is bad in a different way per case; the guarantee
+  // is that the blobs around it still land, and the bad one never does.
+  const cases: [string, Uint8Array][] = [
+    ['an event shape this build cannot decode', sealedEvent('e1', OWNER_ED, 'undecodable')],
+    ['a forged signature', sealedEvent('e1', OWNER_ED, 'forged')],
+    ['an author other than the vault owner', sealedEvent('e1', 'c'.repeat(64))],
+    ['an embedded id that is not the blob id', sealedEvent('not-e1')],
+  ]
+  const ids = ['ev-e0', 'ev-e1', 'ev-e2']
+
+  for (const [what, bad] of cases) {
+    const blobFor = (id: string) => (id === 'ev-e1' ? bad : sealedEvent(id.slice('ev-'.length)))
+
+    it(`per-blob loop: ${what}`, async () => {
+      await putShare(fakeShare())
+      configureSharing(
+        fakeSharingClient({
+          listSharedBlobs: async () => ids,
+          getSharedBlob: async (_owner, id) => blobFor(id),
+        }),
+        fakeIdentity(),
+      )
+
+      await pullShared()
+      await pullShared() // still not wedged, and the bad blob still doesn't land
+
+      expect((await sharedEventsFor(OWNER_ED)).map((r) => r.event.id).sort()).toEqual(['e0', 'e2'])
+    })
+
+    it(`batched walk: ${what}`, async () => {
+      await putShare(fakeShare())
+      const many = [...ids, ...Array.from({ length: BATCH_PULL_THRESHOLD }, (_, i) => `ev-x${i}`)]
+      async function* frames(): AsyncGenerator<BatchBlob> {
+        for (const id of many) yield { id, blob: blobFor(id) }
+      }
+      const client = {
+        ...fakeSharingClient({ listSharedBlobs: async () => many }),
+        listSharedBlobsWithBodies: async (): Promise<BlobBodyPage> => ({ kind: 'page', next: null, blobs: frames() }),
+      }
+      configureSharing(client, fakeIdentity())
+
+      await pullShared()
+
+      const stored = new Set((await sharedEventsFor(OWNER_ED)).map((r) => r.event.id))
+      expect(stored.has('e1')).toBe(false)
+      expect(stored.size).toBe(many.length - 1)
+    })
+  }
 })
