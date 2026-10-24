@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.17.0](https://github.com/cosmicspork/svastha/compare/v0.16.0...v0.17.0) (2026-10-24)
+
+
+### Features
+
+* **core:** add the medication_dose kind and dosage value variant ([#216](https://github.com/cosmicspork/svastha/issues/216)) ([90882fe](https://github.com/cosmicspork/svastha/commit/90882fe72a6ec8ae84d5e964fb77dcb8d94d88f4))
+* **import:** bring in occupation, industry and occupational hazards ([#224](https://github.com/cosmicspork/svastha/issues/224)) ([4fe48f8](https://github.com/cosmicspork/svastha/commit/4fe48f8a2ce316a524dea590278695e449994749))
+* **import:** carry a medication's dosage from C-CDA and FHIR ([#222](https://github.com/cosmicspork/svastha/issues/222)) ([434a9e7](https://github.com/cosmicspork/svastha/commit/434a9e7602ccc2cf642030d37ee0be9804f83a3e))
+* **meds:** pharmacy medication list, with print, share and PDF export ([#199](https://github.com/cosmicspork/svastha/issues/199)) ([7a26832](https://github.com/cosmicspork/svastha/commit/7a26832fb5f81870e82e6c466dda51a1bbe1169e))
+* **web:** add a medication you take from the Medications page ([#228](https://github.com/cosmicspork/svastha/issues/228)) ([72820d3](https://github.com/cosmicspork/svastha/commit/72820d3ece5114d57073c34d0343160fdba2a593))
+* **web:** leave hidden allergies off the pharmacy list ([#220](https://github.com/cosmicspork/svastha/issues/220)) ([e088638](https://github.com/cosmicspork/svastha/commit/e088638a3519debc70d93df16e481da37c1456c9))
+* **web:** log a dose of a medication and show how often it is used ([#230](https://github.com/cosmicspork/svastha/issues/230)) ([dee972f](https://github.com/cosmicspork/svastha/commit/dee972fd3ec1f06ae60ae55905fc99c359f4b263))
+* **web:** move immunizations below vitals and results on the summary ([#215](https://github.com/cosmicspork/svastha/issues/215)) ([a004b0e](https://github.com/cosmicspork/svastha/commit/a004b0ef61d795511e73ceb60acf8fda127e8eba))
+* **web:** pin or hide a problem or allergy on the summary ([#218](https://github.com/cosmicspork/svastha/issues/218)) ([78cb0fa](https://github.com/cosmicspork/svastha/commit/78cb0fa3f2066256d703ca35b3c2f9621dc5754f))
+* **web:** record an allergy's category, reaction and severity ([#227](https://github.com/cosmicspork/svastha/issues/227)) ([d66004d](https://github.com/cosmicspork/svastha/commit/d66004d35ae0f98ceaa3e5f3655c28effa2aa8ac))
+* **web:** record work and occupational exposures ([#221](https://github.com/cosmicspork/svastha/issues/221)) ([bf511a0](https://github.com/cosmicspork/svastha/commit/bf511a0cc02341a5dff83213b7fdd58d64f28e78))
+* **web:** show how often each medication is taken ([#223](https://github.com/cosmicspork/svastha/issues/223)) ([a6e199e](https://github.com/cosmicspork/svastha/commit/a6e199e2f1b6f49d16da2723d312badaf5a67159))
+
+
+### Bug Fixes
+
+* **web:** commit IndexedDB writes eagerly and settle e2e races ([#210](https://github.com/cosmicspork/svastha/issues/210)) ([f5cf50b](https://github.com/cosmicspork/svastha/commit/f5cf50b1bf5d1a6207af13a89117740aad8de40e))
+* **web:** skip a shared blob that fails to apply instead of abandoning the share ([#217](https://github.com/cosmicspork/svastha/issues/217)) ([a61844f](https://github.com/cosmicspork/svastha/commit/a61844f05d890354facb161f367dd696d97a54d3))
+* **web:** stop re-pushing a curation record the relay echoes back ([#225](https://github.com/cosmicspork/svastha/issues/225)) ([10ea8f1](https://github.com/cosmicspork/svastha/commit/10ea8f1c3bd6d98773c03f415ab5e3242e306328))
+
 ## [0.16.0](https://github.com/cosmicspork/svastha/compare/v0.15.0...v0.16.0) (2026-08-03)
 
 
