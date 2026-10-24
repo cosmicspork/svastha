@@ -246,6 +246,29 @@ export const EXERCISE_ACTIVITY = loinc('73985-4', 'Exercise activity')
 export const EXERCISE_DURATION = loinc('55411-3', 'Exercise duration')
 export const MINUTES = ucum('min')
 
+// --- work ---
+
+export const OCCUPATION = loinc('11341-5', 'History of Occupation')
+export const OCCUPATIONAL_HAZARD = loinc('87729-0', 'History of Occupational hazard')
+
+/** LOINC codes that classify an observation as work history. 86188-0
+ * (occupation industry) is listed by bare code on purpose: nothing logs it
+ * yet (import will), and a `Code` constant would pin a display string into
+ * event ids before that import exists. */
+export const WORK_LOINC_CODES: ReadonlySet<string> = new Set([
+  OCCUPATION.code,
+  OCCUPATIONAL_HAZARD.code,
+  '86188-0',
+])
+
+/** The work codes whose concept key carries the value (see `conceptKey` in
+ * summary.ts): every job shares one code, so the code alone would fold all
+ * jobs, and all hazards, into a single row. */
+export const VALUE_KEYED_LOINC_CODES: ReadonlySet<string> = new Set([
+  OCCUPATION.code,
+  OCCUPATIONAL_HAZARD.code,
+])
+
 // --- mindfulness ---
 
 export const MOOD = svastha('mood', 'Mood')

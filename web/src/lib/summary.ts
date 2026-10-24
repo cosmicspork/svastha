@@ -11,7 +11,18 @@
 // Immunizations, vitals, and results are split around a recency window (see
 // RECENT_WINDOW_MONTHS) rather than filtered by it — same reason: the older
 // rows stay in the payload, the view just doesn't lead with them.
-import { VITALS, BP_SYSTOLIC, BP_DIASTOLIC, VITAL_LOINC_CODES, shortenSystem, type Code } from './codes'
+import {
+  VITALS,
+  BP_SYSTOLIC,
+  BP_DIASTOLIC,
+  VITAL_LOINC_CODES,
+  LOINC,
+  OCCUPATION,
+  OCCUPATIONAL_HAZARD,
+  VALUE_KEYED_LOINC_CODES,
+  shortenSystem,
+  type Code,
+} from './codes'
 import { categorize } from './category'
 import { buildCodeNameIndex, resolveDisplay } from './code-names'
 import { quantityOf, renderQuantity } from './timeline'
@@ -96,6 +107,14 @@ export interface SummaryRow {
   /** Whether the owner pinned this concept (curation.ts's `priority:`). Only
    * problems and allergies are reordered on it; elsewhere it is inert. */
   pinned: boolean
+  /** A short status chip beside the label ("current" / "past"). Work rows only. */
+  chip?: string
+  /** A quiet second line under the label; takes the place of the regimen line.
+   * Work rows only (a job's exposures). */
+  subline?: string
+  /** Suppress the trailing full date. A job's `date` is a start year in
+   * practice, and "Jan 1, 2019" would claim a precision nobody gave. */
+  hideDate?: boolean
 }
 
 export interface ClinicianSummary {
@@ -115,6 +134,9 @@ export interface ClinicianSummary {
   immunizations: WindowedSection
   latestVitals: WindowedSection
   recentResults: WindowedSection
+  /** One row per job (exposures folded into its sub-line), plus a row per
+   * exposure that matches no job. Empty when there is no work history. */
+  work: SummaryRow[]
   /** The window the three sections above were split on, so the view can name
    * it ("older than 12 months") without hardcoding the same number twice. */
   windowMonths: number
@@ -202,13 +224,13 @@ type Ev = StoredEvent['event']
 /** The coding that identifies an event's clinical concept: the event's own
  * `code`, or — for allergies, which import with `code: null` — the substance
  * carried in `value.coded`. */
-function codingFor(e: Ev): Code | null {
+function codingFor(e: Keyed): Code | null {
   if (e.code) return e.code
   if (e.value && 'coded' in e.value) return e.value.coded
   return null
 }
 
-function textOf(e: Ev): string | null {
+function textOf(e: Keyed): string | null {
   return e.value && 'text' in e.value ? e.value.text : null
 }
 
@@ -237,21 +259,50 @@ function resolveLabel(e: Ev, nameIndex: Map<string, string>, dictionary: Map<str
   return { label: e.kind.replace(/_/g, ' '), coding: null, nameResolved: true }
 }
 
+/** The slice of an event the concept key reads, so a form can compute the key
+ * of a draft it has not signed yet. */
+type Keyed = { kind: Ev['kind']; code?: Code | null; value?: Ev['value'] }
+
+/** The value half of a work concept key, or null when the event is not a
+ * value-keyed work observation (every other event, which keeps its existing
+ * key unchanged). Every job shares LOINC 11341-5 and every hazard 87729-0, so
+ * these two codes alone key on their value:
+ *
+ *   text value  -> `text:<value as written>`
+ *   coded value -> `coded:<system>|<code>`, each part percent-encoded
+ *
+ * The tag keeps a text value from imitating a coded one, and the encoding
+ * keeps a `|` inside a system or code from shifting the split. The text is the
+ * last field, so it needs no escaping. Like a free-text med it is compared as
+ * written (no trim, no case fold); the log form trims before it saves. Any
+ * other value shape (or none) adds nothing, so those events fold by code. */
+function workValueKey(e: Keyed): string | null {
+  if (!e.code || e.code.system !== LOINC || !VALUE_KEYED_LOINC_CODES.has(e.code.code)) return null
+  if (e.value && 'text' in e.value) return `text:${e.value.text}`
+  if (e.value && 'coded' in e.value) {
+    const { system, code } = e.value.coded
+    return `coded:${encodeURIComponent(system)}|${encodeURIComponent(code)}`
+  }
+  return null
+}
+
 /** The grouping key. Uncoded entries key on their text so two distinct
  * free-text meds stay separate rows rather than folding into `kind||`. */
-function keyFor(e: Ev): string {
+function keyFor(e: Keyed): string {
   const coding = codingFor(e)
   const system = coding?.system ?? ''
   const code = coding?.code ?? textOf(e) ?? ''
-  return `${e.kind}|${system}|${code}`
+  const valueKey = workValueKey(e)
+  return valueKey === null ? `${e.kind}|${system}|${code}` : `${e.kind}|${system}|${code}|${valueKey}`
 }
 
 /** The folded clinical-concept key of one event — the same `${kind}|${system}
  * |${code}` the summary groups on and the `status:`/`name:` curation namespaces
- * key against. Exported so the doctor-share builder can decide which of the
- * owner's status/name records apply to a given bundle of events without
+ * key against (plus the value suffix of {@link workValueKey} for jobs and
+ * occupational hazards). Exported so the doctor-share builder can decide which
+ * of the owner's status/name records apply to a given bundle of events without
  * duplicating this grouping rule. */
-export function conceptKey(event: Ev): string {
+export function conceptKey(event: Keyed): string {
   return keyFor(event)
 }
 
@@ -487,6 +538,93 @@ function buildVitals(observations: Ev[]): SummaryRow[] {
   return rows
 }
 
+/** The year a start date was written in. Read from the string, not through
+ * `Date`, so a local-offset ISO from `toLocalIso` cannot slide a year in a
+ * timezone west of UTC (same reason `fmtDate` slices). */
+function startYear(iso: string | null): string {
+  return iso && /^\d{4}/.test(iso) ? iso.slice(0, 4) : ''
+}
+
+/** Jobs and occupational exposures as summary rows.
+ *
+ * A job is an 11341-5 observation, an exposure an 87729-0 observation, and an
+ * exposure belongs to the job it shares an `effective_at` with (the multi-part
+ * convention: one event per component, one timestamp). A job logged more than
+ * once folds by its text, like any concept; it owns every timestamp it was
+ * logged at. An exposure that matches no job (undated, or dated differently)
+ * keeps a row of its own so it is never silently dropped.
+ *
+ * Industry (86188-0) is not read yet: it arrives with import. */
+function buildWork(observations: Ev[], curation: Curation): SummaryRow[] {
+  const isCode = (e: Ev, c: Code) => e.code?.system === c.system && e.code.code === c.code
+  const jobs = observations.filter((e) => isCode(e, OCCUPATION))
+  const hazards = observations.filter((e) => isCode(e, OCCUPATIONAL_HAZARD))
+
+  const chipFor = (key: string) => (curation.status.get(key) === 'inactive' ? 'past' : 'current')
+  const rowFor = (key: string, group: Ev[], subline: string): SummaryRow => {
+    const ls = labelSource(group)
+    const rep = representative(group, 'earliest')
+    const override = curation.names.get(key)
+    // Not resolveLabel: the event's own code display is the generic "History of
+    // Occupation", and the value is the substance.
+    const coded = ls.value && 'coded' in ls.value ? ls.value.coded.display : undefined
+    const year = startYear(rep?.effective_at ?? null)
+    return {
+      key,
+      label: override || textOf(ls) || coded || 'Unnamed entry',
+      // The LOINC code is the category's plumbing, not something to show.
+      coding: null,
+      nameResolved: true,
+      detail: year ? `since ${year}` : '',
+      date: rep?.effective_at ?? null,
+      count: group.length,
+      eventIds: group.map((e) => e.id),
+      focusId: (rep ?? ls).id,
+      status: curation.status.get(key) ?? 'active',
+      // Work rows take no priority controls yet (D1 covers problems and
+      // allergies), so a job is never pinned.
+      pinned: false,
+      chip: chipFor(key),
+      subline,
+      hideDate: true,
+    }
+  }
+
+  const jobGroups = new Map<string, Ev[]>()
+  for (const e of jobs) {
+    const key = keyFor(e)
+    jobGroups.set(key, [...(jobGroups.get(key) ?? []), e])
+  }
+  const jobTimes = new Map<string, Set<string>>()
+  for (const [key, group] of jobGroups) {
+    jobTimes.set(key, new Set(group.flatMap((e) => (e.effective_at ? [e.effective_at] : []))))
+  }
+  const claimed = new Set<string>()
+  for (const times of jobTimes.values()) for (const t of times) claimed.add(t)
+
+  const exposureNames = (evs: Ev[]): string[] =>
+    [...new Set(evs.map((e) => textOf(e)?.trim()).filter((t): t is string => !!t))].sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: 'base' }),
+    )
+
+  const rows: SummaryRow[] = []
+  for (const [key, group] of jobGroups) {
+    const times = jobTimes.get(key)!
+    const attached = hazards.filter((h) => h.effective_at && times.has(h.effective_at))
+    rows.push(rowFor(key, group, exposureNames(attached).join(', ')))
+  }
+  rows.sort(byDateDescNullLast)
+
+  const orphans = new Map<string, Ev[]>()
+  for (const h of hazards) {
+    if (h.effective_at && claimed.has(h.effective_at)) continue
+    const key = keyFor(h)
+    orphans.set(key, [...(orphans.get(key) ?? []), h])
+  }
+  const orphanRows = [...orphans].map(([key, group]) => rowFor(key, group, '')).sort(byLabel)
+  return [...rows, ...orphanRows]
+}
+
 /** Cap each bucket separately: a windowed section that shared one limit would
  * let a long recent list swallow the older one's entire allowance. */
 function limitBoth(section: WindowedSection, limit: number): WindowedSection {
@@ -633,6 +771,7 @@ export function buildSummary(
       ),
       resultLimit,
     ),
+    work: buildWork(observations, curation),
     windowMonths,
     cycle,
   }

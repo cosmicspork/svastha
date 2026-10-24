@@ -152,6 +152,9 @@ export async function categoryLogCounts(days = 90): Promise<Partial<Record<Categ
 /** Distinct recently-logged combos in a category, newest first — the source of
  * the recents chips. */
 export async function recentDrafts(category: Category, limit: number): Promise<DraftTemplate[]> {
+  // A work entry is a job plus its exposures; a coded-template recent would
+  // show one job or one hazard on its own and re-log it detached.
+  if (category === 'work') return []
   const events = await allEvents()
   events.sort((a, b) => (b.event.effective_at ?? '').localeCompare(a.event.effective_at ?? ''))
 

@@ -223,6 +223,9 @@ textarea:disabled {
 .cat-mind {
   color: var(--cat-mind);
 }
+.cat-work {
+  color: var(--cat-work);
+}
 .cat-note {
   color: var(--cat-note);
 }

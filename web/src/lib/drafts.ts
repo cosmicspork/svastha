@@ -16,6 +16,8 @@ import {
   CYCLE_END,
   CYCLE_FLOW,
   CYCLE_CLOTS,
+  OCCUPATION,
+  OCCUPATIONAL_HAZARD,
 } from './codes'
 
 /** Wire names of `EventKind` (serde `snake_case`); see crates/core/src/event.rs. */
@@ -388,6 +390,47 @@ export function visitMedsDrafts(rows: VisitMedRow[], effectiveAt: string): Draft
     drafts.push(...rowDrafts)
   }
   return drafts
+}
+
+// --- work ---
+
+/** A job (an occupation observation whose text is the title as typed) plus one
+ * occupational-hazard observation per exposure, all sharing `effectiveAt` —
+ * the same one-event-per-component convention as a BP pair. Exposures are
+ * trimmed and de-duplicated case-insensitively; `null` while there is no job
+ * title. Never takes an employer: the record needs what the work exposes you
+ * to, not who pays you. */
+export function workDrafts(title: string, exposures: string[], effectiveAt: string): Draft[] | null {
+  const job = title.trim()
+  if (!job) return null
+  const seen = new Set<string>()
+  const hazards: string[] = []
+  for (const raw of exposures) {
+    const hazard = raw.trim()
+    if (!hazard || seen.has(hazard.toLowerCase())) continue
+    seen.add(hazard.toLowerCase())
+    hazards.push(hazard)
+  }
+  return [
+    { kind: 'observation', code: OCCUPATION, effective_at: effectiveAt, value: text(job) },
+    ...hazards.map((h) => ({
+      kind: 'observation' as const,
+      code: OCCUPATIONAL_HAZARD,
+      effective_at: effectiveAt,
+      value: text(h),
+    })),
+  ]
+}
+
+/** The first of `base`, `base` + 1 minute, ... not already used as a job's
+ * start. An exposure belongs to the job sharing its `effective_at`, so two
+ * jobs that both began "in 2019" must not land on the same instant or each
+ * would claim the other's exposures. `toLocalIso` rounds to the minute, so
+ * the minute is the smallest step that stays a distinct, stable string. */
+export function freeJobStart(base: Date, taken: ReadonlySet<string>, format: (d: Date) => string): string {
+  let at = new Date(base.getTime())
+  while (taken.has(format(at))) at = new Date(at.getTime() + 60_000)
+  return format(at)
 }
 
 // --- mindfulness ---

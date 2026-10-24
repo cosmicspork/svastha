@@ -2,7 +2,7 @@
 // filters events (spine, chips, recents) goes through `categorize`, so an
 // event can never appear under two different categories in two places.
 import type { Code } from './codes'
-import { SNOMED, SVASTHA, VITAL_LOINC_CODES, EXERCISE_ACTIVITY, EXERCISE_DURATION, CYCLE_CODES } from './codes'
+import { LOINC, SNOMED, SVASTHA, VITAL_LOINC_CODES, WORK_LOINC_CODES, EXERCISE_ACTIVITY, EXERCISE_DURATION, CYCLE_CODES } from './codes'
 import type { EventKind, EventValue } from './drafts'
 
 export type Category =
@@ -14,6 +14,7 @@ export type Category =
   | 'exercise'
   | 'mind'
   | 'note'
+  | 'work'
   | 'clinical'
   | 'other'
 
@@ -27,6 +28,7 @@ export const CATEGORIES: Category[] = [
   'exercise',
   'mind',
   'note',
+  'work',
   'clinical',
   'other',
 ]
@@ -69,6 +71,9 @@ export function categorize(event: Categorizable): Category {
         if (code.system === SVASTHA) return CYCLE_CODES.has(code.code) ? 'cycle' : 'mind'
         if (VITAL_LOINC_CODES.has(code.code)) return 'vital'
         if (EXERCISE_CODES.has(code.code)) return 'exercise'
+        // Before the catch-all below: a coded non-vital observation is otherwise
+        // a lab result and would surface under "Recent results".
+        if (code.system === LOINC && WORK_LOINC_CODES.has(code.code)) return 'work'
         if (code.system === SNOMED) return 'symptom'
         return 'clinical'
       }
@@ -103,6 +108,7 @@ export const CATEGORY_META: Record<Category, CategoryMeta> = {
   exercise: { label: 'Move', glyph: '➚', hueClass: 'cat-exercise' },
   mind: { label: 'Mind', glyph: '✿', hueClass: 'cat-mind', sensitive: true },
   note: { label: 'Notes', glyph: '✎', hueClass: 'cat-note' },
+  work: { label: 'Work', glyph: '⚒', hueClass: 'cat-work' },
   clinical: { label: 'Clinical', glyph: '✚', hueClass: 'cat-clinical' },
   other: { label: 'Other', glyph: '◦', hueClass: 'cat-other' },
 }

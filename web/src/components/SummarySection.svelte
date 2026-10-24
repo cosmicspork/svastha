@@ -176,6 +176,7 @@
    * prescribed it. Empty (and so unrendered) when neither was recorded — the
    * row must not grow a blank line to say nothing. */
   function regimenSubLine(row: SummaryRow): string {
+    if (row.subline !== undefined) return row.subline
     const r = row.regimen
     if (!r) return ''
     return [r.schedule, r.prescriber].filter(Boolean).join(' · ')
@@ -265,6 +266,9 @@
                       >
                     {/if}
                   </span>
+                  {#if row.chip}
+                    <span class="prn" data-testid="summary-status-chip">{row.chip}</span>
+                  {/if}
                   {#if row.regimen?.as_needed}
                     <span class="prn" data-testid="summary-prn-chip">As needed</span>
                   {/if}
@@ -288,7 +292,9 @@
                   {/if}
                 </span>
                 <span class="trail">
-                  <span class="date data muted">{fmtDate(row.date)}</span>
+                  {#if !row.hideDate}
+                    <span class="date data muted">{fmtDate(row.date)}</span>
+                  {/if}
                   <span class="chevron" class:open aria-hidden="true">›</span>
                 </span>
               </button>

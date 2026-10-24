@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { buildSummary, shelveMedications, splitProblems } from '../summary'
+import { buildSummary, shelveMedications, splitProblems, conceptKey, conceptKeysForEvents } from '../summary'
 import type { StoredEvent } from '../events'
 import type { EventKind, EventValue } from '../drafts'
 import { lwwMerge, priorityMapFrom, type ConceptPriority, type ConceptStatus, type CurationRecord, type Regimen } from '../curation'
-import { SNOMED, LOINC, RXNORM, BP_SYSTOLIC, BP_DIASTOLIC, CYCLE_START, CYCLE_END, type Code } from '../codes'
+import { SNOMED, LOINC, OCCUPATION, OCCUPATIONAL_HAZARD, RXNORM, BP_SYSTOLIC, BP_DIASTOLIC, CYCLE_START, CYCLE_END, type Code } from '../codes'
 
 let nextId = 0
 function ev(partial: {
@@ -881,5 +881,163 @@ describe('buildSummary: concept priority (pin / hide)', () => {
     // Meds stay alphabetical: the controls (and the reordering) are problems
     // and allergies only.
     expect(medications.map((r) => r.label)).toEqual(['Amoxicillin', 'Ibuprofen'])
+  })
+})
+
+describe('work & exposures', () => {
+  const T = (iso: string) => `${iso}T00:00:00+00:00`
+  const job = (title: string, at: string, id?: string) =>
+    ev({ code: OCCUPATION, value: { text: title }, effective_at: T(at), id })
+  const haz = (what: string, at: string | null, id?: string) =>
+    ev({ code: OCCUPATIONAL_HAZARD, value: { text: what }, effective_at: at ? T(at) : null, id })
+  const work = (events: StoredEvent[], status = new Map<string, ConceptStatus>()) =>
+    buildSummary(events, { now: NOW, status }).work
+
+  it('is empty without work history, and leaves recent results alone', () => {
+    const s = buildSummary([ev({ code: CHOL, value: q('5.1', 'mmol/L'), effective_at: T('2024-12-01') })], { now: NOW })
+    expect(s.work).toEqual([])
+    expect(s.recentResults.recent).toHaveLength(1)
+  })
+
+  it('gives each job its own row instead of folding them on the shared code', () => {
+    const rows = work([job('welder', '2019-01-01'), job('cook', '2012-01-01')])
+    expect(rows.map((r) => r.label)).toEqual(['welder', 'cook'])
+    expect(rows.map((r) => r.detail)).toEqual(['since 2019', 'since 2012'])
+    expect(new Set(rows.map((r) => r.key)).size).toBe(2)
+  })
+
+  it('attaches a hazard to the job it shares an effective_at with, not the other', () => {
+    const rows = work([
+      job('welder', '2019-01-01'),
+      haz('noise', '2019-01-01'),
+      haz('asbestos', '2019-01-01'),
+      job('cook', '2012-01-01'),
+      haz('heat', '2012-01-01'),
+    ])
+    expect(rows.map((r) => [r.label, r.subline])).toEqual([
+      ['welder', 'asbestos, noise'],
+      ['cook', 'heat'],
+    ])
+  })
+
+  it('gives a hazard with no matching job (other date, or undated) a row of its own', () => {
+    const rows = work([job('welder', '2019-01-01'), haz('noise', '2019-01-01'), haz('radiation', '2020-06-01'), haz('dust', null)])
+    expect(rows.map((r) => r.label)).toEqual(['welder', 'dust', 'radiation'])
+    expect(rows[0].subline).toBe('noise')
+    expect(rows.slice(1).every((r) => r.subline === '')).toBe(true)
+  })
+
+  it('folds the same job logged twice and keeps the earliest start', () => {
+    const rows = work([job('welder', '2019-01-01', 'a'), job('welder', '2021-01-01', 'b'), haz('noise', '2021-01-01')])
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ count: 2, detail: 'since 2019', subline: 'noise' })
+  })
+
+  it('marks one job past by its own status record and defaults the others to current', () => {
+    const welder = job('welder', '2019-01-01')
+    const rows = work([welder, job('cook', '2012-01-01')], new Map([[conceptKey(welder.event), 'inactive' as const]]))
+    expect(rows.map((r) => [r.label, r.chip, r.status])).toEqual([
+      ['welder', 'past', 'inactive'],
+      ['cook', 'current', 'active'],
+    ])
+  })
+
+  it('applies a rename to one job only', () => {
+    const welder = job('welder', '2019-01-01')
+    const s = buildSummary([welder, job('cook', '2012-01-01')], {
+      now: NOW,
+      names: new Map([[conceptKey(welder.event), 'Pipe welder']]),
+    })
+    expect(s.work.map((r) => r.label)).toEqual(['Pipe welder', 'cook'])
+  })
+
+  it('reads the start year from the written date, whatever the timezone', () => {
+    const rows = work([ev({ code: OCCUPATION, value: { text: 'welder' }, effective_at: '2019-01-01T00:00:00-08:00' })])
+    expect(rows[0].detail).toBe('since 2019')
+  })
+
+  it('does not show work events under results or vitals', () => {
+    const s = buildSummary([job('welder', '2024-06-01'), haz('noise', '2024-06-01')], { now: NOW })
+    expect(s.recentResults.recent.concat(s.recentResults.older)).toEqual([])
+    expect(s.latestVitals.recent.concat(s.latestVitals.older)).toEqual([])
+  })
+})
+
+describe('conceptKey', () => {
+  const text = (code: Code, t: string) => ev({ code, value: { text: t } }).event
+  const JOB_KEY = `observation|${LOINC}|11341-5`
+
+  it('pins the key of every existing kind and shape (the work rule must not move any of them)', () => {
+    const cases: Array<[Parameters<typeof ev>[0], string]> = [
+      [{ kind: 'condition', code: HTN }, `condition|${SNOMED}|38341003`],
+      [{ kind: 'observation', code: HR, value: q('70', '/min') }, `observation|${LOINC}|8867-4`],
+      [{ kind: 'observation', code: BP_SYSTOLIC, value: q('120', 'mm[Hg]') }, `observation|${LOINC}|8480-6`],
+      [{ kind: 'observation', code: CHOL, value: { text: 'high' } }, `observation|${LOINC}|2093-3`],
+      [{ kind: 'observation', value: { text: 'headache' } }, 'observation||headache'],
+      [{ kind: 'observation', code: CYCLE_START }, `observation|urn:svastha:codes|cycle-start`],
+      [{ kind: 'medication_statement', value: { text: 'ibuprofen — 400 mg' } }, 'medication_statement||ibuprofen — 400 mg'],
+      [{ kind: 'medication_statement', code: { system: RXNORM, code: '29046' } }, `medication_statement|${RXNORM}|29046`],
+      [{ kind: 'immunization', code: CVX_FLU }, 'immunization|http://hl7.org/fhir/sid/cvx|140'],
+      [{ kind: 'allergy_intolerance', value: { coded: CASHEW } }, `allergy_intolerance|${SNOMED}|227493005`],
+      [{ kind: 'allergy_intolerance', value: { text: 'peanuts — hives' } }, 'allergy_intolerance||peanuts — hives'],
+      [{ kind: 'encounter', value: { text: 'Dr. Sharma' } }, 'encounter||Dr. Sharma'],
+      [{ kind: 'nutrition_intake', value: { text: 'oatmeal' } }, 'nutrition_intake||oatmeal'],
+      [{ kind: 'document', value: null }, 'document||'],
+    ]
+    for (const [partial, expected] of cases) expect(conceptKey(ev(partial).event)).toBe(expected)
+  })
+
+  it('still folds a text observation under a non-work LOINC code regardless of its text', () => {
+    expect(conceptKey(text(CHOL, 'a'))).toBe(conceptKey(text(CHOL, 'b')))
+    const s = buildSummary(
+      [
+        ev({ code: CHOL, value: { text: 'high' }, effective_at: '2024-12-01T00:00:00+00:00' }),
+        ev({ code: CHOL, value: { text: 'normal' }, effective_at: '2024-12-02T00:00:00+00:00' }),
+      ],
+      { now: NOW },
+    )
+    expect(s.recentResults.recent).toHaveLength(1)
+  })
+
+  it('does not apply the work rule to the same code under another system', () => {
+    const other = { system: 'urn:other', code: '11341-5' }
+    expect(conceptKey(text(other, 'a'))).toBe(conceptKey(text(other, 'b')))
+  })
+
+  it('keys jobs and hazards by value, in the documented format', () => {
+    expect(conceptKey(text(OCCUPATION, 'welder'))).toBe(`${JOB_KEY}|text:welder`)
+    expect(conceptKey(text(OCCUPATIONAL_HAZARD, 'asbestos'))).toBe(`observation|${LOINC}|87729-0|text:asbestos`)
+    expect(conceptKey(text(OCCUPATION, 'welder'))).not.toBe(conceptKey(text(OCCUPATION, 'cook')))
+  })
+
+  it('compares text as written, like a free-text med: case and spacing make a different job', () => {
+    expect(conceptKey(text(OCCUPATION, 'Welder'))).not.toBe(conceptKey(text(OCCUPATION, 'welder')))
+    expect(conceptKey(text(OCCUPATION, 'welder '))).not.toBe(conceptKey(text(OCCUPATION, 'welder')))
+    const med = (t: string) => conceptKey(ev({ kind: 'medication_statement', value: { text: t } }).event)
+    expect(med('Aspirin')).not.toBe(med('aspirin'))
+  })
+
+  it('cannot be made to collide through a pipe in the value', () => {
+    const keys = [
+      conceptKey(text(OCCUPATION, 'a|b')),
+      conceptKey(text(OCCUPATION, 'a')),
+      conceptKey(text(OCCUPATION, 'a|')),
+      conceptKey(text(OCCUPATION, '|text:a')),
+      conceptKey(text(OCCUPATION, 'coded:x|y')),
+      conceptKey(ev({ code: OCCUPATION, value: { coded: { system: 'x', code: 'y' } } }).event),
+      conceptKey(ev({ code: OCCUPATION, value: { coded: { system: 'x|y', code: 'z' } } }).event),
+      conceptKey(ev({ code: OCCUPATION, value: { coded: { system: 'x', code: 'y|z' } } }).event),
+      conceptKey(ev({ code: OCCUPATION }).event),
+      conceptKey(text(OCCUPATIONAL_HAZARD, 'a|b')),
+    ]
+    expect(new Set(keys).size).toBe(keys.length)
+    // a hand-built text key can never equal the key of a different concept
+    expect(conceptKey(text(OCCUPATION, 'x')).startsWith(`${JOB_KEY}|`)).toBe(true)
+  })
+
+  it('is the one rule: the share builder keys the same way as the summary rows', () => {
+    const welder = ev({ code: OCCUPATION, value: { text: 'welder' }, effective_at: '2019-01-01T00:00:00+00:00' })
+    expect([...conceptKeysForEvents([welder])]).toEqual([conceptKey(welder.event)])
+    expect(buildSummary([welder], { now: NOW }).work[0].key).toBe(conceptKey(welder.event))
   })
 })

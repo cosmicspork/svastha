@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  workDrafts,
+  freeJobStart,
   bpDrafts,
   vitalDraft,
   symptomDraft,
@@ -492,5 +494,37 @@ describe('templates', () => {
     const later = '2026-07-05T09:00:00-05:00'
     const drafts = fromTemplates(templates, later)
     expect(drafts).toEqual(bpDrafts('118', '76', later))
+  })
+})
+
+describe('workDrafts', () => {
+  const at = '2019-01-01T00:00:00+00:00'
+
+  it('writes one occupation event plus one hazard event per exposure, all sharing effective_at', () => {
+    const drafts = workDrafts('  welder ', ['asbestos', 'noise'], at)!
+    expect(drafts.map((d) => [d.code?.code, d.value])).toEqual([
+      ['11341-5', { text: 'welder' }],
+      ['87729-0', { text: 'asbestos' }],
+      ['87729-0', { text: 'noise' }],
+    ])
+    expect(new Set(drafts.map((d) => d.effective_at))).toEqual(new Set([at]))
+    expect(drafts.every((d) => d.kind === 'observation')).toBe(true)
+  })
+
+  it('needs a job title, and drops blank and case-duplicate exposures', () => {
+    expect(workDrafts('   ', ['noise'], at)).toBeNull()
+    const drafts = workDrafts('welder', ['Noise', ' noise ', '', 'dust'], at)!
+    expect(drafts.slice(1).map((d) => d.value)).toEqual([{ text: 'Noise' }, { text: 'dust' }])
+  })
+})
+
+describe('freeJobStart', () => {
+  const fmt = (d: Date) => d.toISOString()
+  const base = new Date('2019-01-01T00:00:00Z')
+
+  it('returns the base when free and steps a minute past each taken instant', () => {
+    expect(freeJobStart(base, new Set(), fmt)).toBe('2019-01-01T00:00:00.000Z')
+    const taken = new Set(['2019-01-01T00:00:00.000Z', '2019-01-01T00:01:00.000Z'])
+    expect(freeJobStart(base, taken, fmt)).toBe('2019-01-01T00:02:00.000Z')
   })
 })

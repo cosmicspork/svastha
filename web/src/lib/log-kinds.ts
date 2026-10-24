@@ -24,4 +24,7 @@ export const LOG_KINDS: LogKind[] = [
   { kind: 'paper', label: 'Paper record', category: 'note', glyph: '⛶' },
   { kind: 'cycle', label: 'Cycle', category: 'cycle' },
   { kind: 'visit', label: 'Visit', category: 'clinical' },
+  // Last on purpose: with no work entries logged it ties at zero and stays in
+  // the "More" sheet rather than taking a petal.
+  { kind: 'work', label: 'Work', category: 'work' },
 ]

@@ -31,7 +31,7 @@ import { toHex, fromHex } from '../hex'
 import type { StoredEvent } from '../events'
 import { hiddenConceptsFrom, priorityMapFrom, type ConceptStatus, type SignedCurationRecord } from '../curation'
 import { CATEGORIES, CATEGORY_META, type Category } from '../category'
-import { MOOD, BP_SYSTOLIC, CYCLE_START } from '../codes'
+import { MOOD, BP_SYSTOLIC, CYCLE_START, OCCUPATION, OCCUPATIONAL_HAZARD } from '../codes'
 
 const RXNORM = 'http://www.nlm.nih.gov/research/umls/rxnorm'
 
@@ -622,5 +622,39 @@ describe('shareableEvents', () => {
     ]
     const ids = shareableEvents(events, new Set(), new Set(['condition||Bad knee'])).map((se) => se.event.id)
     expect(ids).toEqual(['t2', 't3'])
+  })
+})
+
+describe('work history in a doctor share', () => {
+  const job = ev('job', 'observation', '2019-01-01T00:00:00+00:00', OCCUPATION, { text: 'welder' })
+  const hazard = ev('haz', 'observation', '2019-01-01T00:00:00+00:00', OCCUPATIONAL_HAZARD, { text: 'asbestos' })
+  const mood = ev('mood', 'observation', '2019-01-01T00:00:00+00:00', MOOD)
+
+  it('is included by a default (null) scope, unlike the sensitive categories beside it', () => {
+    const ids = filterEventsForScope([job, hazard, mood], { fromIso: null, toIso: null, categories: null }).map(
+      (e) => e.event.id,
+    )
+    expect(ids).toEqual(['job', 'haz'])
+  })
+
+  it('carries a past-job status and a rename for the shared job, and nothing for a job left out', () => {
+    const other = ev('job2', 'observation', '2012-01-01T00:00:00+00:00', OCCUPATION, { text: 'cook' })
+    const kJob = conceptKey(job.event)
+    const kOther = conceptKey(other.event)
+    expect(kJob).not.toBe(kOther)
+    const records = [
+      rec(`status:${kJob}`, { status: 'inactive' }),
+      rec(`name:${kJob}`, { display: 'Pipe welder' }),
+      rec(`status:${kOther}`, { status: 'inactive' }),
+    ]
+    expect(curationForBundle([job, hazard], records).map((r) => r.key)).toEqual([
+      `status:${kJob}`,
+      `name:${kJob}`,
+    ])
+  })
+
+  it('keeps a past job in the bundle: the meds-only past filter does not touch it', () => {
+    const statuses = new Map<string, ConceptStatus>([[conceptKey(job.event), 'inactive']])
+    expect(applyMedScope([job, hazard], statuses, false)).toEqual([job, hazard])
   })
 })

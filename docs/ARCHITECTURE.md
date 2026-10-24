@@ -221,6 +221,23 @@ author }` — plus a `signature`:
   `'pinned'` or `'hidden'` reads as normal.
   `core` is namespace-agnostic — the key is an opaque string to the contract,
   so new namespaces need no contract change.
+
+  **Concept key.** A concept is `{kind}|{system}|{code}`, with one exception:
+  work history. A job is an `observation` coded LOINC `11341-5` whose text value
+  is the title, and an occupational exposure is one coded `87729-0` (text, e.g.
+  "asbestos"); an exposure belongs to the job sharing its `effective_at`, the
+  usual one-event-per-component convention. Every job shares one code, so for
+  these two codes only (system `http://loinc.org`) the key gains the value as a
+  fourth field: `{kind}|{system}|{code}|text:{value as written}` for a text
+  value, or `{kind}|{system}|{code}|coded:{system}|{code}` for a coded one
+  (each part percent-encoded, so a `|` inside it cannot shift the split). Text
+  is compared as written, exactly like a free-text medication. The rule is one
+  function (`conceptKey` in `web/src/lib/summary.ts`), shared by the summary
+  fold and by doctor-share curation selection, so `status:` (current or past
+  job) and `name:` work per job. It is additive: it changes no existing key and
+  no vault holds these codes yet. Web categories gain `work` (not sensitive, so
+  a default doctor share carries it); the summary shows it as "Work &
+  exposures" and hides the section when empty.
 - `value` is namespace-defined and opaque to both the signature and the merge
   rule below. For signing it is reduced to canonical JSON (compact, object keys
   sorted), so the same logical value always signs identically.
