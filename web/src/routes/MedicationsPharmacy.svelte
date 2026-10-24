@@ -6,7 +6,9 @@
     allStatuses,
     allNames,
     allRegimens,
+    allPriorities,
     type ConceptStatus,
+    type ConceptPriority,
     type Regimen,
   } from '../lib/curation'
   import { buildSummary } from '../lib/summary'
@@ -30,6 +32,7 @@
   let statusMap = $state<Map<string, ConceptStatus>>(new Map())
   let nameMap = $state<Map<string, string>>(new Map())
   let regimenMap = $state<Map<string, Regimen>>(new Map())
+  let priorityMap = $state<Map<string, ConceptPriority>>(new Map())
   let loaded = $state(false)
   let size = $state<ListSize>('standard')
 
@@ -98,9 +101,10 @@
   const createdAt = new Date(now).toISOString()
 
   // One fold for the screen, its print stylesheet, and anything exported from
-  // this page: `hiddenIds` is applied here, so an entry the owner hid cannot
-  // reappear in one of them. Guaranteed by e2e/pharmacy-list.spec.ts's
-  // "leaves a hidden medication off the list".
+  // this page: `hiddenIds` and the hidden concepts in `priorityMap` are applied
+  // here, so nothing the owner hid can reappear in one of them. Guaranteed by
+  // e2e/pharmacy-list.spec.ts's "leaves a hidden medication off the list" and
+  // "leaves a hidden allergy off the list and the PDF".
   const summary = $derived(
     buildSummary(events, {
       now,
@@ -109,6 +113,7 @@
       status: statusMap,
       names: nameMap,
       regimen: regimenMap,
+      priority: priorityMap,
     }),
   )
 
@@ -122,10 +127,11 @@
     )
     relayUrl = (await get<string>('prefs', 'relayUrl')) ?? ''
     if (relayUrl && session.identity) relay = new RelayClient(relayUrl, session.identity)
-    ;[statusMap, nameMap, regimenMap, size] = await Promise.all([
+    ;[statusMap, nameMap, regimenMap, priorityMap, size] = await Promise.all([
       allStatuses(),
       allNames(),
       allRegimens(),
+      allPriorities(),
       loadListSize(),
     ])
     loaded = true
