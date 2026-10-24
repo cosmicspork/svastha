@@ -17,6 +17,7 @@
   import { navigate } from '../lib/router.svelte'
   import SummarySection from '../components/SummarySection.svelte'
   import RowActionSheet from '../components/RowActionSheet.svelte'
+  import AddMedicationSheet from '../components/AddMedicationSheet.svelte'
 
   // The whole med list on one screen, filed the way a person takes them: one
   // shelf per route, alphabetical within, past meds folded away. Owner-only in
@@ -66,6 +67,20 @@
   let pastOpen = $state(false)
 
   let action = $state<SummaryRow | null>(null)
+  let adding = $state(false)
+
+  /** After an add: the new statement is an event, so the events re-read too. */
+  async function reloadAll() {
+    events = await allEvents()
+    await reloadCuration()
+  }
+
+  /** The duplicate case: the add sheet hands over to the existing row's
+   * details sheet, with the dose and schedule fields the owner came to set. */
+  function editExisting(row: SummaryRow): void {
+    adding = false
+    action = row
+  }
 
   /** Curation does not push: a write updates IndexedDB, and nothing tells this
    * page its derived shelves are stale. Re-reading after every save is what
@@ -109,6 +124,12 @@
         </svg>
         For the pharmacy
       </button>
+      <button type="button" class="tonal print-btn" onclick={() => (adding = true)} data-testid="medications-add">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 5v14" /><path d="M5 12h14" />
+        </svg>
+        Add something I take
+      </button>
       <button type="button" class="ghost print-btn" onclick={() => window.print()} data-testid="medications-print">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M6 9V3h12v6" /><path d="M6 18H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2" /><rect x="6" y="14" width="12" height="7" rx="1" />
@@ -119,7 +140,8 @@
 
     {#if summary.medications.length === 0}
       <p class="muted" data-testid="medications-empty">
-        No medications on record yet. Imported records and quick-logged meds both land here.
+        No medications on record yet. Imported records and anything you add here both land on this
+        page.
       </p>
     {:else}
       <div class="split-group">
@@ -195,6 +217,15 @@
       </div>
     {/if}
   </div>
+
+  {#if adding}
+    <AddMedicationSheet
+      medications={summary.medications}
+      onclose={() => (adding = false)}
+      onsaved={reloadAll}
+      onedit={editExisting}
+    />
+  {/if}
 
   {#if action}
     <RowActionSheet
