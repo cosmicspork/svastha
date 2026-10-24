@@ -1,0 +1,511 @@
+{
+  "resourceType": "Bundle",
+  "type": "collection",
+  "entry": [
+    {
+      "resource": {
+        "resourceType": "MedicationStatement",
+        "id": "med-dosage-01",
+        "status": "active",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "910001",
+              "display": "Synthetic Med F01"
+            }
+          ]
+        },
+        "effectiveDateTime": "2024-02-01",
+        "dosage": [
+          {
+            "text": "  Take one tablet\n   by mouth daily  "
+          }
+        ]
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "MedicationStatement",
+        "id": "med-dosage-02",
+        "status": "active",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "910002",
+              "display": "Synthetic Med F02"
+            }
+          ]
+        },
+        "effectiveDateTime": "2024-02-01",
+        "dosage": [
+          {
+            "timing": {
+              "repeat": {
+                "frequency": 3,
+                "period": 1,
+                "periodUnit": "d"
+              }
+            },
+            "doseAndRate": [
+              {
+                "doseQuantity": {
+                  "value": 500,
+                  "unit": "mg",
+                  "system": "http://unitsofmeasure.org",
+                  "code": "mg"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "MedicationStatement",
+        "id": "med-dosage-03",
+        "status": "active",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "910003",
+              "display": "Synthetic Med F03"
+            }
+          ]
+        },
+        "effectiveDateTime": "2024-02-01",
+        "dosage": [
+          {
+            "timing": {
+              "code": {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/v3-GTSAbbreviation",
+                    "code": "BID"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "MedicationStatement",
+        "id": "med-dosage-04",
+        "status": "active",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "910004",
+              "display": "Synthetic Med F04"
+            }
+          ]
+        },
+        "effectiveDateTime": "2024-02-01",
+        "dosage": [
+          {
+            "timing": {
+              "code": {
+                "coding": [
+                  {
+                    "code": "QOD"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "MedicationStatement",
+        "id": "med-dosage-05",
+        "status": "active",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "910005",
+              "display": "Synthetic Med F05"
+            }
+          ]
+        },
+        "effectiveDateTime": "2024-02-01",
+        "dosage": [
+          {
+            "timing": {
+              "code": {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/v3-GTSAbbreviation",
+                    "code": "Q6H"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "MedicationStatement",
+        "id": "med-dosage-06",
+        "status": "active",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "910006",
+              "display": "Synthetic Med F06"
+            }
+          ]
+        },
+        "effectiveDateTime": "2024-02-01",
+        "dosage": [
+          {
+            "timing": {
+              "code": {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/v3-GTSAbbreviation",
+                    "code": "BED"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "MedicationStatement",
+        "id": "med-dosage-07",
+        "status": "active",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "910007",
+              "display": "Synthetic Med F07"
+            }
+          ]
+        },
+        "effectiveDateTime": "2024-02-01",
+        "dosage": [
+          {
+            "asNeededCodeableConcept": {
+              "text": "for pain"
+            },
+            "timing": {
+              "repeat": {
+                "period": 4,
+                "periodUnit": "h"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "MedicationStatement",
+        "id": "med-dosage-08",
+        "status": "active",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "910008",
+              "display": "Synthetic Med F08"
+            }
+          ]
+        },
+        "effectiveDateTime": "2024-02-01",
+        "dosage": [
+          {
+            "text": "Every ten hours",
+            "timing": {
+              "repeat": {
+                "frequency": 1,
+                "period": 1e1,
+                "periodUnit": "h"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "MedicationStatement",
+        "id": "med-dosage-09",
+        "status": "active",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "910009",
+              "display": "Synthetic Med F09"
+            }
+          ]
+        },
+        "effectiveDateTime": "2024-02-01",
+        "dosage": [
+          {
+            "text": "   ",
+            "timing": {
+              "repeat": {
+                "period": 1e1,
+                "periodUnit": "h",
+                "when": [
+                  "BOGUS"
+                ]
+              }
+            },
+            "doseAndRate": [
+              {
+                "doseRange": {
+                  "low": {
+                    "value": 1,
+                    "unit": "mg"
+                  },
+                  "high": {
+                    "value": 2,
+                    "unit": "mg"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "MedicationStatement",
+        "id": "med-dosage-10",
+        "status": "active",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "910010",
+              "display": "Synthetic Med F10"
+            }
+          ]
+        },
+        "effectiveDateTime": "2024-02-01",
+        "dosage": [
+          {
+            "text": "Inhale as directed",
+            "timing": {
+              "repeat": {
+                "frequency": 1,
+                "period": 30,
+                "periodUnit": "min"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "MedicationStatement",
+        "id": "med-dosage-11",
+        "status": "active",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "910011",
+              "display": "Synthetic Med F11"
+            }
+          ]
+        },
+        "effectiveDateTime": "2024-02-01",
+        "dosage": [
+          {
+            "timing": {
+              "repeat": {
+                "frequency": 1,
+                "period": 1,
+                "periodUnit": "d",
+                "when": [
+                  "MORN",
+                  "EVE"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "MedicationStatement",
+        "id": "med-dosage-12",
+        "status": "active",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "910012",
+              "display": "Synthetic Med F12"
+            }
+          ]
+        },
+        "effectiveDateTime": "2024-02-01",
+        "dosage": [
+          {
+            "text": "First sig"
+          },
+          {
+            "text": "Second sig, ignored"
+          }
+        ]
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "MedicationStatement",
+        "id": "med-dosage-13",
+        "status": "active",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "910013",
+              "display": "Synthetic Med F13"
+            }
+          ]
+        },
+        "effectiveDateTime": "2024-02-01",
+        "dosage": [
+          {
+            "timing": {
+              "code": {
+                "coding": [
+                  {
+                    "system": "urn:oid:1.2.3.4",
+                    "code": "BID"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "MedicationStatement",
+        "id": "med-dosage-14",
+        "status": "active",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "910014",
+              "display": "Synthetic Med F14"
+            }
+          ]
+        },
+        "effectiveDateTime": "2024-02-01",
+        "dosage": [
+          {
+            "text": "Three times",
+            "timing": {
+              "repeat": {
+                "frequency": 3
+              }
+            },
+            "doseAndRate": [
+              {
+                "doseQuantity": {
+                  "value": -1,
+                  "unit": "mg",
+                  "system": "http://unitsofmeasure.org",
+                  "code": "mg"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "MedicationStatement",
+        "id": "med-dosage-15",
+        "status": "active",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "910015",
+              "display": "Synthetic Med F15"
+            }
+          ]
+        },
+        "effectiveDateTime": "2024-02-01",
+        "dosage": [
+          {
+            "timing": {
+              "repeat": {
+                "frequency": 2,
+                "period": 1,
+                "periodUnit": "a"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "MedicationStatement",
+        "id": "med-dosage-16",
+        "status": "active",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "910016",
+              "display": "Synthetic Med F16"
+            }
+          ]
+        },
+        "effectiveDateTime": "2024-02-01",
+        "dosage": [
+          {
+            "asNeededBoolean": false,
+            "timing": {
+              "repeat": {
+                "frequency": 1,
+                "period": 0.5,
+                "periodUnit": "d"
+              }
+            },
+            "doseAndRate": [
+              {
+                "doseQuantity": {
+                  "value": 2
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

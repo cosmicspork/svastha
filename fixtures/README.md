@@ -35,6 +35,19 @@ before sharing it.
   `Appointment` (unmapped), and a `valueQuantity` of `98.60` — the trailing
   zero must survive the round trip (see the decimal-preservation test in
   `crates/import/tests/fhir.rs`).
+- `ccda/medications-dosage.xml` — one Medications section whose entries each
+  exercise one rule of the dosage mapping (`medication_dosage` in
+  `crates/import/src/ccda.rs`): PIVL_TS periods with and without
+  `institutionSpecified`, an EIVL_TS event, a `precondition`, Free Text Sig and
+  activity-text narrative references (resolved and dangling), unitless, range,
+  and exponent doses, unsupported and zero periods, and entries where nothing
+  survives (must keep the pre-dosage shape exactly). A comment on each entry
+  names its rule. Fictional codes `900001`–`900018`, patient "Synthetic Test".
+- `fhir/bundle-dosage.json` — the same for FHIR `MedicationStatement.dosage`
+  (`crates/import/src/fhir.rs`), codes `910001`–`910016`: `text`,
+  `timing.repeat`, `timing.code` abbreviations, `asNeeded[x]`, `doseAndRate`,
+  and an exponent `1e1` period and negative dose that must be dropped. JSON has
+  no comments; `crates/import/tests/dosage.rs` names each case.
 - `xdm/minimal-xdm.zip` — an IHE_XDM package: `IHE_XDM/EXAMPLE1/DOC0001.XML`
   (a verbatim copy of `ccda/minimal-ccd.xml`) alongside stub `STYLE.XSL` and
   `INDEX.HTM` files, so the web unzip/path-filtering test has a real package

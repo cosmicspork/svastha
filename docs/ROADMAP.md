@@ -50,9 +50,6 @@ harvest a PR's "## Deferred" notes into the list.
   canonical URL, so stored events resolve labels/dictionary only because the
   PWA now folds known OIDs at render time (`codes.ts` `canonicalSystem`). Doing
   it once at import would make stored events self-describing.
-- Write a `dosage` value on imported `medication_statement`s — FHIR
-  `dosage[0]` and the C-CDA sig, into the shape core validates (an exponent or
-  signed amount drops that field, keeping the sig text)
 - Seed `regimen:` from spreadsheet/med-list import — schedule, route,
   prescriber, and course dates are typed by hand today, one medication at a
   time
