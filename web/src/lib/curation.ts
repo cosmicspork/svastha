@@ -96,6 +96,33 @@ export function lwwMerge(
   return remote.author > local.author ? remote : local
 }
 
+/** Key order inside `value` can differ between a stored object and one parsed
+ * back from a blob, so values compare by a sorted-key serialization. */
+function stableJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(stableJson).join(',')}]`
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>
+    return `{${Object.keys(o)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stableJson(o[k])}`)
+      .join(',')}}`
+  }
+  return JSON.stringify(v)
+}
+
+/** Whether two records are the same write: same key, clock, author, signature
+ * and value. A same-clock, same-author pair that differs in anything else is a
+ * real conflict and still goes through {@link lwwMerge}. */
+export function sameRecord(a: CurationRecord, b: CurationRecord): boolean {
+  return (
+    a.key === b.key &&
+    a.updated_at === b.updated_at &&
+    a.author === b.author &&
+    (a as Partial<SignedCurationRecord>).signature === (b as Partial<SignedCurationRecord>).signature &&
+    stableJson(a.value) === stableJson(b.value)
+  )
+}
+
 // --- key <-> blob id ---
 
 /** Exported for callers (favorites.ts) that mint their own curation keys from
@@ -246,6 +273,11 @@ export const curationCodec: Codec = {
     }
 
     const local = await get<CurationRecord>('curation', parsed.key)
+    // This device's own record coming back (it pushed it, the relay poked, the
+    // next pull fetched it). `lwwMerge` returns `local` on that exact tie, which
+    // would read as "remote lost" below and re-push it — another poke, another
+    // pull, forever. Nothing differs, so there is nothing to apply or push.
+    if (local && sameRecord(local, parsed)) return
     const winner = lwwMerge(local, parsed)
     await put('curation', winner)
     invalidateBlobIdCache()

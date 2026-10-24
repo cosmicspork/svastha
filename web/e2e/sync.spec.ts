@@ -122,3 +122,24 @@ test('two connected devices converge: log on A, Sync now on B', async ({ page, b
   await syncUntilVisible(pageB, '121/79')
   await contextB.close()
 })
+
+test('a curation write settles: its own echo from the relay is not pushed again', async ({ page }) => {
+  await onboardViaUI(page)
+  await connectRelayViaUI(page)
+
+  await page.evaluate(async () => {
+    const { setRegimen } = await import('/src/lib/curation.ts')
+    await setRegimen('medication_statement||Magnesium', { schedule: 'nightly' })
+  })
+  // Let the write push, the relay poke, and the echo pull complete.
+  await page.waitForTimeout(2_000)
+
+  // A device whose echo re-pushed itself cycled list → GET cur- → PUT cur- many
+  // times a second; settled, there is nothing left to send.
+  let curPuts = 0
+  page.on('request', (req) => {
+    if (req.method() === 'PUT' && new URL(req.url()).pathname.includes('/cur-')) curPuts++
+  })
+  await page.waitForTimeout(3_000)
+  expect(curPuts).toBe(0)
+})
