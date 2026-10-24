@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { buildSummary, shelveMedications } from '../summary'
+import { buildSummary, shelveMedications, splitProblems } from '../summary'
 import type { StoredEvent } from '../events'
 import type { EventKind, EventValue } from '../drafts'
-import type { ConceptStatus, Regimen } from '../curation'
+import { lwwMerge, priorityMapFrom, type ConceptPriority, type ConceptStatus, type CurationRecord, type Regimen } from '../curation'
 import { SNOMED, LOINC, RXNORM, BP_SYSTOLIC, BP_DIASTOLIC, CYCLE_START, CYCLE_END, type Code } from '../codes'
 
 let nextId = 0
@@ -690,5 +690,196 @@ describe('shelveMedications', () => {
 
   it('returns empty buckets for an empty list', () => {
     expect(shelveMedications([])).toEqual({ unrouted: [], shelves: [], past: [] })
+  })
+})
+
+describe('buildSummary: concept priority (pin / hide)', () => {
+  const ICD10 = 'http://hl7.org/fhir/sid/icd-10-cm'
+  const DIABETES: Code = { system: SNOMED, code: '73211009', display: 'Diabetes' }
+  const ASTHMA: Code = { system: SNOMED, code: '195967001', display: 'Asthma' }
+  const PENICILLIN: Code = { system: RXNORM, code: '7980', display: 'Penicillin' }
+  const LATEX: Code = { system: SNOMED, code: '111088007', display: 'Latex' }
+  const kHtn = `condition|${SNOMED}|38341003`
+  const kDiabetes = `condition|${SNOMED}|73211009`
+  const kAsthma = `condition|${SNOMED}|195967001`
+  const kPenicillin = `allergy_intolerance|${RXNORM}|7980`
+
+  // Problems are newest-first: Asthma (2023), Diabetes (2021), Hypertension (2019).
+  const problems = () => [
+    ev({ kind: 'condition', code: HTN, effective_at: '2019-01-01T00:00:00+00:00', id: 'htn' }),
+    ev({ kind: 'condition', code: DIABETES, effective_at: '2021-01-01T00:00:00+00:00', id: 'dm' }),
+    ev({ kind: 'condition', code: ASTHMA, effective_at: '2023-01-01T00:00:00+00:00', id: 'asthma' }),
+  ]
+  // Allergies are alphabetical: Cashew nuts, Latex, Penicillin.
+  const allergies = () => [
+    ev({ kind: 'allergy_intolerance', value: { coded: PENICILLIN }, effective_at: '2020-01-01T00:00:00+00:00' }),
+    ev({ kind: 'allergy_intolerance', value: { coded: CASHEW }, effective_at: '2019-01-01T00:00:00+00:00' }),
+    ev({ kind: 'allergy_intolerance', value: { coded: LATEX }, effective_at: '2018-01-01T00:00:00+00:00' }),
+  ]
+  const prio = (...entries: [string, ConceptPriority][]) => new Map(entries)
+
+  it('leaves the order alone and nothing hidden when no priority is curated', () => {
+    const summary = buildSummary([...problems(), ...allergies()])
+    expect(summary.problems.map((r) => r.label)).toEqual(['Asthma', 'Diabetes', 'Hypertension'])
+    expect(summary.allergies.map((r) => r.label)).toEqual(['Cashew nuts', 'Latex', 'Penicillin'])
+    expect(summary.problems.every((r) => !r.pinned)).toBe(true)
+    expect(summary.hidden).toEqual({ problems: [], allergies: [] })
+  })
+
+  it('leads Problems with pinned rows, each group still newest-first', () => {
+    const { problems: rows } = buildSummary(problems(), { priority: prio([kHtn, 'pinned'], [kDiabetes, 'pinned']) })
+    expect(rows.map((r) => r.label)).toEqual(['Diabetes', 'Hypertension', 'Asthma'])
+    expect(rows.map((r) => r.pinned)).toEqual([true, true, false])
+  })
+
+  it('leads Allergies with pinned rows, each group still alphabetical', () => {
+    const { allergies: rows } = buildSummary(allergies(), {
+      priority: prio([kPenicillin, 'pinned'], [`allergy_intolerance|${SNOMED}|111088007`, 'pinned']),
+    })
+    expect(rows.map((r) => r.label)).toEqual(['Latex', 'Penicillin', 'Cashew nuts'])
+  })
+
+  it('keeps a pinned resolved problem in the main list, ahead of the active ones', () => {
+    const summary = buildSummary(problems(), {
+      status: new Map<string, ConceptStatus>([[kHtn, 'inactive'], [kAsthma, 'inactive']]),
+      priority: prio([kHtn, 'pinned']),
+    })
+    const { active, resolved } = splitProblems(summary.problems)
+    expect(active.map((r) => [r.label, r.status])).toEqual([
+      ['Hypertension', 'inactive'],
+      ['Diabetes', 'active'],
+    ])
+    // An unpinned resolved problem still collapses as before.
+    expect(resolved.map((r) => r.label)).toEqual(['Asthma'])
+  })
+
+  it('takes a hidden problem out of Problems and lists it only under hidden', () => {
+    const summary = buildSummary(problems(), { priority: prio([kDiabetes, 'hidden']) })
+    expect(summary.problems.map((r) => r.label)).toEqual(['Asthma', 'Hypertension'])
+    expect(summary.hidden.problems.map((r) => r.label)).toEqual(['Diabetes'])
+    expect(summary.hidden.allergies).toEqual([])
+  })
+
+  it('takes a hidden allergy out of Allergies and lists it only under hidden', () => {
+    const summary = buildSummary(allergies(), { priority: prio([kPenicillin, 'hidden']) })
+    expect(summary.allergies.map((r) => r.label)).toEqual(['Cashew nuts', 'Latex'])
+    expect(summary.hidden.allergies.map((r) => r.label)).toEqual(['Penicillin'])
+  })
+
+  it('drops every event of a hidden concept, however many dates it spans', () => {
+    const events = [
+      ...problems(),
+      ev({ kind: 'condition', code: DIABETES, effective_at: '2015-06-01T00:00:00+00:00', id: 'dm-early' }),
+      ev({ kind: 'condition', code: { ...DIABETES, display: undefined }, effective_at: null, id: 'dm-undated' }),
+    ]
+    const summary = buildSummary(events, { priority: prio([kDiabetes, 'hidden']) })
+    expect(summary.problems.flatMap((r) => r.eventIds)).toEqual(['asthma', 'htn'])
+    // The manage list still holds the whole fold, so unhiding brings all of it back.
+    expect(summary.hidden.problems[0].eventIds.sort()).toEqual(['dm', 'dm-early', 'dm-undated'])
+  })
+
+  it('does not hide a concept that differs only by code system', () => {
+    // Same code string, a different terminology: a different concept. A hide
+    // that matched on the code alone would take the wrong problem away.
+    const events = [
+      ev({ kind: 'condition', code: { system: SNOMED, code: '1234', display: 'Snomed one' }, effective_at: '2020-01-01T00:00:00+00:00' }),
+      ev({ kind: 'condition', code: { system: ICD10, code: '1234', display: 'Icd one' }, effective_at: '2021-01-01T00:00:00+00:00' }),
+    ]
+    const summary = buildSummary(events, { priority: prio([`condition|${SNOMED}|1234`, 'hidden']) })
+    expect(summary.problems.map((r) => r.label)).toEqual(['Icd one'])
+    expect(summary.hidden.problems.map((r) => r.label)).toEqual(['Snomed one'])
+  })
+
+  it('does not hide a concept whose code merely starts with the hidden one', () => {
+    const events = [
+      ev({ kind: 'condition', code: { system: SNOMED, code: '12', display: 'Short' }, effective_at: '2020-01-01T00:00:00+00:00' }),
+      ev({ kind: 'condition', code: { system: SNOMED, code: '123', display: 'Long' }, effective_at: '2021-01-01T00:00:00+00:00' }),
+    ]
+    const summary = buildSummary(events, { priority: prio([`condition|${SNOMED}|12`, 'hidden']) })
+    expect(summary.problems.map((r) => r.label)).toEqual(['Long'])
+  })
+
+  it('does not hide the same code under another kind', () => {
+    const events = [
+      ev({ kind: 'condition', code: { system: SNOMED, code: '91936005', display: 'Penicillin allergy' }, effective_at: '2020-01-01T00:00:00+00:00' }),
+      ev({ kind: 'allergy_intolerance', value: { coded: { system: SNOMED, code: '91936005', display: 'Penicillin allergy' } }, effective_at: '2020-01-01T00:00:00+00:00' }),
+    ]
+    const summary = buildSummary(events, { priority: prio([`condition|${SNOMED}|91936005`, 'hidden']) })
+    expect(summary.problems).toEqual([])
+    expect(summary.allergies.map((r) => r.label)).toEqual(['Penicillin allergy'])
+  })
+
+  it('hides a free-text concept by its text key, and only that one', () => {
+    // Uncoded entries key on their text (`condition||{text}`), so the hide must
+    // too — and a neighbour whose text is merely similar stays.
+    const events = [
+      ev({ kind: 'condition', value: { text: 'Bad knee' }, effective_at: '2020-01-01T00:00:00+00:00' }),
+      ev({ kind: 'condition', value: { text: 'Bad knee (left)' }, effective_at: '2021-01-01T00:00:00+00:00' }),
+      ev({ kind: 'medication_statement', value: { text: 'Bad knee' }, effective_at: '2021-01-01T00:00:00+00:00' }),
+    ]
+    const summary = buildSummary(events, { priority: prio(['condition||Bad knee', 'hidden']) })
+    expect(summary.problems.map((r) => r.label)).toEqual(['Bad knee (left)'])
+    expect(summary.hidden.problems.map((r) => r.key)).toEqual(['condition||Bad knee'])
+    expect(summary.medications.map((r) => r.label)).toEqual(['Bad knee'])
+  })
+
+  it('reads every malformed priority value as normal — nothing hidden, nothing pinned', () => {
+    // Each of these is a value this build did not write. Reading any of them as
+    // a hide would silently remove a problem; as a pin, silently promote one.
+    const adversarial: unknown[] = [
+      { priority: 'HIDDEN' },
+      { priority: 'Pinned' },
+      { priority: ' hidden' },
+      { priority: true },
+      { priority: 1 },
+      { priority: ['hidden'] },
+      { priority: { hidden: true } },
+      'hidden',
+      'pinned',
+      ['hidden'],
+      null,
+      { hidden: true },
+      { pinned: true, status: 'hidden' },
+    ]
+    for (const value of adversarial) {
+      const record: CurationRecord = { key: `priority:${kDiabetes}`, value, updated_at: 1, author: 'a'.repeat(64) }
+      const summary = buildSummary(problems(), { priority: priorityMapFrom([record]) })
+      expect(summary.problems.map((r) => r.label), JSON.stringify(value)).toEqual(['Asthma', 'Diabetes', 'Hypertension'])
+      expect(summary.problems.some((r) => r.pinned), JSON.stringify(value)).toBe(false)
+      expect(summary.hidden.problems, JSON.stringify(value)).toEqual([])
+    }
+  })
+
+  it('treats a cleared priority as normal', () => {
+    const record: CurationRecord = { key: `priority:${kDiabetes}`, value: { priority: '' }, updated_at: 1, author: 'a'.repeat(64) }
+    const summary = buildSummary(problems(), { priority: priorityMapFrom([record]) })
+    expect(summary.problems.map((r) => r.label)).toEqual(['Asthma', 'Diabetes', 'Hypertension'])
+    expect(summary.hidden.problems).toEqual([])
+  })
+
+  it('resolves a pin and a hide written concurrently by LWW, whichever arrives first', () => {
+    const pin: CurationRecord = { key: `priority:${kDiabetes}`, value: { priority: 'pinned' }, updated_at: 5, author: 'a'.repeat(64) }
+    const hide: CurationRecord = { key: `priority:${kDiabetes}`, value: { priority: 'hidden' }, updated_at: 5, author: 'b'.repeat(64) }
+    // Same clock: the tie breaks on the greater author, so the hide wins on
+    // every device, merged in either order.
+    for (const [local, remote] of [[pin, hide], [hide, pin]]) {
+      const winner = lwwMerge(local, remote)
+      const summary = buildSummary(problems(), { priority: priorityMapFrom([winner]) })
+      expect(summary.hidden.problems.map((r) => r.label)).toEqual(['Diabetes'])
+      expect(summary.problems.some((r) => r.pinned)).toBe(false)
+    }
+  })
+
+  it('leaves medications, results, and the rest unaffected by a pin', () => {
+    const AMOX: Code = { system: RXNORM, code: '723', display: 'Amoxicillin' }
+    const IBU: Code = { system: RXNORM, code: '5640', display: 'Ibuprofen' }
+    const events = [
+      ev({ kind: 'medication_statement', code: AMOX, effective_at: '2024-01-01T00:00:00+00:00' }),
+      ev({ kind: 'medication_statement', code: IBU, effective_at: '2024-01-01T00:00:00+00:00' }),
+    ]
+    const { medications } = buildSummary(events, { priority: prio([`medication_statement|${RXNORM}|5640`, 'pinned']) })
+    // Meds stay alphabetical: the controls (and the reordering) are problems
+    // and allergies only.
+    expect(medications.map((r) => r.label)).toEqual(['Amoxicillin', 'Ibuprofen'])
   })
 })

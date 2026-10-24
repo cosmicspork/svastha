@@ -4,17 +4,20 @@
     setStatus,
     setName,
     setRegimen,
+    setPriority,
     regimenChanged,
     normalizeRegimen,
     REGIMEN_ROUTES,
     REGIMEN_ROUTE_LABELS,
     type Regimen,
+    type ConceptPriority,
   } from '../lib/curation'
   import type { SummaryRow } from '../lib/summary'
   import Sheet from './Sheet.svelte'
 
-  // The owner-only curation sheet for one folded concept: status, display name,
-  // and (meds only) the regimen. Extracted from ClinicianSummary so the
+  // The owner-only curation sheet for one folded concept: status (meds and
+  // problems), priority (problems and allergies), display name, and (meds only)
+  // the regimen. Extracted from ClinicianSummary so the
   // medications page opens the same sheet rather than a second, drifting copy —
   // every write path through curation.ts stays in one component.
   let {
@@ -22,16 +25,20 @@
     section,
     name = '',
     regimen,
+    priority = '',
     onclose,
     onsaved,
   }: {
     row: SummaryRow
-    /** Meds and problems share the sheet but not its status wording. */
-    section: 'med' | 'problem'
+    /** Which controls the sheet offers: meds and problems carry a status (in
+     * different wording), problems and allergies a priority, meds a regimen. */
+    section: 'med' | 'problem' | 'allergy'
     /** The concept's current name override, `''` when there is none. */
     name?: string
     /** The concept's current regimen, seeded into the fields on open. */
     regimen?: Regimen
+    /** The concept's current priority, `''` (normal) when there is none. */
+    priority?: ConceptPriority
     onclose: () => void
     /** Re-read the curation overlay after a write. Awaited before the sheet
      * closes, because curation does not push: nothing else tells the host its
@@ -40,12 +47,22 @@
   } = $props()
 
   const isMed = $derived(section === 'med')
+  const hasStatus = $derived(section !== 'allergy')
+  const hasPriority = $derived(section !== 'med')
+  const noun = $derived(section === 'allergy' ? 'allergies' : 'problems')
+
+  const PRIORITY_CHOICES: { value: ConceptPriority; label: string }[] = [
+    { value: '', label: 'Normal' },
+    { value: 'pinned', label: 'Pin' },
+    { value: 'hidden', label: 'Hide' },
+  ]
 
   // Seeded once, at open: the sheet is a form over a snapshot, and the host
   // unmounts it on close rather than re-pointing it at another row. `untrack`
   // says that deliberately — a later prop change must not overwrite what the
   // owner has typed.
   let nameField = $state(untrack(() => name))
+  let priorityField = $state<ConceptPriority>(untrack(() => priority))
 
   /** The regimen fields, as the form holds them: all strings (an unset route is
    * `''`, not a missing key) plus the as-needed boolean, so every input can bind
@@ -76,13 +93,15 @@
     onclose()
   }
 
-  /** Save the sheet: the name override and (meds only) the regimen, each
+  /** Save the sheet: the name override, the priority (problems and allergies),
+   * and (meds only) the regimen, each
    * written only when it actually changed. Both are mutable `cur-` blobs that
    * re-sync on every write, so an unchanged field must not be re-stamped. */
   async function save() {
     // An empty field clears the override (stored as an empty display, not a
     // delete — see curation.ts's `setName`), falling back to the resolved name.
     if (nameField.trim() !== name) await setName(row.key, nameField)
+    if (hasPriority && priorityField !== priority) await setPriority(row.key, priorityField)
     if (isMed) {
       const next = regimenFromFields()
       if (regimenChanged(regimen, next)) await setRegimen(row.key, next ?? {})
@@ -96,13 +115,45 @@
   <div class="action-sheet" data-testid="row-action-sheet">
     <h2 class="action-title">{row.label}</h2>
 
-    <button type="button" class="tonal action" onclick={toggleStatus} data-testid="action-toggle-status">
-      {#if row.status === 'active'}
-        {isMed ? 'Mark as past' : 'Mark as resolved'}
-      {:else}
-        {isMed ? 'Mark as current' : 'Mark as active'}
-      {/if}
-    </button>
+    {#if hasStatus}
+      <button type="button" class="tonal action" onclick={toggleStatus} data-testid="action-toggle-status">
+        {#if row.status === 'active'}
+          {isMed ? 'Mark as past' : 'Mark as resolved'}
+        {:else}
+          {isMed ? 'Mark as current' : 'Mark as active'}
+        {/if}
+      </button>
+    {/if}
+
+    {#if hasPriority}
+      <div class="name-field">
+        <span class="name-label" id="priority-label">On your summary</span>
+        <div class="seg" role="group" aria-labelledby="priority-label" data-testid="action-priority">
+          {#each PRIORITY_CHOICES as choice (choice.value)}
+            <button
+              type="button"
+              aria-pressed={priorityField === choice.value}
+              onclick={() => (priorityField = choice.value)}
+              data-testid="action-priority-{choice.value || 'normal'}"
+            >
+              {choice.label}
+            </button>
+          {/each}
+        </div>
+        <!-- Honest about scope: a hide is a presentation choice for the
+             owner's own summary and the doctor links they make, not a
+             redaction — the events stay, and a caregiver grant still sees
+             them. -->
+        <span class="name-hint muted" data-testid="action-priority-hint">
+          {#if priorityField === 'hidden'}
+            Hidden {noun} stay on your timeline. They leave this summary and any doctor link you make.
+            People you've granted access to your record still see them.
+          {:else}
+            Pinned {noun} lead the list, here and on any doctor link you make.
+          {/if}
+        </span>
+      </div>
+    {/if}
 
     <label class="name-field">
       <span class="name-label">Edit name</span>

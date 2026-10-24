@@ -16,6 +16,8 @@
     statusMapFrom,
     nameMapFrom,
     regimenMapFrom,
+    priorityMapFrom,
+    hiddenConceptsFrom,
     type SignedCurationRecord,
   } from '../lib/curation'
   import {
@@ -24,6 +26,7 @@
     curationForBundle,
     resolveShareScope,
     filterEventsForScope,
+    shareableEvents,
     referencedAttachmentShas,
     referencedDocumentShas,
     EXPIRY_CHOICES,
@@ -154,15 +157,15 @@
   // rather than falling through to a share that carries the whole record.
   const nothingSelected = $derived(categories === null)
 
-  // A hidden entry cannot reach a share bundle. Hiding is how someone takes an
-  // entry off their own screens, and a share that carried it anyway would hand
-  // a stranger what the owner had already put away. Applied before the scope
-  // filter, so the count, the preview, the carried curation and both delivery
-  // paths all see one visible set. Guaranteed by e2e/doctor-share.spec.ts's
-  // "a hidden entry never reaches the bundle".
-  const visible = $derived(
-    hiddenIds.size === 0 ? events : events.filter((se) => !hiddenIds.has(se.event.id)),
-  )
+  // A hidden entry — or any event of a hidden concept — cannot reach a share
+  // bundle. Hiding is how someone takes it off their own screens, and a share
+  // that carried it anyway would hand a stranger what the owner had already put
+  // away. Applied before the scope filter, so the count, the preview, the
+  // carried curation and both delivery paths all see one visible set.
+  // Guaranteed by e2e/doctor-share.spec.ts's "a hidden entry never reaches the
+  // bundle" and "a hidden problem never reaches the bundle".
+  const hiddenConcepts = $derived(hiddenConceptsFrom(priorityMapFrom(curationRecords)))
+  const visible = $derived(shareableEvents(events, hiddenIds, hiddenConcepts))
   // Short-circuit the empty selection to no events (rather than leaning on
   // filterEventsForScope's null = all-non-sensitive fallback) so the count and
   // preview never imply data a disabled create couldn't send.
@@ -171,7 +174,7 @@
   // The scoped subset the bundle actually carries: the category/date filter,
   // then the meds-scope filter (past meds dropped unless opted in).
   const scopedEvents = $derived(applyMedScope(filtered, statuses, includePastMeds))
-  // The status/name/regimen records that ride along: narrowed to the concepts
+  // The status/name/regimen/pin records that ride along: narrowed to the concepts
   // present in `scopedEvents`, so nothing about an excluded concept leaks.
   // Note the order — `scopedEvents` is already past-meds-filtered, so a past
   // med's regimen is dropped here with its events rather than hinting at a
@@ -181,6 +184,7 @@
   const previewStatus = $derived(statusMapFrom(carriedCuration))
   const previewNames = $derived(nameMapFrom(carriedCuration))
   const previewRegimen = $derived(regimenMapFrom(carriedCuration))
+  const previewPriority = $derived(priorityMapFrom(carriedCuration))
   // Folded from the same scoped events and carried curation the bundle ships,
   // for the pharmacy branch of the preview below.
   const previewSummary = $derived(
@@ -188,6 +192,7 @@
       status: previewStatus,
       names: previewNames,
       regimen: previewRegimen,
+      priority: previewPriority,
     }),
   )
   // Whether the meds-scope toggle is relevant: only when medications are in the
@@ -344,7 +349,10 @@
         allCurationByPrefix('status:'),
         allCurationByPrefix('name:'),
         allCurationByPrefix('regimen:'),
-      ]).then(([s, n, r]) => [...s, ...n, ...r] as SignedCurationRecord[]),
+        // Also the source of the hidden-concept filter above, not only of the
+        // pinned records that ride along.
+        allCurationByPrefix('priority:'),
+      ]).then(([s, n, r, p]) => [...s, ...n, ...r, ...p] as SignedCurationRecord[]),
       loadHiddenIds(),
     ])
   })
@@ -654,6 +662,7 @@
                 status={previewStatus}
                 names={previewNames}
                 regimen={previewRegimen}
+                priority={previewPriority}
               />
             {/if}
           {/key}

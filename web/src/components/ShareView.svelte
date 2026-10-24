@@ -8,7 +8,7 @@
   import { initSvastha } from '../lib/svastha'
   import { isMedicationOnlyBundle, loadShare, type ShareLoadResult } from '../lib/shareRecipient'
   import { inspectFileShare, openWithPassphrase } from '../lib/fileShare'
-  import { statusMapFrom, nameMapFrom, regimenMapFrom } from '../lib/curation'
+  import { statusMapFrom, nameMapFrom, regimenMapFrom, priorityMapFrom } from '../lib/curation'
   import { buildSummary } from '../lib/summary'
   import { fingerprint } from '../lib/exchange'
   import { base64ToBytes } from '../lib/base64'
@@ -149,7 +149,7 @@
     }
   }
 
-  // The verified `status:`/`name:`/`regimen:` overlay the share carried, folded
+  // The verified `status:`/`name:`/`regimen:`/`priority:` overlay the share carried, folded
   // into the concept maps the summary renders from — so a recipient sees the
   // owner's real Current/Past split, name overrides, and how each medication is
   // actually taken, not a flat all-active list. Each reducer prefix-filters the
@@ -158,6 +158,11 @@
   const nameMap = $derived(result?.status === 'ok' ? nameMapFrom(result.bundle.curation) : new Map())
   const regimenMap = $derived(
     result?.status === 'ok' ? regimenMapFrom(result.bundle.curation) : new Map(),
+  )
+  // Only pins ever cross (see doctorShare.ts's `curationForBundle`), so this
+  // reorders the recipient's Problems and Allergies and hides nothing.
+  const priorityMap = $derived(
+    result?.status === 'ok' ? priorityMapFrom(result.bundle.curation) : new Map(),
   )
 
   // The fold behind the pharmacy render, over the recipient's own verified
@@ -298,7 +303,7 @@
       {#if bundle.droppedCuration > 0}
         <p class="warn" data-testid="share-curation-warning">
           {bundle.droppedCuration}
-          {bundle.droppedCuration === 1 ? 'detail' : 'details'} the sender added — a current/past mark, a
+          {bundle.droppedCuration === 1 ? 'detail' : 'details'} the sender added — a current/past mark, a pin, a
           renamed entry, or how a medication is taken — could not be verified and {bundle.droppedCuration ===
           1
             ? 'was'
@@ -325,6 +330,7 @@
         status={statusMap}
         names={nameMap}
         regimen={regimenMap}
+        priority={priorityMap}
       />
     {/if}
 

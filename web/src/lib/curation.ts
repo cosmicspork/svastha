@@ -1,7 +1,7 @@
 // The curation overlay: the system's only mutable state, layered over the
 // otherwise append-only event log (see docs/ARCHITECTURE.md, "Event model").
 // Tags, notes, hides, favorite draft templates, and the concept-level
-// `status:`/`name:`/`regimen:` overrides all live here as signed curation records,
+// `status:`/`name:`/`regimen:`/`priority:` overrides all live here as signed curation records,
 // LWW-merged and synced through their own `cur-*` blob namespace — see
 // docs/ARCHITECTURE.md's "Curation overlay" section for the full design
 // (mutable-blob mapping, the signing rationale, owner-only v1 scope).
@@ -565,6 +565,81 @@ export function regimenMapFrom(records: CurationRecord[]): Map<string, Regimen> 
  * which takes this map). */
 export async function allRegimens(): Promise<Map<string, Regimen>> {
   return regimenMapFrom(await allCurationByPrefix('regimen:'))
+}
+
+// --- helpers: concept priority ---
+//
+// `priority:` is how the owner says which concepts matter on their summary: a
+// pinned concept leads its section, a hidden one leaves the summary and every
+// doctor share (its events stay on the timeline). It is orthogonal to
+// `status:` — a resolved cancer history can be pinned — and keyed on the same
+// folded concept.
+
+/** A concept's curated priority. `''` is normal: the default, and what a
+ * cleared priority is stored as (the sync model has no delete — see
+ * {@link setName}). One value per concept, so a concept cannot be both pinned
+ * and hidden; concurrent writes of the two resolve by LWW like any record. */
+export type ConceptPriority = 'pinned' | 'hidden' | ''
+
+/**
+ * Tolerant read of a `priority:` value: exactly `{ priority: 'pinned' }` or
+ * `{ priority: 'hidden' }` counts, and anything else — a wrong case, a wrong
+ * type, a bare string, a non-object — reads as normal. Unknown sibling fields
+ * are ignored rather than rejecting the value, the same drop-not-repair rule
+ * as {@link normalizeRegimen}, so a newer build that adds a field to a hide
+ * still hides here.
+ *
+ * Normal is the safe reading of garbage in both directions: it never removes a
+ * row the owner did not hide, and it never promotes one they did not pin.
+ */
+export function normalizePriority(value: unknown): ConceptPriority {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return ''
+  const priority = (value as { priority?: unknown }).priority
+  return priority === 'pinned' || priority === 'hidden' ? priority : ''
+}
+
+export async function getPriority(conceptKey: string): Promise<ConceptPriority> {
+  return normalizePriority((await getCuration(`priority:${conceptKey}`))?.value)
+}
+
+export async function setPriority(conceptKey: string, priority: ConceptPriority): Promise<void> {
+  await setCuration(`priority:${conceptKey}`, { priority })
+}
+
+/** Build the concept -> priority map from a set of curation records (the
+ * `priority:` ones), normal values dropped so the map holds only pinned and
+ * hidden concepts. Tolerant of a mixed-namespace array, like the other
+ * `*MapFrom` reducers.
+ *
+ * Two records for one key — possible in a bundle's array, never in the local
+ * store — resolve by {@link lwwMerge}, not by array order, so the same records
+ * give the same map whichever way round they arrive. */
+export function priorityMapFrom(records: CurationRecord[]): Map<string, ConceptPriority> {
+  const winners = new Map<string, CurationRecord>()
+  for (const r of records) {
+    if (!r.key.startsWith('priority:')) continue
+    const concept = r.key.slice('priority:'.length)
+    winners.set(concept, lwwMerge(winners.get(concept), r))
+  }
+  const map = new Map<string, ConceptPriority>()
+  for (const [concept, record] of winners) {
+    const priority = normalizePriority(record.value)
+    if (priority) map.set(concept, priority)
+  }
+  return map
+}
+
+/** Concept -> priority, for the whole summary (see summary.ts's
+ * `buildSummary`, which takes this map). */
+export async function allPriorities(): Promise<Map<string, ConceptPriority>> {
+  return priorityMapFrom(await allCurationByPrefix('priority:'))
+}
+
+/** The concept keys the owner has hidden, from a priority map. */
+export function hiddenConceptsFrom(priorities: Map<string, ConceptPriority>): Set<string> {
+  const keys = new Set<string>()
+  for (const [concept, priority] of priorities) if (priority === 'hidden') keys.add(concept)
+  return keys
 }
 
 // --- favorites migration ---

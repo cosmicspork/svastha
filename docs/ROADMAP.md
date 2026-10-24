@@ -157,6 +157,9 @@ harvest a PR's "## Deferred" notes into the list.
 - Node ingests `regimen:` curation for RAG — `ingest_curation` allowlists only
   `status:`/`name:` today, so a med's schedule, route, and instructions are
   invisible to an answer
+- Node ingests `priority:` curation — the same allowlist skips it, so an
+  answer can't lead with what the owner pinned or leave out a problem they
+  hid from their summary
 
 ## Intentionally not doing
 

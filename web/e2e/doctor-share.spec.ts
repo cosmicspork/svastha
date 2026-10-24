@@ -660,3 +660,165 @@ test('a hidden entry never reaches the bundle', async ({ page }) => {
   await openSheet()
   await expect(page.getByTestId('share-count')).toContainText('2')
 })
+
+const SNOMED = 'http://snomed.info/sct'
+
+/** Seed problems through the signing path: Hypertension once, and a minor
+ * complaint recorded on two different dates (two events, one concept). */
+async function seedProblems(page: Page): Promise<void> {
+  await page.evaluate(
+    async ({ snomed }) => {
+      const { logEvent } = await import('/src/lib/events.ts')
+      const toenail = { system: snomed, code: '400200009', display: 'Ingrown toenail' }
+      await logEvent([
+        { kind: 'condition', code: { system: snomed, code: '38341003', display: 'Hypertension' }, effective_at: '2019-01-01T00:00:00+00:00', value: null },
+        { kind: 'condition', code: { system: snomed, code: '73211009', display: 'Diabetes' }, effective_at: '2021-01-01T00:00:00+00:00', value: null },
+        { kind: 'condition', code: toenail, effective_at: '2018-01-01T00:00:00+00:00', value: null },
+        { kind: 'condition', code: toenail, effective_at: '2023-06-01T00:00:00+00:00', value: null },
+      ])
+    },
+    { snomed: SNOMED },
+  )
+}
+
+/** Open the sealed bundle behind a share link under the link's key. */
+async function openBundle(page: Page, link: string): Promise<{ json: string; ids: string[]; curationKeys: string[] }> {
+  const [token, keySeg] = link.split('/#/s/')[1].split('.')
+  return page.evaluate(
+    async ({ relay, token, keySeg }) => {
+      const b64urlToBytes = (s: string) => {
+        const b64 = s.replace(/-/g, '+').replace(/_/g, '/')
+        const pad = b64.length % 4 === 0 ? '' : '='.repeat(4 - (b64.length % 4))
+        const bin = atob(b64 + pad)
+        return Uint8Array.from(bin, (c) => c.charCodeAt(0))
+      }
+      const sealed = new Uint8Array(await (await fetch(`${relay}/v0/share/${token}`)).arrayBuffer())
+      const { initSvastha, WasmDataKey } = await import('/src/lib/svastha.ts')
+      await initSvastha()
+      const key = WasmDataKey.from_bytes(b64urlToBytes(keySeg))
+      const json = new TextDecoder().decode(key.open(sealed, new TextEncoder().encode(token)))
+      const parsed = JSON.parse(json) as { events: { event: { id: string } }[]; curation?: { key: string }[] }
+      return {
+        json,
+        ids: parsed.events.map((e) => e.event.id),
+        curationKeys: (parsed.curation ?? []).map((r) => r.key),
+      }
+    },
+    { relay: RELAY, token, keySeg },
+  )
+}
+
+// The concept-level twin of "a hidden entry never reaches the bundle". A
+// hidden problem leaves the owner's summary and every doctor share; the sheet
+// drops every event of the concept before it scopes anything, so the count,
+// the preview, the sealed bundle, and what a cold recipient sees all agree.
+test('a hidden problem never reaches the bundle', async ({ browser }) => {
+  const ownerContext = await browser.newContext()
+  const page = await ownerContext.newPage()
+  await onboardViaUI(page)
+  await connectRelayViaUI(page)
+  await seedProblems(page)
+
+  const openSheet = async (): Promise<void> => {
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('share-count')).toBeHidden()
+    await page.evaluate(() => {
+      window.location.hash = '#/share/doctor'
+    })
+    await page.getByTestId('new-doctor-link').click({ timeout: 15_000 })
+    await expect(page.getByTestId('share-count')).toBeVisible({ timeout: 15_000 })
+  }
+
+  await openSheet()
+  await expect(page.getByTestId('share-count')).toHaveText('4 entries selected')
+
+  // Hide the concept through the same signed curation path the action sheet
+  // uses: both of its events go, whatever their dates.
+  await page.evaluate(
+    async ({ snomed }) => {
+      const { setPriority } = await import('/src/lib/curation.ts')
+      await setPriority(`condition|${snomed}|400200009`, 'hidden')
+    },
+    { snomed: SNOMED },
+  )
+
+  await openSheet()
+  await expect(page.getByTestId('share-count')).toHaveText('2 entries selected')
+  await page.getByTestId('share-preview-toggle').click()
+  const preview = page.getByTestId('share-preview')
+  await expect(preview.getByTestId('summary-section-problems')).toContainText('Hypertension')
+  await expect(preview).not.toContainText('Ingrown toenail')
+  // The preview is a recipient's view: no way to manage what was hidden.
+  await expect(preview.getByTestId('hidden-problems')).toHaveCount(0)
+
+  await page.getByTestId('share-create').click()
+  await expect(page.getByTestId('share-link')).toBeVisible()
+  const link = (await page.getByTestId('share-link').innerText()).trim()
+
+  const bundle = await openBundle(page, link)
+  expect(bundle.ids).toHaveLength(2)
+  expect(bundle.json).not.toContain('Ingrown toenail')
+  expect(bundle.json).not.toContain('400200009')
+  // Nothing about the concept rides along either — not even its hide.
+  expect(bundle.curationKeys.filter((k) => k.startsWith('priority:'))).toEqual([])
+
+  const doc = await openAsRecipient(browser, link)
+  await expect(doc.getByTestId('share-verify')).toContainText('2 records verified')
+  await expect(doc.getByTestId('summary-section-problems')).toContainText('Hypertension')
+  await expect(doc.getByTestId('clinician-summary')).not.toContainText('Ingrown toenail')
+
+  await doc.context().close()
+  await ownerContext.close()
+})
+
+test('a pinned problem leads the recipient’s Problems list', async ({ browser }) => {
+  const ownerContext = await browser.newContext()
+  const page = await ownerContext.newPage()
+  await onboardViaUI(page)
+  await seedProblems(page)
+
+  // Pin a problem that does not lead by date, from the action sheet, as the
+  // owner would.
+  await page.reload()
+  await unlock(page)
+  await openSummary(page)
+  const ownerProblems = page.getByTestId('summary-section-problems').getByTestId('summary-row')
+  await openRowSheet(page, ownerProblems.filter({ hasText: 'Hypertension' }))
+  await page.getByTestId('action-priority-pinned').click()
+  await page.getByTestId('action-save').click()
+  await expect(page.getByTestId('row-action-sheet')).toHaveCount(0)
+  await expect(ownerProblems.first()).toContainText('Hypertension')
+
+  await connectRelayViaUI(page)
+  await page.evaluate(() => (window.location.hash = '#/share/doctor'))
+  await page.getByTestId('new-doctor-link').click()
+  // The preview reads the carried curation, so a missing `priority:` load in
+  // the sheet would show here as the default newest-first order.
+  await page.getByTestId('share-preview-toggle').click()
+  const previewProblems = page.getByTestId('share-preview').getByTestId('summary-section-problems').getByTestId('summary-label')
+  await expect.poll(() => previewProblems.allInnerTexts()).toEqual(['Hypertension', 'Diabetes', 'Ingrown toenail'])
+
+  await page.getByTestId('share-create').click()
+  await expect(page.getByTestId('share-link')).toBeVisible()
+  const link = (await page.getByTestId('share-link').innerText()).trim()
+
+  const bundle = await openBundle(page, link)
+  expect(bundle.curationKeys).toEqual([`priority:condition|${SNOMED}|38341003`])
+
+  const doc = await openAsRecipient(browser, link)
+  const rows = doc.getByTestId('summary-section-problems').getByTestId('summary-row')
+  // Without the pin this list is newest-first by onset: Diabetes (2021),
+  // Hypertension (2019), Ingrown toenail (2018).
+  await expect.poll(() => rows.getByTestId('summary-label').allInnerTexts()).toEqual([
+    'Hypertension',
+    'Diabetes',
+    'Ingrown toenail',
+  ])
+  await expect(rows.first()).toHaveAttribute('data-pinned', 'true')
+  await expect(doc.getByTestId('share-curation-warning')).toHaveCount(0)
+  // Read-only: no action sheet, no hidden-concept list.
+  await expect(doc.getByTestId('summary-row-curate')).toHaveCount(0)
+
+  await doc.context().close()
+  await ownerContext.close()
+})

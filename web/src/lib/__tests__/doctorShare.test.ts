@@ -21,6 +21,7 @@ import {
   referencedDocumentShas,
   resolveShareScope,
   shareStatus,
+  shareableEvents,
   SHARE_TOKEN_LEN,
   type DoctorShareRecord,
   type ShareScope,
@@ -28,7 +29,7 @@ import {
 import { conceptKey } from '../summary'
 import { toHex, fromHex } from '../hex'
 import type { StoredEvent } from '../events'
-import type { ConceptStatus, SignedCurationRecord } from '../curation'
+import { hiddenConceptsFrom, priorityMapFrom, type ConceptStatus, type SignedCurationRecord } from '../curation'
 import { CATEGORIES, CATEGORY_META, type Category } from '../category'
 import { MOOD, BP_SYSTOLIC, CYCLE_START } from '../codes'
 
@@ -514,5 +515,112 @@ describe('resolveShareScope (unlocked)', () => {
     })
     expect(scope.categories).toBeNull()
     expect(scope.fromIso).toBeNull()
+  })
+})
+
+describe('curationForBundle: priority:', () => {
+  const cancer = problem('c1', '363346000')
+  const knee = problem('c2', '239873007')
+  const lisinopril = med('m1', '29046')
+  const events = [cancer, knee, lisinopril]
+  const kCancer = conceptKey(cancer.event)
+  const kKnee = conceptKey(knee.event)
+
+  it('carries a pinned record for a concept in the bundle', () => {
+    const pinned = rec(`priority:${kCancer}`, { priority: 'pinned' })
+    expect(curationForBundle(events, [pinned])).toEqual([pinned])
+  })
+
+  it('never carries a hidden record, even for a concept the bundle carries', () => {
+    // The sheet drops a hidden concept's events before this runs, so in
+    // practice the concept check already fails. This is the second lock: a
+    // hide must not ride along even if a caller skipped that filter.
+    expect(curationForBundle(events, [rec(`priority:${kKnee}`, { priority: 'hidden' })])).toEqual([])
+  })
+
+  it('never carries a pin for a concept outside the bundle', () => {
+    const outside = rec('priority:condition|snomed|99999', { priority: 'pinned' })
+    expect(curationForBundle(events, [outside])).toEqual([])
+  })
+
+  it('carries nothing for a cleared or malformed priority', () => {
+    // Only exactly `{ priority: 'pinned' }` (plus ignored siblings) is a pin.
+    for (const value of [{ priority: '' }, { priority: 'PINNED' }, { priority: true }, 'pinned', null, { pinned: true }]) {
+      expect(curationForBundle(events, [rec(`priority:${kCancer}`, value)]), JSON.stringify(value)).toEqual([])
+    }
+  })
+
+  it('drops an unsigned pin', () => {
+    expect(curationForBundle(events, [rec(`priority:${kCancer}`, { priority: 'pinned' }, '')])).toEqual([])
+  })
+
+  // The composition the sheet runs: shareableEvents → (scope) → curationForBundle.
+  // A hidden concept leaves the events, so nothing about it — not its status,
+  // name, or priority — survives the concept check.
+  it('carries nothing at all for a hidden concept once its events are dropped', () => {
+    const records = [
+      rec(`priority:${kKnee}`, { priority: 'hidden' }),
+      rec(`status:${kKnee}`, { status: 'inactive' }),
+      rec(`name:${kKnee}`, { display: 'Runner’s knee' }),
+      rec(`priority:${kCancer}`, { priority: 'pinned' }),
+    ]
+    const hidden = hiddenConceptsFrom(priorityMapFrom(records))
+    const visible = shareableEvents(events, new Set(), hidden)
+    expect(curationForBundle(visible, records).map((r) => r.key)).toEqual([`priority:${kCancer}`])
+  })
+})
+
+describe('shareableEvents', () => {
+  const ICD10 = 'http://hl7.org/fhir/sid/icd-10-cm'
+  const SNOMED_URI = 'http://snomed.info/sct'
+  const knee = (id: string, at: string | null) => ev(id, 'condition', at, { system: SNOMED_URI, code: '239873007' })
+  const kKnee = `condition|${SNOMED_URI}|239873007`
+
+  it('drops every event of a hidden concept, across dates and undated', () => {
+    const events = [
+      knee('k1', '2019-03-01T00:00:00Z'),
+      knee('k2', '2023-11-20T00:00:00Z'),
+      knee('k3', null),
+      problem('c1', '111'),
+      med('m1', '29046'),
+    ]
+    const ids = shareableEvents(events, new Set(), new Set([kKnee])).map((se) => se.event.id)
+    expect(ids).toEqual(['c1', 'm1'])
+  })
+
+  it('applies event-level hides and concept-level hides together', () => {
+    const events = [knee('k1', '2019-03-01T00:00:00Z'), problem('c1', '111'), med('m1', '29046')]
+    const ids = shareableEvents(events, new Set(['m1']), new Set([kKnee])).map((se) => se.event.id)
+    expect(ids).toEqual(['c1'])
+  })
+
+  it('returns the input untouched when nothing is hidden', () => {
+    const events = [knee('k1', null), med('m1', '29046')]
+    expect(shareableEvents(events, new Set(), new Set())).toBe(events)
+  })
+
+  it('does not drop a concept that shares the code but not the system', () => {
+    const events = [knee('k1', '2019-03-01T00:00:00Z'), ev('i1', 'condition', '2020-01-01T00:00:00Z', { system: ICD10, code: '239873007' })]
+    const ids = shareableEvents(events, new Set(), new Set([kKnee])).map((se) => se.event.id)
+    expect(ids).toEqual(['i1'])
+  })
+
+  it('does not drop a concept that shares the code but not the kind', () => {
+    const events = [
+      knee('k1', '2019-03-01T00:00:00Z'),
+      ev('a1', 'allergy_intolerance', '2020-01-01T00:00:00Z', null, { coded: { system: SNOMED_URI, code: '239873007' } }),
+    ]
+    const ids = shareableEvents(events, new Set(), new Set([kKnee])).map((se) => se.event.id)
+    expect(ids).toEqual(['a1'])
+  })
+
+  it('drops a free-text concept by its text, and not a neighbour with similar text', () => {
+    const events = [
+      ev('t1', 'condition', '2020-01-01T00:00:00Z', null, { text: 'Bad knee' }),
+      ev('t2', 'condition', '2021-01-01T00:00:00Z', null, { text: 'Bad knee (left)' }),
+      ev('t3', 'medication_statement', '2021-01-01T00:00:00Z', null, { text: 'Bad knee' }),
+    ]
+    const ids = shareableEvents(events, new Set(), new Set(['condition||Bad knee'])).map((se) => se.event.id)
+    expect(ids).toEqual(['t2', 't3'])
   })
 })
