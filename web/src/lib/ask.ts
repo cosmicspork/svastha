@@ -35,7 +35,7 @@ import { allEvents, type StoredEvent } from './events'
 import { allStatuses, allNames, type ConceptStatus } from './curation'
 import { buildCodeNameIndex, resolveDisplay } from './code-names'
 import { loadDictionaryIndex } from './dictionary'
-import { conceptKey } from './summary'
+import { curationKey } from './summary'
 import {
   loadConfig,
   chatComplete,
@@ -145,7 +145,7 @@ export function buildCandidates(
   dictionary: Map<string, string>,
 ): Candidate[] {
   return events.map((stored) => {
-    const concept = conceptKey(stored.event)
+    const concept = curationKey(stored.event)
     return {
       event: stored.event,
       name: resolveName(stored.event, concept, names, nameIndex, dictionary),
@@ -173,11 +173,12 @@ async function gatherCandidates(): Promise<Candidate[]> {
   // the list of things that can be cited.
   //
   // `statuses` and `names` need no such filtering, and the reason is worth
-  // stating: both are keyed by `conceptKey`, which includes the event *kind*
+  // stating: both are keyed by `curationKey`, which includes the event *kind*
   // alongside the coding, and two events sharing a concept key therefore share
-  // the kind and coding that decide their category. Same key implies same
-  // sensitivity, so a lookup by an in-scope candidate's key can never return a
-  // record belonging to an excluded one. `buildCodeNameIndex` is the odd one
+  // the kind and coding that decide their category. (A dose reads its standing
+  // medication's key — a different kind, but both are always 'med'.) Same key
+  // implies same sensitivity, so a lookup by an in-scope candidate's key can
+  // never return a record belonging to an excluded one. `buildCodeNameIndex` is the odd one
   // out precisely because it drops the kind from its key.
   const inScope = filterSensitive(events, await loadOptIns())
   return buildCandidates(inScope, statuses, names, buildCodeNameIndex(inScope), dictionary)

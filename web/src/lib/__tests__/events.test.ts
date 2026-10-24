@@ -14,6 +14,7 @@ import {
   approveProposedEvent,
   approveProposedEvents,
   allEvents,
+  recentTemplates,
   setOnEventsLogged,
   type StoredEvent,
 } from '../events'
@@ -101,5 +102,33 @@ describe('approveProposedEvent', () => {
     expect(stored.event.id).toBe('id-solo')
     expect((await allEvents()).map((e) => e.event.id)).toEqual(['id-solo'])
     expect(logged).toEqual([[stored]])
+  })
+})
+
+describe('recentTemplates for the Meds form', () => {
+  const stored = (kind: StoredEvent['event']['kind'], value: StoredEvent['event']['value'], at: string, code: StoredEvent['event']['code'] = null): StoredEvent => ({
+    event: { id: `${kind}-${at}`, kind, code, effective_at: at, value, provenance: { source: 'self', source_doc: null } },
+    author: 'owner-ed',
+    signature: 'sig',
+  })
+  const RX = { system: 'http://www.nlm.nih.gov/research/umls/rxnorm', code: '745679', display: 'Albuterol inhaler' }
+
+  it('offers recent doses only — never a standing statement, imported or old', () => {
+    const events = [
+      stored('medication_statement', { text: 'Ibuprofen — 400 mg' }, '2026-07-03T09:00:00Z'),
+      stored('medication_statement', null, '2026-07-04T09:00:00Z', RX),
+      stored('medication_dose', { text: 'Ibuprofen' }, '2026-07-01T09:00:00Z'),
+      // A coded dose logged with no amount has no value, and is still a recent.
+      stored('medication_dose', null, '2026-07-02T09:00:00Z', RX),
+    ]
+    expect(recentTemplates(events, 'med', 8)).toEqual([
+      { kind: 'medication_dose', code: RX, value: null },
+      { kind: 'medication_dose', value: { text: 'Ibuprofen' } },
+    ])
+  })
+
+  it('still skips a valueless event in other categories', () => {
+    const events = [stored('nutrition_intake', null, '2026-07-01T09:00:00Z')]
+    expect(recentTemplates(events, 'food', 8)).toEqual([])
   })
 })

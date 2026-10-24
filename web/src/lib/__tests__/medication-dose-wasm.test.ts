@@ -10,8 +10,9 @@ import { fileURLToPath } from 'node:url'
 import { beforeAll, describe, expect, it } from 'vitest'
 import init, { WasmIdentity, event_id, verify_event } from '../../wasm/svastha'
 
-import { UCUM } from '../codes'
-import type { Dosage, EventKind, EventValue } from '../drafts'
+import { DOSE_UNITS, UCUM } from '../codes'
+import { doseDraft, type Dosage, type Draft, type EventKind, type EventValue } from '../drafts'
+import { conceptKey } from '../summary'
 import type { StoredEvent } from '../events'
 
 beforeAll(async () => {
@@ -81,6 +82,22 @@ describe('medication_dose and dosage across the wasm boundary', () => {
     ]
     for (const dosage of bad) {
       expect(() => id.sign_event(JSON.stringify(content('medication_statement', { dosage } as EventValue))), JSON.stringify(dosage)).toThrow()
+    }
+  })
+
+  it('signs every dose the Meds form writes, and the key survives the round trip', () => {
+    const id = WasmIdentity.generate()
+    const at = '2026-10-23T14:05:00-05:00'
+    const code = { system: RXNORM, code: '745679', display: 'Albuterol inhaler' }
+    const drafts: Draft[] = [
+      doseDraft({ code }, at),
+      doseDraft({ text: 'Magnesium glycinate' }, at),
+      ...DOSE_UNITS.map((u) => doseDraft({ code }, at, { value: '2', unit: u.unit })),
+    ]
+    for (const d of drafts) {
+      const json = id.sign_event(JSON.stringify({ ...d, code: d.code ?? null, provenance: { source: 'self', source_doc: null } }))
+      expect(verify_event(json), JSON.stringify(d)).toBe(true)
+      expect(conceptKey((JSON.parse(json) as StoredEvent).event)).toBe(conceptKey(d))
     }
   })
 

@@ -152,6 +152,10 @@
   // taken twice a year.
   const scheduledMeds = $derived(currentMeds.filter((r) => r.regimen?.as_needed !== true))
   const prnMeds = $derived(currentMeds.filter((r) => r.regimen?.as_needed === true))
+  // Doses with no standing medication behind them (a one-off ibuprofen): after
+  // the med list, never in it — a dose is a moment, not something the person
+  // is on. Inert even for the owner: there is no standing concept to curate.
+  const takenRecently = $derived(keep(summary.takenRecently))
   // A pinned resolved problem stays in the main list (with a "Resolved" chip);
   // see `splitProblems`.
   const problemLists = $derived(splitProblems(summary.problems))
@@ -181,6 +185,7 @@
   const matchCount = $derived(
     currentMeds.length +
       pastMeds.length +
+      takenRecently.length +
       activeProblems.length +
       resolvedProblems.length +
       allergies.length +
@@ -471,6 +476,19 @@
           {readonly}
           {onviewtimeline}
           onrowtap={readonly ? undefined : (row) => openAction(row, 'med')}
+        />
+      {/if}
+      {#if takenRecently.length > 0}
+        <SummarySection
+          title="Taken recently"
+          rows={takenRecently}
+          hueClass="cat-med"
+          heading="h3"
+          dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
+          detailLabel="Dose"
+          {readonly}
+          {onviewtimeline}
         />
       {/if}
       {#if pastMeds.length > 0}

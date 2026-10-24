@@ -415,7 +415,10 @@
               {day.label}
             </span>
           </div>
-          {#each day.entries as entry, i (entry.effective_at + entry.category)}
+          <!-- Keyed on an event the entry holds: time and category alone are
+               not unique once a same-minute dose and statement get a row each
+               (see timeline.ts's grouping). No event is in two entries. -->
+          {#each day.entries as entry, i (entry.eventIds[0])}
             <SpineEntry
               {entry}
               {animate}

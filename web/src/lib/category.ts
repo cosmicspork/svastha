@@ -41,6 +41,12 @@ export interface Categorizable {
   value?: EventValue | null
 }
 
+/** A standing medication or a logged dose of one — what a meds-scoped share
+ * and the meds-only (pharmacy) view count as medication. */
+export function isMedicationEvent(event: { kind: EventKind }): boolean {
+  return event.kind === 'medication_statement' || event.kind === 'medication_dose'
+}
+
 const EXERCISE_CODES = new Set([EXERCISE_ACTIVITY.code, EXERCISE_DURATION.code])
 
 export function categorize(event: Categorizable): Category {

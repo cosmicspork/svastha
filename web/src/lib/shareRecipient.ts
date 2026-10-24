@@ -12,6 +12,7 @@ import { base64ToBytes } from './base64'
 import { toHex } from './hex'
 import type { StoredEvent } from './events'
 import type { SignedCurationRecord } from './curation'
+import { isMedicationEvent } from './category'
 
 /** A share token is exactly the relay's charset and length (see
  * `crates/relay/src/routes.rs`'s `valid_share_token`): 26 chars of the blob-id
@@ -120,11 +121,15 @@ export function parseShareFragment(hash: string): ParsedFragment | null {
  * How a recipient knows a share is a med list: the bundle carries no statement
  * of intent, and adding one would move the pinned contract, so the events
  * themselves answer it. A share scoped to medications contains exactly
- * `medication_statement` events, and any other scope contains something else.
+ * `medication_statement` and `medication_dose` events (a dose is a medication
+ * too — category.ts's `isMedicationEvent`), and any other scope contains
+ * something else.
  *
  * Empty is false, not vacuously true: a bundle with no events is not a med
  * list, and rendering one as an empty pharmacy handoff would tell a pharmacist
- * this person takes nothing.
+ * this person takes nothing. Doses alone are false for the same reason: with
+ * no standing medication the numbered list would be empty, so a doses-only
+ * share renders as the summary, whose "Taken recently" group says what it is.
  *
  * A mixed share whose non-med events all failed verification reaches this as
  * meds-only and renders as a med list. That is the honest reading — the
@@ -132,7 +137,10 @@ export function parseShareFragment(hash: string): ParsedFragment | null {
  * warning above it.
  */
 export function isMedicationOnlyBundle(events: StoredEvent[]): boolean {
-  return events.length > 0 && events.every((se) => se.event.kind === 'medication_statement')
+  return (
+    events.some((se) => se.event.kind === 'medication_statement') &&
+    events.every((se) => isMedicationEvent(se.event))
+  )
 }
 
 /**

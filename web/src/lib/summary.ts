@@ -39,7 +39,7 @@ import {
   ALLERGY_CATEGORY_LABELS,
   type RegimenRoute,
 } from './curation'
-import { isoToMillis } from './time'
+import { dayKey, isoToMillis, toLocalIso } from './time'
 import { renderDosage } from './dosage'
 
 /** The cycle section's shape: exactly {@link cycleStats}' non-null result. */
@@ -131,6 +131,15 @@ export interface SummaryRow {
    * paper record ('records'), logged by the owner ('self'), or both. Absent when
    * no event says (older or unattributed sources). */
   origin?: 'records' | 'self' | 'both'
+  /** How often the owner logged taking it: "Used 4× in the last 30 days · last
+   * 3 days ago" on a standing medication, "2 doses in 30 days · last Oct 19" on
+   * a "Taken recently" row. Absent when no dose can be placed (see
+   * {@link doseUsageLine}). */
+  usage?: string
+  /** Suppress the "×N records" count. A "Taken recently" row's usage line
+   * already counts its doses, and a second, all-time count beside it reads as
+   * a contradiction. */
+  hideCount?: boolean
 }
 
 export interface ClinicianSummary {
@@ -139,6 +148,12 @@ export interface ClinicianSummary {
    * looking up, and a med list you can't scan by name is a list you have to
    * read end to end. */
   medications: SummaryRow[]
+  /** Medications the owner logged a dose of in the last {@link DOSE_WINDOW_DAYS}
+   * days with no standing statement — the one-off ibuprofen. Not part of
+   * `medications`: a dose is a moment, not something the person is on.
+   * Alphabetical like `medications`. Older dose-only concepts appear nowhere
+   * here (the timeline still has them). */
+  takenRecently: SummaryRow[]
   allergies: SummaryRow[]
   /** The problems and allergies the owner hid (curation.ts's `priority:`),
    * folded so the owner's "N hidden · manage" list can name them. They are in
@@ -322,19 +337,134 @@ export function conceptKey(event: Keyed): string {
   return keyFor(event)
 }
 
-/** Drop every event of a hidden concept (curation.ts's `priority:` hide). The
- * one rule the summary and the doctor-share sheet both apply, so the owner's
- * summary, the share preview, and the bundle agree on what a hide removes. */
-export function withoutHiddenConcepts(events: StoredEvent[], hiddenConcepts: Set<string>): StoredEvent[] {
-  if (hiddenConcepts.size === 0) return events
-  return events.filter((se) => !hiddenConcepts.has(keyFor(se.event)))
+const DOSE_KEY_PREFIX = 'medication_dose|'
+const STANDING_KEY_PREFIX = 'medication_statement|'
+
+/** The standing medication a dose belongs to, or null when `key` is not a
+ * dose's concept key.
+ *
+ * `medication_dose|<system>|<code-or-text>` maps to
+ * `medication_statement|<system>|<code-or-text>`: the same identity under the
+ * other kind. The dose form copies a statement's `code` (or, for a free-text
+ * med, its text) exactly, so the two keys agree character for character. There
+ * is no fuzzy matching — a dose of "albuterol" is not a dose of "Albuterol",
+ * exactly as two free-text statements that differ in case are two rows — and a
+ * coded dose links only to a statement with the same system and code.
+ *
+ * The one place this rule lives: the summary, the doctor-share scope and the
+ * pharmacy list all reach a dose's standing medication through here (or
+ * {@link curationKey}). */
+export function standingKeyForDose(key: string): string | null {
+  return key.startsWith(DOSE_KEY_PREFIX) ? STANDING_KEY_PREFIX + key.slice(DOSE_KEY_PREFIX.length) : null
 }
 
-/** The distinct concept keys present across a set of events — the intersection
- * target when selecting which `status:`/`name:` curation records a share bundle
- * should carry. */
+/** The concept key an event's `status:`/`name:`/`regimen:`/`priority:`
+ * curation is keyed on: its own {@link conceptKey}, except that a dose reads
+ * its standing medication's (see {@link standingKeyForDose}). So a renamed
+ * medication's doses carry the new name, and marking it past or hiding it
+ * takes its doses along. */
+export function curationKey(event: Keyed): string {
+  const key = keyFor(event)
+  return standingKeyForDose(key) ?? key
+}
+
+/** Drop every event of a hidden concept (curation.ts's `priority:` hide). The
+ * one rule the summary and the doctor-share sheet both apply, so the owner's
+ * summary, the share preview, and the bundle agree on what a hide removes. A
+ * dose goes with its hidden standing medication. */
+export function withoutHiddenConcepts(events: StoredEvent[], hiddenConcepts: Set<string>): StoredEvent[] {
+  if (hiddenConcepts.size === 0) return events
+  return events.filter((se) => !hiddenConcepts.has(curationKey(se.event)))
+}
+
+/** The distinct curation keys (see {@link curationKey}) present across a set
+ * of events — the intersection target when selecting which `status:`/`name:`
+ * curation records a share bundle should carry. A dose contributes its
+ * standing medication's key, so a share carrying only a med's doses still
+ * carries its name override. */
 export function conceptKeysForEvents(events: StoredEvent[]): Set<string> {
-  return new Set(events.map((se) => keyFor(se.event)))
+  return new Set(events.map((se) => curationKey(se.event)))
+}
+
+/** How far back a usage line and the "Taken recently" group count doses. */
+export const DOSE_WINDOW_DAYS = 30
+const DAY_MS = 24 * 60 * 60 * 1000
+/** Under this many calendar days, "last" reads relatively ("3 days ago"). */
+const RELATIVE_DAYS = 14
+
+/** How far ahead of `now` a dose may be dated and still count as taken.
+ * `toLocalIso` rounds to the nearest minute, so a dose logged a moment ago can
+ * carry a stamp up to 30 s ahead, and a second device's clock may run a little
+ * fast; neither is a dose that has not happened. */
+const FUTURE_SLACK_MS = 5 * 60 * 1000
+
+/** The doses a usage line can place: dated, and not after `now` (give or take
+ * {@link FUTURE_SLACK_MS}). An undated dose cannot be counted into a window,
+ * and one dated further ahead (a badly wrong clock) has not happened yet by
+ * this device's — both stay on the timeline and simply do not count here. The
+ * window is inclusive: a dose exactly {@link DOSE_WINDOW_DAYS} days before
+ * `now` is in it. */
+function placedDoses(doses: Ev[], now: number): { inWindow: number; newest: Ev | null } {
+  const start = now - DOSE_WINDOW_DAYS * DAY_MS
+  let inWindow = 0
+  let newest: Ev | null = null
+  for (const d of doses) {
+    if (!d.effective_at) continue
+    const t = isoToMillis(d.effective_at)
+    if (!(t <= now + FUTURE_SLACK_MS)) continue
+    if (t >= start) inWindow += 1
+    if (!newest || t > isoToMillis(newest.effective_at!)) newest = d
+  }
+  return { inWindow, newest }
+}
+
+/** A dose's date as the usage line says it: "today", "yesterday" or "N days
+ * ago" under {@link RELATIVE_DAYS} calendar days, else "Oct 19" (with the year
+ * when it is not this year's). Calendar days come from the date as written
+ * (see time.ts's `dayKey`), so a dose logged at 23:50 is "yesterday" the next
+ * morning rather than "today". */
+function whenPhrase(iso: string, today: string): string {
+  const day = dayKey(iso)
+  const days = Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${day}T00:00:00Z`)) / DAY_MS)
+  if (days < RELATIVE_DAYS) {
+    if (days <= 0) return 'today'
+    if (days === 1) return 'yesterday'
+    return `${days} days ago`
+  }
+  return shortDate(day, today)
+}
+
+function shortDate(day: string, today: string): string {
+  const sameYear = day.slice(0, 4) === today.slice(0, 4)
+  return new Date(`${day}T00:00:00`).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    ...(sameYear ? {} : { year: 'numeric' }),
+  })
+}
+
+/**
+ * The usage line for a set of doses of one medication, or '' when none of them
+ * can be placed in time (see `placedDoses`).
+ *
+ * - `standing` (a medication the person is on): "Used 4× in the last 30 days ·
+ *   last 3 days ago", or "Last used Aug 2" when every dose is older than the
+ *   window.
+ * - `taken` (a dose-only "Taken recently" row): "2 doses in 30 days · last 3
+ *   days ago". Such a row exists only with a dose in the window, so it has no
+ *   older form.
+ */
+export function doseUsageLine(doses: Ev[], now: number, style: 'standing' | 'taken'): string {
+  const { inWindow, newest } = placedDoses(doses, now)
+  if (!newest) return ''
+  const today = dayKey(toLocalIso(new Date(now)))
+  if (inWindow === 0) {
+    return style === 'standing' ? `Last used ${shortDate(dayKey(newest.effective_at!), today)}` : ''
+  }
+  const last = whenPhrase(newest.effective_at!, today)
+  return style === 'standing'
+    ? `Used ${inWindow}× in the last ${DOSE_WINDOW_DAYS} days · last ${last}`
+    : `${inWindow} ${inWindow === 1 ? 'dose' : 'doses'} in ${DOSE_WINDOW_DAYS} days · last ${last}`
 }
 
 /** Ordering millis; undated ranks oldest so a dated event always wins the
@@ -502,7 +632,10 @@ function foldSection(
     // the event's own display, the vault index, and the dictionary — see
     // code-names.ts). It always resolves the name, and the coding stays carried
     // so the demoted code line remains visible under the override.
-    const override = curation.names.get(key)
+    // A dose reads its standing medication's curation; every other concept
+    // reads its own.
+    const ck = standingKeyForDose(key) ?? key
+    const override = curation.names.get(ck)
     const named = override ? { label: override, coding: resolved.coding, nameResolved: true } : resolved
     rows.push({
       key,
@@ -514,10 +647,10 @@ function foldSection(
       count: group.length,
       eventIds: group.map((e) => e.id),
       focusId: (rep ?? ls).id,
-      status: curation.status.get(key) ?? 'active',
-      regimen: curation.regimen.get(key),
-      allergy: curation.allergy.get(key),
-      pinned: curation.priority.get(key) === 'pinned',
+      status: curation.status.get(ck) ?? 'active',
+      regimen: curation.regimen.get(ck),
+      allergy: curation.allergy.get(ck),
+      pinned: curation.priority.get(ck) === 'pinned',
       prescribed: prescribedFrequency(group),
       origin: originOf(group),
     })
@@ -824,6 +957,45 @@ export function buildSummary(
 
   const conditions = evs.filter((e) => e.kind === 'condition')
   const meds = evs.filter((e) => e.kind === 'medication_statement')
+  // Doses by the standing medication they belong to (see standingKeyForDose).
+  const dosesByStanding = new Map<string, Ev[]>()
+  for (const e of evs) {
+    if (e.kind !== 'medication_dose') continue
+    const standing = standingKeyForDose(keyFor(e))!
+    dosesByStanding.set(standing, [...(dosesByStanding.get(standing) ?? []), e])
+  }
+  const medications = foldSection(
+    meds,
+    'latest',
+    // A curated dose outranks the quantity-derived one: the owner typed what
+    // they actually take, while `medicationDose` reports what some source
+    // document once recorded.
+    (ls, group) => curation.regimen.get(keyFor(ls))?.dose ?? medicationDose(group),
+    nameIndex,
+    dictionary,
+    curation,
+  ).sort(byLabel)
+  for (const row of medications) {
+    const doses = dosesByStanding.get(row.key)
+    const usage = doses ? doseUsageLine(doses, now, 'standing') : ''
+    if (usage) row.usage = usage
+  }
+  const standingKeys = new Set(medications.map((r) => r.key))
+  const takenRecently = foldSection(
+    [...dosesByStanding].flatMap(([standing, doses]) => (standingKeys.has(standing) ? [] : doses)),
+    'latest',
+    (_ls, group) => medicationDose(group),
+    nameIndex,
+    dictionary,
+    curation,
+  )
+    .map((row) => ({
+      ...row,
+      usage: doseUsageLine(dosesByStanding.get(standingKeyForDose(row.key)!)!, now, 'taken'),
+      hideCount: true,
+    }))
+    .filter((row) => row.usage !== '')
+    .sort(byLabel)
   const allergyEvents = evs.filter((e) => e.kind === 'allergy_intolerance')
   const immunizations = evs.filter((e) => e.kind === 'immunization')
   const observations = evs.filter((e) => e.kind === 'observation')
@@ -842,17 +1014,8 @@ export function buildSummary(
         byDateDescNullLast,
       ),
     ),
-    medications: foldSection(
-      meds,
-      'latest',
-      // A curated dose outranks the quantity-derived one: the owner typed what
-      // they actually take, while `medicationDose` reports what some source
-      // document once recorded.
-      (ls, group) => curation.regimen.get(keyFor(ls))?.dose ?? medicationDose(group),
-      nameIndex,
-      dictionary,
-      curation,
-    ).sort(byLabel),
+    medications,
+    takenRecently,
     allergies: foldSection(allergyEvents, 'latest', () => '', nameIndex, dictionary, curation).sort(
       byAllergyPriority,
     ),

@@ -127,9 +127,17 @@ ride along, since a resolved problem is informative history. That ordering is
 load-bearing for `regimen:` too: the meds-scope filter runs *before* the
 curation narrowing, so an excluded past medication has no concept in the bundle
 and its regimen is dropped with it — the carriage cannot hint at a medication
-the share left out. Adding a namespace here is additive: the array is tagged by
-each record's own key, so a recipient predating `regimen:` verifies those
-records and then ignores them, and the bundle version does not move.
+the share left out. Logged doses follow their standing medication: a past
+medication's doses are dropped with it (even when its statement fell outside
+the date range, since the doses alone would name it), a dose carries its
+medication's curation into the bundle, and a dose with no standing medication
+rides along like any event in the date scope. A recipient treats a bundle of
+statements and doses as a med list (the pharmacy view, with each medication's
+usage line and the dose-only ones listed, unnumbered, after it); doses alone
+take the summary view, where they read as "Taken recently". Adding a
+namespace here is additive: the array is tagged by each record's own key, so a
+recipient predating `regimen:` verifies those records and then ignores them,
+and the bundle version does not move.
 
 Identity exchange for this slice is a single self-describing code —
 `svastha1:{ed25519_hex}:{x25519_hex}:{label}` — shown as a QR and as
@@ -159,11 +167,17 @@ typed, signed, stably-identified events, plus a thin mutable curation overlay
   needed. Core validates a dosage (a closed set of period units, integer and
   decimal strings with one spelling each) so every reader can rely on its shape.
   It is signed history, distinct from the `regimen:` curation below — the
-  owner's own mutable, free-text account of how they take it. The owner adds a
-  standing medication no record imported (a supplement, an over-the-counter
-  regular) with "Add something I take" on the Medications page: one
-  self-sourced statement whose value is the name alone, so its concept never
-  moves when the dose or schedule does, plus a `regimen:` record for those.
+  owner's own mutable, free-text account of how they take it. The web writes
+  both from the owner's side: "Add something I take" on the Medications page
+  writes one self-sourced statement whose value is the name alone (so its
+  concept never moves when the dose or schedule does) plus a `regimen:` record,
+  and the Meds log writes a dose. A dose links to its standing medication by
+  copying the statement's identity exactly — its `code`, or for a free-text
+  med its text — so the dose's concept `medication_dose|{system}|{code}` and
+  the statement's `medication_statement|{system}|{code}` differ only in the
+  kind (one function, `standingKeyForDose` in `web/src/lib/summary.ts`, maps
+  between them; no fuzzy matching). A coded dose's amount is a `quantity`
+  value; a free-text dose carries no amount, which is the regimen's dose.
 - Only the small curation overlay needs conflict resolution (last-writer-wins or
   similar).
 - An event may optionally attest that it began as an approved **proposal**: an
@@ -227,6 +241,12 @@ author }` — plus a `signature`:
   to `status:` — a resolved history can be pinned — and is a presentation
   choice, not a redaction: a household grant, which never reads `cur-*`,
   still sees a hidden concept.
+  For a medication, `status:`, `name:`, `regimen:` and `priority:` key on the
+  **standing** medication only: a
+  `medication_dose` reads its statement's records through
+  `standingKeyForDose`, so a renamed medication's doses carry the new name,
+  and marking it past or hiding it takes its doses with it. No record is ever
+  keyed on a dose concept.
   Readers shape-check a regimen or allergy value tolerantly — an unknown or
   wrong-typed field is dropped, never repaired, and an enum matches exactly
   (`'SEVERE'` is not `'severe'`) — so a value written by a newer build normalizes
@@ -662,11 +682,11 @@ then node, then the web build that writes the new shape):
   and the per-id loop): the rest of the pass applies, the blob stays un-`done`
   and is re-fetched every pull, and the status line shows the decode error until
   the PWA updates.
-- The **household-share pull** does not: `applySharedSealed` throws into
-  `pullShared`'s per-*share* catch (`shared.ts`), so the rest of that share's pass
-  is abandoned, and because the event never lands it happens again at the same
-  place on every pull. Everything listed after it in that share stays unpulled
-  until the PWA updates, with only a console warning.
+- The **household-share pull** skips it per blob too (`shared.ts`,
+  `applyOrSkip`), with a console warning, and re-fetches it every pull. Builds
+  before that change did not: the failure abandoned the rest of that share's
+  pass at the same place on every pull, so a writer of a new shape waits until
+  household readers have had time to update past it.
 - A **doctor-share recipient** drops and counts it (`verifyBundleEvents`), and the
   on-device answer path counts it as unreadable (`rank_context`).
 - The **node** drops it at sync (`crates/node/src/sync.rs`, `dispatch`) and

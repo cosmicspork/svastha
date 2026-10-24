@@ -152,16 +152,25 @@ export async function categoryLogCounts(days = 90): Promise<Partial<Record<Categ
 /** Distinct recently-logged combos in a category, newest first — the source of
  * the recents chips. */
 export async function recentDrafts(category: Category, limit: number): Promise<DraftTemplate[]> {
+  return recentTemplates(await allEvents(), category, limit)
+}
+
+/** The pure half of {@link recentDrafts}. */
+export function recentTemplates(events: StoredEvent[], category: Category, limit: number): DraftTemplate[] {
   // A work entry is a job plus its exposures; a coded-template recent would
   // show one job or one hazard on its own and re-log it detached.
   if (category === 'work') return []
-  const events = await allEvents()
-  events.sort((a, b) => (b.event.effective_at ?? '').localeCompare(a.event.effective_at ?? ''))
+  events = [...events].sort((a, b) => (b.event.effective_at ?? '').localeCompare(a.event.effective_at ?? ''))
 
   const seen = new Set<string>()
   const out: DraftTemplate[] = []
   for (const { event } of events) {
-    if (event.value === null || categorize(event) !== category) continue
+    // The Meds form logs doses, so only doses are its recents: a statement is
+    // a standing medication (imported, or added on the Medications page), and
+    // offering one here would re-log "I take this" as if it were "I took it".
+    // A coded dose with no amount has a null value and is still a recent.
+    if (category === 'med' && event.kind !== 'medication_dose') continue
+    if ((event.value === null && event.kind !== 'medication_dose') || categorize(event) !== category) continue
     const template: DraftTemplate = {
       kind: event.kind,
       ...(event.code ? { code: event.code } : {}),

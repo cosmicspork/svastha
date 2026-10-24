@@ -9,7 +9,7 @@
   import { session } from '../lib/session.svelte'
   import { isMedicationOnlyBundle } from '../lib/shareRecipient'
   import { allEvents, type StoredEvent } from '../lib/events'
-  import { CATEGORIES, CATEGORY_META, type Category } from '../lib/category'
+  import { CATEGORIES, CATEGORY_META, isMedicationEvent, type Category } from '../lib/category'
   import {
     allCurationByPrefix,
     loadHiddenIds,
@@ -37,7 +37,7 @@
   } from '../lib/doctorShare'
   import { createFileShare, recordFileShare, type FileShareExport } from '../lib/fileShare'
   import { downloadBlob } from '../lib/export'
-  import { buildSummary, conceptKey } from '../lib/summary'
+  import { buildSummary, curationKey } from '../lib/summary'
 
   // Management (the list of existing links, revoke, re-show) lives on the
   // Doctor screen now — this sheet is creation only. `oncreated` lets that
@@ -203,7 +203,7 @@
   const hasPastMeds = $derived(
     statuses.size > 0 &&
       filtered.some(
-        (se) => se.event.kind === 'medication_statement' && statuses.get(conceptKey(se.event)) === 'inactive',
+        (se) => isMedicationEvent(se.event) && statuses.get(curationKey(se.event)) === 'inactive',
       ),
   )
   // Paper records and imported source documents both travel inside the share
@@ -655,6 +655,7 @@
                    they see" stays literally true for a meds-only share. -->
               <PharmacyMedList
                 medications={previewSummary.medications}
+                takenRecently={previewSummary.takenRecently}
                 allergies={null}
                 createdAt={new Date().toISOString()}
                 showSizeControl={false}

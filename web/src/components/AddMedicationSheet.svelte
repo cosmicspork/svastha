@@ -67,7 +67,9 @@
     }}
   >
     <h2 class="add-title">Add something you take</h2>
-    <p class="add-hint muted">A medication or supplement you're on.</p>
+    <p class="add-hint muted">
+      A medication or supplement you're on. To note a single dose you took, use the Meds log instead.
+    </p>
 
     <label class="add-field">
       <span class="add-label">Name</span>
