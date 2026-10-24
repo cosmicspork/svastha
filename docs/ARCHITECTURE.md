@@ -355,6 +355,28 @@ stays under its own license instead of being embedded in signed events.
   findings, progress notes) map to `document` events with text values, dated to
   the visit they describe, so the prose context travels with the coded record.
 
+  A medication's sig travels too: when the source says how it is taken, import
+  writes the statement's value as a `dosage` (the dose moves inside it), and
+  otherwise keeps the old shape (a dose `quantity`, the name as text, or no
+  value). It is a fact from the document, so it is signed history; it never
+  seeds the owner's `regimen:` curation.
+
+  | Dosage | C-CDA Medication Activity | FHIR `MedicationStatement.dosage[0]` |
+  |---|---|---|
+  | frequency / period | `PIVL_TS` `period` → 1 per period; with `institutionSpecified`, a period dividing 24 h → N per 1 d | `timing.repeat` (no `frequency` → 1); else `timing.code` (`BID` → 2/1 d, `QOD` → 1/2 d, `Q6H` → 1/6 h, …) |
+  | `when` | `EIVL_TS` `event` code | `timing.repeat.when[0]` |
+  | `dose` | `doseQuantity` `@value`/`@unit` | `doseAndRate[0].doseQuantity` |
+  | `as_needed` | a `precondition` | `asNeededBoolean`, or any `asNeededCodeableConcept` |
+  | `text` | the Free Text Sig, else the activity `text`, through its narrative reference | `text` |
+
+  A field core would refuse (an exponent, a sign, a unit outside `h`/`d`/`wk`/
+  `mo`, a dose range, a timing code outside FHIR's EventTiming set) is dropped
+  on its own, keeping the rest; a sig is whitespace-collapsed and capped at 500
+  characters. A dose with nothing else keeps the old shape, so medications
+  without a sig keep their ids. Re-importing a document whose medications do
+  state a sig mints new statements beside the ones imported before; nothing
+  retracts the old ones.
+
   `crates/import` is deliberately its own crate, not part of `core`: EHR mapping
   is churny domain logic (new section quirks, evolving code-system tables) that
   will keep changing long after the trust contract is frozen, and `core` stays

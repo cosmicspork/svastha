@@ -11,8 +11,9 @@
 
 use serde_json::Value;
 
-use svastha_core::event::{Code, EventKind, EventValue};
+use svastha_core::event::{Code, Dosage, EventKind, EventValue, PeriodUnit, Quantity};
 
+use crate::dosage;
 use crate::systems::{LOINC, SNOMED, UCUM};
 use crate::{EventDraft, ImportError, ImportResult, Skipped};
 
@@ -211,8 +212,134 @@ fn import_medication_statement(res: &Value, result: &mut ImportResult) {
         kind: EventKind::MedicationStatement,
         code: Some(code),
         effective_at,
-        value: None,
+        value: medication_dosage(res).map(EventValue::Dosage),
     });
+}
+
+/// `dosage[0]` as a core dosage. Further `dosage` entries (a split or tapering
+/// schedule) are ignored for now: core's dosage is one sig.
+///
+/// | FHIR | Dosage |
+/// |---|---|
+/// | `text` | `text` |
+/// | `timing.repeat.frequency` / `period` / `periodUnit` | the same; no `frequency` → 1 |
+/// | `timing.repeat.when[0]` | `when`, if in R4's EventTiming value set |
+/// | `timing.code` (only when `repeat` is absent) | see [`timing_abbreviation`] |
+/// | `asNeededBoolean` | `as_needed` |
+/// | `asNeededCodeableConcept` (any) | `as_needed` true |
+/// | `doseAndRate[0].doseQuantity` | `dose`; a `doseRange` is dropped |
+///
+/// Only the units `h`, `d`, `wk`, `mo` are kept (`s`, `min`, `a` drop the
+/// schedule). A `frequency` with no usable period is dropped with it: "3
+/// times" per nothing is not a schedule.
+fn medication_dosage(res: &Value) -> Option<Dosage> {
+    let d = res.get("dosage")?.as_array()?.first()?;
+    let timing = d.get("timing");
+    let (repeat, when) = match timing.and_then(|t| t.get("repeat")) {
+        Some(r) => (
+            timing_repeat(r),
+            r.get("when")
+                .and_then(Value::as_array)
+                .and_then(|w| w.first())
+                .and_then(Value::as_str)
+                .and_then(dosage::fhir_when),
+        ),
+        None => timing
+            .and_then(|t| t.get("code"))
+            .and_then(timing_abbreviation)
+            .unwrap_or_default(),
+    };
+    let as_needed = match d.get("asNeededBoolean") {
+        Some(Value::Bool(b)) => Some(*b),
+        _ => d.get("asNeededCodeableConcept").map(|_| true),
+    };
+    let dose = d
+        .get("doseAndRate")
+        .and_then(Value::as_array)
+        .and_then(|r| r.first())
+        .and_then(|r| r.get("doseQuantity"))
+        .and_then(|q| {
+            dosage::dose(Quantity {
+                value: quantity_value_str(q)?,
+                unit: quantity_unit(q),
+            })
+        });
+    dosage::finish(dosage::Parts {
+        dose,
+        text: d
+            .get("text")
+            .and_then(Value::as_str)
+            .and_then(dosage::sig_text),
+        repeat,
+        when,
+        as_needed,
+    })
+}
+
+fn timing_repeat(r: &Value) -> Option<dosage::Repeat> {
+    let period = json_decimal(r.get("period")?)?;
+    let unit = dosage::period_unit(r.get("periodUnit")?.as_str()?)?;
+    let frequency = match r.get("frequency") {
+        Some(f) => json_decimal(f)?,
+        None => "1".to_string(),
+    };
+    dosage::repeat(&frequency, &period, unit)
+}
+
+const GTS_ABBREVIATION: &str = "http://terminology.hl7.org/CodeSystem/v3-GTSAbbreviation";
+
+/// A `timing.code` from FHIR's timing-abbreviation value set, as the schedule
+/// it names. Matched in the GTS code system, or a coding with no system;
+/// a same-spelled code in another system is not assumed to mean the same.
+///
+/// | Code | Frequency / period | `when` |
+/// |---|---|---|
+/// | `QD` | 1 / 1 d | |
+/// | `BID` | 2 / 1 d | |
+/// | `TID` | 3 / 1 d | |
+/// | `QID` | 4 / 1 d | |
+/// | `QOD` | 1 / 2 d | |
+/// | `Q1H` `Q2H` `Q3H` `Q4H` `Q6H` `Q8H` | 1 / N h | |
+/// | `WK` | 1 / 1 wk | |
+/// | `MO` | 1 / 1 mo | |
+/// | `AM` | 1 / 1 d | `MORN` |
+/// | `PM` | 1 / 1 d | `AFT` |
+/// | `BED` | 1 / 1 d | `HS` |
+///
+/// `PM` is `AFT`, not `EVE`: the code system defines it as "every afternoon".
+fn timing_abbreviation(cc: &Value) -> Option<(Option<dosage::Repeat>, Option<String>)> {
+    use PeriodUnit::{Day, Hour, Month, Week};
+    let (f, p, unit, when) = cc
+        .get("coding")?
+        .as_array()?
+        .iter()
+        .filter(|c| {
+            c.get("system")
+                .and_then(Value::as_str)
+                .is_none_or(|s| s == GTS_ABBREVIATION)
+        })
+        .find_map(|c| {
+            Some(match c.get("code")?.as_str()? {
+                "QD" => ("1", "1", Day, None),
+                "BID" => ("2", "1", Day, None),
+                "TID" => ("3", "1", Day, None),
+                "QID" => ("4", "1", Day, None),
+                "QOD" => ("1", "2", Day, None),
+                "Q1H" => ("1", "1", Hour, None),
+                "Q2H" => ("1", "2", Hour, None),
+                "Q3H" => ("1", "3", Hour, None),
+                "Q4H" => ("1", "4", Hour, None),
+                "Q6H" => ("1", "6", Hour, None),
+                "Q8H" => ("1", "8", Hour, None),
+                "WK" => ("1", "1", Week, None),
+                "MO" => ("1", "1", Month, None),
+                "AM" => ("1", "1", Day, Some("MORN")),
+                "PM" => ("1", "1", Day, Some("AFT")),
+                "BED" => ("1", "1", Day, Some("HS")),
+                _ => return None,
+            })
+        })?;
+    Some((dosage::repeat(f, p, unit), when.and_then(dosage::fhir_when)))
 }
 
 // --- Encounter ---
@@ -311,7 +438,13 @@ fn coding_direct(c: &Value) -> Option<Code> {
 /// A `Quantity.value` as its exact source literal — see the module doc
 /// comment on why this must not go through `f64`.
 fn quantity_value_str(q: &Value) -> Option<String> {
-    match q.get("value")? {
+    json_decimal(q.get("value")?)
+}
+
+/// A JSON number as its source literal (so `1e1` stays `1e1`, for core to
+/// refuse, rather than becoming `10`), or a string as given.
+fn json_decimal(v: &Value) -> Option<String> {
+    match v {
         Value::Number(n) => Some(n.to_string()),
         Value::String(s) => Some(s.clone()),
         _ => None,

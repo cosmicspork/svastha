@@ -11,9 +11,10 @@
 
 use roxmltree::{Document, Node};
 
-use svastha_core::event::{Code, EventKind, EventValue};
+use svastha_core::event::{Code, Dosage, EventKind, EventValue, PeriodUnit, Quantity};
 
 use crate::dates::hl7_ts_to_iso;
+use crate::dosage;
 use crate::systems::{CVX, ICD10CM, LOINC, RXNORM, SNOMED, UCUM};
 use crate::{EventDraft, ImportError, ImportResult, Skipped};
 
@@ -238,6 +239,21 @@ fn import_medications(section: Node, result: &mut ImportResult) {
         let med_code = find_child(material, "code").and_then(extract_code);
         let effective_at = effective_time(sa, what, result);
 
+        // A dosage only on a coded medication: an uncoded one with a sig
+        // would be a fact with no identity, and keeps the shape below.
+        if let Some(dosage) = med_code
+            .as_ref()
+            .and_then(|_| medication_dosage(sa, section))
+        {
+            result.events.push(EventDraft {
+                kind: EventKind::MedicationStatement,
+                code: med_code,
+                effective_at,
+                value: Some(EventValue::Dosage(dosage)),
+            });
+            continue;
+        }
+
         // Dose, when present as a quantity with a real unit, is the value;
         // otherwise fall back to the medication's own name as text — losing
         // the dose is better than losing the fact of the medication entirely.
@@ -271,6 +287,96 @@ fn import_medications(section: Node, result: &mut ImportResult) {
             value,
         });
     }
+}
+
+/// Medication Free Text Sig, nested in a Medication Activity by
+/// entryRelationship.
+const FREE_TEXT_SIG: &str = "2.16.840.1.113883.10.20.22.4.147";
+
+/// The Medication Activity's dosage, from what it states:
+///
+/// | Source | Dosage |
+/// |---|---|
+/// | `effectiveTime xsi:type="PIVL_TS"`, `<period value="8" unit="h"/>` | 1 per 8 `h` |
+/// | the same with `institutionSpecified="true"`, period dividing 24 h | 24/period per 1 `d` (12 h → 2/1 d) |
+/// | `effectiveTime xsi:type="EIVL_TS"`, `<event code="AC"/>` | `when` `AC` |
+/// | `doseQuantity @value @unit` | `dose` |
+/// | `precondition` | `as_needed` true |
+/// | Free Text Sig (4.147) `text`, else the activity's own `text` | `text` |
+///
+/// The period unit is kept only if it is `h`, `d`, `wk`, or `mo`. Of several
+/// PIVL_TS slices the first that maps wins (C-CDA leaves their order open,
+/// so this is the document's order). The IVL_TS slice is the course, read
+/// by `effective_time`, not here. A dose given only as a `low`/`high` range is
+/// dropped: core's dose has no range. A PIVL_TS `<frequency>` child exists
+/// only in the R2 datatypes, which C-CDA does not use, so it is not read.
+fn medication_dosage(sa: Node, section: Node) -> Option<Dosage> {
+    let typed = |t: &'static str| {
+        children_named(sa, "effectiveTime").filter(move |et| xsi_type(*et) == Some(t))
+    };
+    dosage::finish(dosage::Parts {
+        dose: find_child(sa, "doseQuantity").and_then(dose_quantity),
+        text: medication_sig(sa, section),
+        repeat: typed("PIVL_TS").find_map(pivl_repeat),
+        when: typed("EIVL_TS").find_map(|et| {
+            find_child(et, "event")
+                .and_then(|e| e.attribute("code"))
+                .and_then(dosage::v3_when)
+        }),
+        as_needed: children_named(sa, "precondition")
+            .any(|p| p.attribute("typeCode").is_none_or(|t| t == "PRCN"))
+            .then_some(true),
+    })
+}
+
+fn pivl_repeat(et: Node) -> Option<dosage::Repeat> {
+    let period = find_child(et, "period")?;
+    let value = period.attribute("value")?;
+    let unit = dosage::period_unit(period.attribute("unit")?)?;
+    let every = dosage::repeat("1", value, unit)?;
+    // "Every 8 h, at the institution's times" is three times a day, not a
+    // clock schedule; said per day it matches how the sig is read.
+    if et.attribute("institutionSpecified") == Some("true") && unit == PeriodUnit::Hour {
+        if let Ok(hours @ 1..=24) = value.parse::<u32>() {
+            if 24 % hours == 0 {
+                let per_day = (24 / hours).to_string();
+                return dosage::repeat(&per_day, "1", PeriodUnit::Day);
+            }
+        }
+    }
+    Some(every)
+}
+
+/// A `doseQuantity` as a dosage's dose. Unlike the legacy quantity value
+/// below it, the UCUM unity `1` reads as no unit, the way results treat it.
+fn dose_quantity(dq: Node) -> Option<Quantity> {
+    let value = dq.attribute("value")?;
+    let unit = dq.attribute("unit").filter(|u| !u.is_empty() && *u != "1");
+    dosage::dose(Quantity {
+        value: value.to_string(),
+        unit: unit.map(ucum_code),
+    })
+}
+
+/// The sig: a Free Text Sig's text, else the activity's own `text`, each read
+/// through its narrative reference when it has one.
+fn medication_sig(sa: Node, section: Node) -> Option<String> {
+    children_named(sa, "entryRelationship")
+        .flat_map(|er| er.children().filter(|n| n.is_element()))
+        .filter(|n| has_template(*n, FREE_TEXT_SIG))
+        .find_map(|sig| find_child(sig, "text").and_then(|t| sig_text(t, section)))
+        .or_else(|| find_child(sa, "text").and_then(|t| sig_text(t, section)))
+}
+
+/// A `<text>` element's content: its `<reference>` resolved against the
+/// section narrative, else its own inline text. A reference that resolves to
+/// nothing yields the inline text or nothing — the `#id` is an attribute, so
+/// it can never come through as the sig.
+fn sig_text(text_el: Node, section: Node) -> Option<String> {
+    narrative_reference_id(text_el)
+        .and_then(|id| resolve_narrative_reference(section, &id))
+        .and_then(|s| dosage::sig_text(&s))
+        .or_else(|| dosage::sig_text(&flatten_text(text_el)))
 }
 
 // --- immunizations (11369-6) ---

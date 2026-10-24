@@ -18,6 +18,7 @@ use svastha_core::event::{Code, EventKind, EventValue};
 
 pub mod ccda;
 pub mod dates;
+mod dosage;
 pub mod extract;
 pub mod fhir;
 
