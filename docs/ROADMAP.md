@@ -64,9 +64,6 @@ harvest a PR's "## Deferred" notes into the list.
 - Decide how doses ride a meds-scoped doctor share before the app writes them:
   `applyMedScope` and `isMedicationOnlyBundle` know only `medication_statement`,
   so a dose in a med list turns the recipient's pharmacy view off
-- Per-blob tolerance in the household-share pull — one undecodable event (a
-  newer contract's kind) aborts the rest of that share's pass on every pull
-  (`shared.ts` `pullShared`), where the own-vault pull skips just that blob
 - NDC in the offline dictionary — `public/dict` ships LOINC, RxNorm, ICD-10-CM,
   CVX and SNOMED, so an NDC-coded event resolves a name at no layer: `codes.ts`
   knows the system well enough to print "NDC", and nothing anywhere knows the
