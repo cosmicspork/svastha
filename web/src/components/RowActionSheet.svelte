@@ -146,8 +146,10 @@
              them. -->
         <span class="name-hint muted" data-testid="action-priority-hint">
           {#if priorityField === 'hidden'}
-            Hidden {noun} stay on your timeline. They leave this summary and any doctor link you make.
-            People you've granted access to your record still see them.
+            Hidden {noun} stay on your timeline. They leave this summary{section === 'allergy'
+              ? ', your pharmacy list,'
+              : ''} and any doctor link you make. People you've granted access to your record still see
+            them.
           {:else}
             Pinned {noun} lead the list, here and on any doctor link you make.
           {/if}

@@ -249,6 +249,53 @@ test('allergies lead the list, and an empty record never claims none', async ({ 
   await expect(page.getByTestId('pharmacy-allergies-none')).toHaveCount(0)
 })
 
+test('leaves a hidden allergy off the list and the PDF', async ({ page }) => {
+  await onboardViaUI(page)
+  await seedMeds(page)
+  await page.evaluate(
+    async ({ snomed }) => {
+      const { logEvent } = await import('/src/lib/events.ts')
+      const { setPriority } = await import('/src/lib/curation.ts')
+      await logEvent([
+        {
+          kind: 'allergy_intolerance',
+          code: null,
+          effective_at: '2023-05-01T00:00:00+00:00',
+          value: { coded: { system: snomed, code: '91936005', display: 'Penicillin allergy' } },
+        },
+        {
+          kind: 'allergy_intolerance',
+          code: null,
+          effective_at: '2023-06-01T00:00:00+00:00',
+          value: { coded: { system: snomed, code: '232350006', display: 'Dust mite allergy' } },
+        },
+      ])
+      // The concept-level hide from the summary's action sheet (`priority:`),
+      // not an event hide: every event of the concept, by its concept key.
+      await setPriority(`allergy_intolerance|${snomed}|232350006`, 'hidden')
+    },
+    { snomed: SNOMED },
+  )
+  await page.reload()
+  await unlock(page)
+  await openPharmacy(page)
+
+  await expect(page.getByTestId('pharmacy-allergies')).toContainText('Penicillin')
+  await expect(page.getByTestId('pharmacy-allergies')).not.toContainText('Dust mite')
+
+  await page.getByTestId('pharmacy-share').click()
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByTestId('pharmacy-share-pdf').click()
+  const bytes = (await import('node:fs')).readFileSync((await (await downloadPromise).path())!)
+  const text = await page.evaluate(async (data) => {
+    const { textLayer } = await import('/src/lib/pdf.ts')
+    const lines = await textLayer(new Uint8Array(data))
+    return lines.map((l) => l.text).join('\n')
+  }, [...bytes])
+  expect(text).toContain('Penicillin')
+  expect(text).not.toContain('Dust mite')
+})
+
 test('stacks the row on a phone and keeps it side by side on a wide screen', async ({ page }) => {
   await onboardViaUI(page)
   await seedMeds(page)
