@@ -10,7 +10,9 @@ export interface RouteMatch {
   params: Record<string, string>
 }
 
-const KNOWN_PATTERNS = [
+/** Every route the app can render. Exported so the screenshot sweep's coverage
+ * test (e2e/sweep/manifest.ts) checks against the router itself, not a copy. */
+export const KNOWN_PATTERNS: readonly string[] = [
   '/',
   '/timeline',
   '/summary',

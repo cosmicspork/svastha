@@ -27,3 +27,6 @@ IHE_XDM/
 HealthSummary*.zip
 *AllPatientData*
 *.health.zip
+
+# Screenshot sweep output (just sweep): local review only, never committed.
+web/sweep-out/

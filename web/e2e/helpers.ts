@@ -3,7 +3,9 @@ import { expect, type Locator, type Page } from '@playwright/test'
 export const PASSPHRASE = 'correct horse battery staple'
 
 /** The relay origin from playwright.config.ts. */
-export const RELAY = 'http://127.0.0.1:8787'
+// Overridable so a run with its own relay (the screen sweep, or a second
+// checkout's suite) never talks to a relay built from other code.
+export const RELAY = process.env.SVASTHA_E2E_RELAY ?? 'http://127.0.0.1:8787'
 
 /** Drive the real onboarding UI: generate a mnemonic, confirm the randomly
  * chosen words, set a passphrase, and land on the home screen. Returns the

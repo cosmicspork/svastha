@@ -54,6 +54,14 @@ e2e:
     cargo build -p svastha-relay
     cd web && bun install && bunx playwright install chromium && bun run e2e
 
+# every screen, light and dark, phone and desktop, from one synthetic vault, into
+# web/sweep-out/ (gitignored) with an index.html contact sheet. On demand only;
+# CI never runs it. Flags: --only <areas>, --state <id substring>, --sizes,
+# --schemes, --list (see web/e2e/sweep/run.ts).
+sweep *args:
+    cargo build -p svastha-relay
+    cd web && bun install && bunx playwright install chromium && bun e2e/sweep/run.ts {{args}}
+
 # --- dev tooling ---
 
 # pull this identity's relay blobs and decrypt into SVASTHA_DECRYPT_OUT
