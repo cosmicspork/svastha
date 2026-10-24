@@ -157,6 +157,7 @@ export function layoutPharmacyPdf(
       const lines: { size: number }[] = [{ size: NAME_SIZE }]
       if (row.dose) lines.push({ size: BODY_SIZE })
       if (row.sig) lines.push({ size: BODY_SIZE })
+      if (row.frequencyMissing) lines.push({ size: BODY_SIZE })
       if (row.asNeeded) lines.push({ size: BODY_SIZE })
       lines.push({ size: BODY_SIZE }) // prescriber
       if (row.code) lines.push({ size: SMALL_SIZE })
@@ -165,6 +166,7 @@ export function layoutPharmacyPdf(
       emit(`${row.n}. ${row.name}`, NAME_SIZE, true)
       if (row.dose) emit(row.dose, BODY_SIZE, true, 16)
       if (row.sig) emit(row.sig, BODY_SIZE, false, 16)
+      if (row.frequencyMissing) emit('Frequency not recorded — ask', BODY_SIZE, false, 16)
       if (row.asNeeded) emit('As needed', BODY_SIZE, false, 16)
       emit(`Prescribed by: ${row.prescriber || 'Not recorded'}`, BODY_SIZE, false, 16)
       if (row.code) emit(row.code, SMALL_SIZE, false, 16)

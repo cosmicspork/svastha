@@ -37,6 +37,7 @@ import {
   type RegimenRoute,
 } from './curation'
 import { isoToMillis } from './time'
+import { renderDosage } from './dosage'
 
 /** The cycle section's shape: exactly {@link cycleStats}' non-null result. */
 export type CycleSummary = CycleStats
@@ -109,12 +110,21 @@ export interface SummaryRow {
   pinned: boolean
   /** A short status chip beside the label ("current" / "past"). Work rows only. */
   chip?: string
-  /** A quiet second line under the label; takes the place of the regimen line.
+  /** A quiet second line under the label (medication rows have their frequency
+   * line instead).
    * Work rows only (a job's exposures). */
   subline?: string
   /** Suppress the trailing full date. A job's `date` is a start year in
    * practice, and "Jan 1, 2019" would claim a precision nobody gave. */
   hideDate?: boolean
+  /** How often the record says a medication is taken: the newest folded event's
+   * rendered `dosage` timing (see `renderDosage`), '' when none states one.
+   * Kept apart from `regimen`, which is what the owner says they take. */
+  prescribed?: string
+  /** Where a medication's folded events came from: imported or approved from a
+   * paper record ('records'), logged by the owner ('self'), or both. Absent when
+   * no event says (older or unattributed sources). */
+  origin?: 'records' | 'self' | 'both'
 }
 
 export interface ClinicianSummary {
@@ -443,9 +453,46 @@ function foldSection(
       status: curation.status.get(key) ?? 'active',
       regimen: curation.regimen.get(key),
       pinned: curation.priority.get(key) === 'pinned',
+      prescribed: prescribedFrequency(group),
+      origin: originOf(group),
     })
   }
   return rows
+}
+
+/** The newest folded event that states a frequency, not merely the newest one
+ * carrying a `dosage`: a later refill that records only a dose must not hide the
+ * sig an earlier statement holds (same stance as `medicationDose`). */
+function prescribedFrequency(group: Ev[]): string {
+  const stated = group.filter((e) => e.value && 'dosage' in e.value && renderDosage(e.value.dosage))
+  const latest = mostRecent(stated)
+  return latest && latest.value && 'dosage' in latest.value ? renderDosage(latest.value.dosage) : ''
+}
+
+/** An approved proposal (e.g. OCR of a paper record) is signed by the owner's
+ * device, so its `source` is the proposer's method rather than 'self'; the
+ * `proposed` stamp is what marks it as coming from a record. */
+function originOf(group: Ev[]): SummaryRow['origin'] {
+  let records = false
+  let self = false
+  for (const e of group) {
+    const proposed = (e as Ev & { proposed?: unknown }).proposed
+    const source = e.provenance?.source ?? ''
+    if (proposed || source.startsWith('import:')) records = true
+    else if (source === 'self') self = true
+  }
+  return records && self ? 'both' : records ? 'records' : self ? 'self' : undefined
+}
+
+/** The frequency chain every medication view shares: the owner's own schedule
+ * ("what I actually do"), else what the record prescribes, else a gap. */
+export type MedFrequency = { kind: 'owner' | 'prescribed'; text: string } | { kind: 'missing' }
+
+export function medicationFrequency(row: SummaryRow): MedFrequency {
+  const schedule = row.regimen?.schedule?.trim()
+  if (schedule) return { kind: 'owner', text: schedule }
+  if (row.prescribed) return { kind: 'prescribed', text: `As prescribed: ${row.prescribed}` }
+  return { kind: 'missing' }
 }
 
 function quantityString(e: Ev): string {

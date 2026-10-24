@@ -59,7 +59,8 @@ harvest a PR's "## Deferred" notes into the list.
 - Log a dose from the Meds form as a `medication_dose` event, and render one on
   the timeline and in the summary (core and the node already decode and render
   it; the web only files it under Meds today)
-- Render a `dosage`'s frequency and sig — the timeline shows only its dose
+- Render a `dosage`'s frequency and sig on the timeline — the summary, medications
+  page and pharmacy list show it, the timeline shows only its dose
 - Decide how doses ride a meds-scoped doctor share before the app writes them:
   `applyMedScope` and `isMedicationOnlyBundle` know only `medication_statement`,
   so a dose in a med list turns the recipient's pharmacy view off

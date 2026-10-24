@@ -138,6 +138,7 @@
             {coveredSystems}
             curateLabel="Edit details"
             detailLabel="Dose"
+          frequency
             onviewtimeline={viewOnTimeline}
             onrowtap={(row) => (action = row)}
           />
@@ -156,6 +157,7 @@
             {coveredSystems}
             curateLabel="Edit details"
             detailLabel="Dose"
+          frequency
             onviewtimeline={viewOnTimeline}
             onrowtap={(row) => (action = row)}
           />
@@ -184,6 +186,7 @@
               {coveredSystems}
               curateLabel="Edit details"
               detailLabel="Dose"
+          frequency
               onviewtimeline={viewOnTimeline}
               onrowtap={(row) => (action = row)}
             />

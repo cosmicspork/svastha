@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { SummaryRow } from '../lib/summary'
+  import { medicationFrequency, type SummaryRow } from '../lib/summary'
   import { REGIMEN_ROUTE_LABELS } from '../lib/curation'
   import {
     startSwipe,
@@ -20,6 +20,7 @@
     coveredSystems = new Set<string>(),
     readonly = false,
     heading = 'h2',
+    frequency = false,
     headingHidden = false,
     curateLabel = 'Edit',
     detailLabel = 'Value',
@@ -49,6 +50,9 @@
     /** The section heading level. A sub-group (Current/Past, Active/Resolved)
      * renders `h3` under the parent's `h2`; standalone sections keep `h2`. */
     heading?: 'h2' | 'h3'
+    /** Medication rows only: show how often it is taken on its own line under
+     * the name, with where the row came from. */
+    frequency?: boolean
     /** Hide the heading visually while keeping it in the accessibility tree.
      * The medications page's catch-all shelf is deliberately unlabelled on
      * screen — it is the rows that have *no* label — but a screen reader still
@@ -172,14 +176,11 @@
 
   const panelId = (key: string): string => `sum-panel-${key.replace(/[^a-zA-Z0-9]+/g, '-')}`
 
-  /** The quiet second line under a medication's name: how it is taken and who
-   * prescribed it. Empty (and so unrendered) when neither was recorded — the
-   * row must not grow a blank line to say nothing. */
-  function regimenSubLine(row: SummaryRow): string {
-    if (row.subline !== undefined) return row.subline
-    const r = row.regimen
-    if (!r) return ''
-    return [r.schedule, r.prescriber].filter(Boolean).join(' · ')
+  const ORIGIN_LABELS = { records: 'from records', self: 'added by you', both: 'records + you' } as const
+
+  function openRegimen(e: Event, row: SummaryRow): void {
+    e.stopPropagation()
+    onrowtap?.(row)
   }
 </script>
 
@@ -260,10 +261,41 @@
                         <span class="hint" data-testid="summary-unnamed-hint">{hint}</span>
                       {/if}
                     {/if}
-                    {#if regimenSubLine(row)}
-                      <span class="subline muted" data-testid="summary-regimen-subline"
-                        >{regimenSubLine(row)}</span
-                      >
+                    {#if frequency}
+                      {@const f = medicationFrequency(row)}
+                      <span class="freq-line" data-testid="summary-frequency-line">
+                        {#if f.kind !== 'missing'}
+                          <span class="freq" data-testid="summary-frequency">{f.text}</span>
+                        {:else if canCurate}
+                          <!-- Not a nested <button>: the whole row is one. Swallow the
+                               pointer and click so the row neither expands nor starts a
+                               swipe, and open the same editor "Edit details" opens. -->
+                          <span
+                            class="freq gap"
+                            role="button"
+                            tabindex="0"
+                            data-testid="summary-frequency-missing"
+                            onpointerdown={(e) => e.stopPropagation()}
+                            onclick={(e) => openRegimen(e, row)}
+                            onkeydown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault()
+                                openRegimen(e, row)
+                              }
+                            }}>Frequency not recorded</span
+                          >
+                        {:else}
+                          <span class="freq muted" data-testid="summary-frequency-missing"
+                            >Frequency not recorded</span
+                          >
+                        {/if}
+                        {#if row.origin}
+                          <span class="origin" data-testid="summary-origin">{ORIGIN_LABELS[row.origin]}</span>
+                        {/if}
+                      </span>
+                    {/if}
+                    {#if row.subline}
+                      <span class="subline muted" data-testid="summary-subline">{row.subline}</span>
                     {/if}
                   </span>
                   {#if row.chip}
@@ -582,9 +614,42 @@
     color: var(--flare);
   }
 
+  /* A work row's industry and exposures. */
   .subline {
     font-size: var(--text-xs);
     overflow-wrap: anywhere;
+  }
+
+  .freq-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-1) var(--space-2);
+    font-size: var(--text-xs);
+    overflow-wrap: anywhere;
+  }
+
+  /* The owner can fix a gap in one tap; a recipient (and paper) just sees it. */
+  .freq.gap {
+    color: var(--flare);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+  }
+
+  .origin {
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  @media print {
+    .freq.gap {
+      color: inherit;
+      text-decoration: none;
+    }
   }
 
   /* "As needed" is a chip, not a shelf: it qualifies a current medication

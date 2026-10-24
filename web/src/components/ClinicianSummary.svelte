@@ -436,6 +436,7 @@
           {coveredSystems}
         curateLabel="Mark past or rename"
         detailLabel="Dose"
+          frequency
         {readonly}
         {onviewtimeline}
         onrowtap={readonly ? undefined : (row) => openAction(row, 'med')}
@@ -450,6 +451,7 @@
           {coveredSystems}
           curateLabel="Mark past or rename"
           detailLabel="Dose"
+          frequency
           {readonly}
           {onviewtimeline}
           onrowtap={readonly ? undefined : (row) => openAction(row, 'med')}
@@ -476,6 +478,7 @@
           {coveredSystems}
             curateLabel="Mark current or rename"
             detailLabel="Dose"
+          frequency
             {readonly}
             {onviewtimeline}
             onrowtap={readonly ? undefined : (row) => openAction(row, 'med')}

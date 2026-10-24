@@ -200,12 +200,13 @@ test('medications page: as-needed is a chip on a current row, never a shelf of i
   const zolpidem = shelf(page, 'summary-section-by-mouth').filter({ hasText: 'Zolpidem' })
   await expect(zolpidem).toHaveCount(1)
   await expect(zolpidem.getByTestId('summary-prn-chip')).toContainText('As needed')
-  // The sub-line carries schedule and prescriber, joined — not a second row.
-  await expect(zolpidem.getByTestId('summary-regimen-subline')).toHaveText('At bedtime · Dr. Rivera')
-  // A scheduled med on the same shelf carries neither.
+  // The owner's schedule is the frequency line; the prescriber lives in the panel.
+  await expect(zolpidem.getByTestId('summary-frequency')).toHaveText('At bedtime')
+  // A scheduled med on the same shelf carries no chip, and its missing
+  // frequency reads as a gap.
   const lisinopril = shelf(page, 'summary-section-by-mouth').filter({ hasText: 'Lisinopril' })
   await expect(lisinopril.getByTestId('summary-prn-chip')).toHaveCount(0)
-  await expect(lisinopril.getByTestId('summary-regimen-subline')).toHaveCount(0)
+  await expect(lisinopril.getByTestId('summary-frequency-missing')).toHaveText('Frequency not recorded')
   // No "As needed" shelf exists on this page — the chip is the whole story.
   await expect(page.getByTestId('summary-section-as-needed')).toHaveCount(0)
   await expect(page.getByTestId('page-past-toggle')).toHaveCount(0)

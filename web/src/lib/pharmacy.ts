@@ -6,7 +6,7 @@
 // walks that could disagree about order or numbering.
 import type { Regimen } from './curation'
 import { REGIMEN_ROUTE_LABELS, type RegimenRoute } from './curation'
-import { shelveMedications, type SummaryRow } from './summary'
+import { medicationFrequency, shelveMedications, type SummaryRow } from './summary'
 
 export type PharmacyGroupId = 'unrouted' | RegimenRoute | 'past'
 
@@ -25,6 +25,9 @@ export interface PharmacyRow {
    * the row carries that separately, and a sig that names a doctor reads like
    * part of the direction. */
   sig: string
+  /** True when neither the owner nor the record states how often it is taken;
+   * the view says "Frequency not recorded — ask" rather than leaving a gap. */
+  frequencyMissing: boolean
   asNeeded: boolean
   prescriber: string
   /** The row's terminology coding, rendered as "RxNorm 6809", or '' when the
@@ -59,6 +62,17 @@ export function sigLine(regimen: Regimen | undefined): string {
   return [regimen.schedule, regimen.instructions].filter(Boolean).join(' · ')
 }
 
+/** The sig a pharmacist reads: the owner's schedule, else "As prescribed: …"
+ * from the record (the same chain as the summary), plus the owner's
+ * instructions either way. */
+function rowSig(row: SummaryRow): string {
+  const freq = medicationFrequency(row)
+  if (freq.kind === 'owner') return sigLine(row.regimen)
+  return [freq.kind === 'prescribed' ? freq.text : '', row.regimen?.instructions]
+    .filter(Boolean)
+    .join(' · ')
+}
+
 /**
  * Flatten the medication fold into numbered groups.
  *
@@ -86,7 +100,8 @@ export function buildPharmacyGroups(rows: SummaryRow[]): PharmacyGroup[] {
         key: row.key,
         name: row.label,
         dose: row.detail,
-        sig: sigLine(row.regimen),
+        sig: rowSig(row),
+        frequencyMissing: medicationFrequency(row).kind === 'missing',
         asNeeded: row.regimen?.as_needed === true,
         prescriber: row.regimen?.prescriber ?? '',
         code: row.coding ? `${row.coding.system} ${row.coding.code}` : '',
