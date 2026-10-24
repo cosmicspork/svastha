@@ -48,12 +48,25 @@ harvest a PR's "## Deferred" notes into the list.
   canonical URL, so stored events resolve labels/dictionary only because the
   PWA now folds known OIDs at render time (`codes.ts` `canonicalSystem`). Doing
   it once at import would make stored events self-describing.
+- Write a `dosage` value on imported `medication_statement`s — FHIR
+  `dosage[0]` and the C-CDA sig, into the shape core validates (an exponent or
+  signed amount drops that field, keeping the sig text)
 - Seed `regimen:` from spreadsheet/med-list import — schedule, route,
   prescriber, and course dates are typed by hand today, one medication at a
   time
 
 ## Web
 
+- Log a dose from the Meds form as a `medication_dose` event, and render one on
+  the timeline and in the summary (core and the node already decode and render
+  it; the web only files it under Meds today)
+- Render a `dosage`'s frequency and sig — the timeline shows only its dose
+- Decide how doses ride a meds-scoped doctor share before the app writes them:
+  `applyMedScope` and `isMedicationOnlyBundle` know only `medication_statement`,
+  so a dose in a med list turns the recipient's pharmacy view off
+- Per-blob tolerance in the household-share pull — one undecodable event (a
+  newer contract's kind) aborts the rest of that share's pass on every pull
+  (`shared.ts` `pullShared`), where the own-vault pull skips just that blob
 - NDC in the offline dictionary — `public/dict` ships LOINC, RxNorm, ICD-10-CM,
   CVX and SNOMED, so an NDC-coded event resolves a name at no layer: `codes.ts`
   knows the system well enough to print "NDC", and nothing anywhere knows the

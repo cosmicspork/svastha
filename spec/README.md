@@ -24,9 +24,10 @@ Two numbers, deliberately separate:
   at `GET /v0/info`. Clients and relays read it to negotiate capabilities so
   independently deployed and self-hosted pieces can coexist. It advances
   **additively within a major**: a new envelope kind, a new optional field. It is
-  **`2`** as of the node/protocol wave: `1` added the typed mailbox envelope and
-  the optional event provenance field, and `2` added key epochs (the vault-key
-  keyring); it was `0` through the first release.
+  **`3`**: `1` added the typed mailbox envelope and the optional event provenance
+  field, `2` added key epochs (the vault-key keyring), and `3` added the
+  `medication_dose` event kind and the `dosage` event value; it was `0` through
+  the first release.
 - **The contract *major*** — the cryptographic era embedded in every HKDF /
   domain-separation label (`svastha/v{MAJOR}/…`, currently `0`). It bumps **only**
   on a key-rotating break that re-derives every identity and re-wraps every vault
@@ -47,6 +48,14 @@ new — but no *derived* value moves. A legacy single-key `vault.key` still read
 and the epoch marker rides in AEAD associated data, not in any signed or derived
 preimage. So the pre-existing test vectors are byte-identical across the `1 → 2`
 bump except for the `contract_version` field itself.
+
+The `2 → 3` bump is the same shape at the event layer: a new kind and a new value
+variant (tag `0x04`) appear only in new events, so every pre-existing event
+canonicalizes to the bytes it always did, keeps its id, and keeps its signature;
+no derived key moves. Its vectors are appended to `vectors/event.json`, and the
+entries before them are byte-identical except for `contract_version`. A build
+older than `3` cannot decode an event carrying either new shape, which sets a
+rollout order — see "Event schema", below.
 
 ## Key derivation
 
@@ -229,10 +238,18 @@ canonical byte encoding.
 
 An event has a `kind` (one of `observation`, `condition`, `medication_statement`,
 `immunization`, `encounter`, `procedure`, `allergy_intolerance`, `document`,
-`nutrition_intake`), an optional `code` (a terminology `Code`: `system`, `code`,
+`nutrition_intake`, `medication_dose`), an optional `code` (a terminology `Code`: `system`, `code`,
 optional `display`), an optional ISO-8601 `effective_at`, an optional `value`,
 a `provenance` (`source`, optional `source_doc`), and an optional `proposed`
-(see "Proposal provenance" below). A `value` is one of:
+(see "Proposal provenance" below).
+
+`medication_statement` and `medication_dose` are deliberately separate facts:
+a statement is standing ("I take / was on this medication"), a dose is a moment
+("I took this, at this time" — one rescue-inhaler puff), dated by its
+`effective_at`. The kind is part of the canonical content, so a dose never
+collapses with a statement that shares its code, time, and value.
+
+A `value` is one of:
 
 - `quantity` — a decimal-string `value` and an optional UCUM `unit` (`Code`).
   Numbers are strings, never floats, so the bytes are exact and reproducible.
@@ -248,6 +265,39 @@ a `provenance` (`source`, optional `source_doc`), and an optional `proposed`
   sibling `text`-valued `document` event sharing the attachment's `effective_at`
   (the multi-part convention below), so it lives where a note's text lives and
   the image event's id stays a pure function of the bytes.
+- `dosage` — how a medication is taken, as a source states it (FHIR `Dosage`, a
+  C-CDA sig). Every field is optional; numbers are strings, never floats:
+  - `dose` — a quantity: `value` and an optional UCUM `unit` (`Code`), the same
+    two fields the `quantity` variant carries;
+  - `text` — the free-text sig (FHIR `dosage.text`);
+  - `frequency` — administrations per period (FHIR `timing.repeat.frequency`);
+  - `period` — the period's length (FHIR `timing.repeat.period`);
+  - `period_unit` — one of `h`, `d`, `wk`, `mo` (a UCUM subset; FHIR
+    `timing.repeat.periodUnit`);
+  - `when` — an event-timing code, e.g. `AC`, `HS` (FHIR `timing.repeat.when`);
+  - `as_needed` — a boolean (FHIR `asNeededBoolean`); absent means the source did
+    not say, `false` means scheduled.
+
+  A `dosage` is **validated**, on construction and on decode, so an invalid one
+  cannot be hashed, signed, or read. An implementation must refuse:
+  - an empty dosage (every field absent) — it says nothing — and a blank
+    (empty or whitespace-only) `text` or `when`, which would otherwise smuggle one
+    past that rule;
+  - a `frequency` that is not a positive integer in ASCII digits with no leading
+    zero (`[1-9][0-9]*`): `1.5`, `-1`, ` 2`, `0`, `01`, and non-ASCII digits such
+    as `٣` are refused;
+  - a `period` or `dose.value` that is not an unsigned ASCII decimal,
+    `(0|[1-9][0-9]*)(\.[0-9]+)?`: no sign, exponent, leading zero, bare or
+    trailing point, or surrounding space. (The `quantity` variant's `value`
+    predates this rule and is not validated. The rule gives one amount one
+    spelling, and lets any reader parse it without a float.)
+  - a `period_unit` outside the four names (`min`, `H`, and the empty string are
+    refused);
+  - a `period` without a `period_unit`, or a `period_unit` without a `period`.
+
+  The contract does not pair values with kinds — a `dosage` decodes on any kind,
+  as an `attachment` does. Which kinds carry one is a writer convention: import
+  writes it on `medication_statement`.
 
 ### Canonical encoding
 
@@ -259,10 +309,21 @@ Fields are encoded into a deterministic byte string:
 - **`kind`** → its wire name (the `snake_case` string above), length-prefixed, so
   reordering the enum cannot silently change ids.
 - **`value`** → a 1-byte variant tag (`0x00` quantity, `0x01` coded, `0x02` text,
-  `0x03` attachment) followed by its fields in the order listed above. An
-  `attachment` is `sha256` (string) ‖ `mime` (string) ‖ `size`, where `size` is a
-  **u64 as 8 big-endian bytes** — the same fixed-width integer encoding the
-  relay-auth preimage already uses for its timestamp.
+  `0x03` attachment, `0x04` dosage) followed by its fields in the order listed
+  above. An `attachment` is `sha256` (string) ‖ `mime` (string) ‖ `size`, where
+  `size` is a **u64 as 8 big-endian bytes** — the same fixed-width integer
+  encoding the relay-auth preimage already uses for its timestamp.
+- **`dosage`** → `dose? ‖ text? ‖ frequency? ‖ period? ‖ period_unit? ‖ when? ‖
+  as_needed?`, every field an option (`0x00`, or `0x01` ‖ its encoding):
+  - `dose` → `value` (string) ‖ `unit?` (option of `Code`) — exactly the
+    `quantity` variant's fields, without its variant tag;
+  - `text`, `frequency`, `period`, `when` → strings;
+  - `period_unit` → its name (`h`, `d`, `wk`, `mo`) as a string;
+  - `as_needed` → **one byte**, `0x00` false or `0x01` true.
+
+  So the same `500 mg` written as a `quantity` value and as a `dosage` with only a
+  `dose` are different bytes (tag `0x00` versus `0x04` and six absent-field
+  bytes) and different ids. That is intended: they are different facts.
 
 The **canonical content** is `kind ‖ code? ‖ effective_at? ‖ value?`. It excludes
 `id`, `provenance`, and `proposed`, so a fact reported by two sources — or the same
@@ -281,6 +342,24 @@ domain tag is version-independent by design, so ids are stable regardless. It
 therefore needs no *major* bump (which would rotate every derived identity and
 HKDF label and orphan every existing vault). New vectors are pinned under the
 current major; see "Versioning" at the top.
+
+The `medication_dose` kind and the `dosage` variant (contract version `3`) follow
+the same reasoning: additive, no major bump, and every pre-existing event's bytes,
+id, and signature unchanged.
+
+**Rollout.** A reader on a build older than `3` cannot decode an event of either
+shape, so no writer should emit one until the readers that matter run the new
+build: core first, then the node (an older node drops the event from its index,
+so its answers silently omit it), then the web build that writes doses or
+imports dosages. How each older reader skips such an event, and what that costs
+it, is a property of that reader; `docs/ARCHITECTURE.md` records the current
+ones.
+
+**Interop (informative).** On FHIR export, a `medication_dose` is a
+MedicationStatement with `effectiveDateTime` (not a MedicationAdministration,
+which is for clinician-administered doses), and a `dosage` maps to `dosage[0]`:
+`text`, `timing.repeat.frequency`/`period`/`periodUnit`/`when`,
+`asNeededBoolean`, and `doseAndRate[0].doseQuantity`.
 
 ### Proposal provenance
 
@@ -342,7 +421,10 @@ fails verification.
 Test vectors: [`vectors/event.json`](vectors/event.json). Each entry pins a
 structured `event` → its `canon` bytes and `id`; signed entries add a
 `signer_seed`, the `author`, and the (deterministic, RFC 8032) `signature`. Two
-entries differ only in provenance to pin the cross-source id collision. The
+entries differ only in provenance to pin the cross-source id collision. Entries
+are only ever appended; version `3` added a `medication_dose`, a `dosage` with
+every field present, and a `dosage` with most fields absent (pinning the `0x00`
+presence bytes). The
 existing (proposal-free) signed vectors are themselves the guard that an absent
 `proposed` changes nothing: they still reproduce byte-for-byte. Regenerate with
 `cargo run -p svastha-core --example event_vectors` (only on a deliberate,

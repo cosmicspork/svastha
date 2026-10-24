@@ -146,6 +146,15 @@ typed, signed, stably-identified events, plus a thin mutable curation overlay
   exercise are observations, food is a `nutrition_intake` event, and a
   multi-part entry (a blood pressure reading, a several-item meal) is one event
   per component sharing an `effective_at` — grouping is presentational.
+- Medications are two kinds of fact. A `medication_statement` is standing ("I
+  take / was on this"); a `medication_dose` is a moment ("I took this, at this
+  time" — a rescue-inhaler puff), so a dose log never reads as a med list. How
+  a medication is taken, as an import source states it, is a `dosage` value on
+  the statement: dose, free-text sig, frequency per period, timing code, as
+  needed. Core validates a dosage (a closed set of period units, integer and
+  decimal strings with one spelling each) so every reader can rely on its shape.
+  It is signed history, distinct from the `regimen:` curation below — the
+  owner's own mutable, free-text account of how they take it.
 - Only the small curation overlay needs conflict resolution (last-writer-wins or
   similar).
 - An event may optionally attest that it began as an approved **proposal**: an
@@ -337,6 +346,11 @@ stays under its own license instead of being embedded in signed events.
   will keep changing long after the trust contract is frozen, and `core` stays
   the frozen audit surface — the canonical encoding and content-id rules never
   move to accommodate a parser fix.
+- **FHIR export (not built).** The mapping out is fixed ahead of the exporter so
+  it has nothing to decide: a `medication_dose` is a MedicationStatement with
+  `effectiveDateTime` (MedicationAdministration is for clinician-administered
+  doses), and a `dosage` is its `dosage[0]` (see `spec/README.md`, "Event
+  schema").
 - **Paper records.** A handed-over paper document (a specialist's notes, a
   printed med list — the common case in India) is photographed in the app and
   downscaled on-device, or a PDF the user was sent is attached raw; either is
@@ -558,6 +572,25 @@ rotation cadence (see "Key epochs" in `spec/README.md`). For `ev-` blobs the
 embedded event id is additionally checked against the blob-id suffix after
 opening, and the event signature must verify — a malicious relay cannot inject or
 substitute events.
+
+**Contract skew.** An event this build's core cannot decode — a kind or value
+shape from a newer contract version — fails `verify_event` as a decode error, not
+a false. Readers differ in what that costs, which is what orders a rollout (core,
+then node, then the web build that writes the new shape):
+
+- The **own-vault pull** catches it per blob (`sync.ts`, both the batched walk
+  and the per-id loop): the rest of the pass applies, the blob stays un-`done`
+  and is re-fetched every pull, and the status line shows the decode error until
+  the PWA updates.
+- The **household-share pull** does not: `applySharedSealed` throws into
+  `pullShared`'s per-*share* catch (`shared.ts`), so the rest of that share's pass
+  is abandoned, and because the event never lands it happens again at the same
+  place on every pull. Everything listed after it in that share stays unpulled
+  until the PWA updates, with only a console warning.
+- A **doctor-share recipient** drops and counts it (`verifyBundleEvents`), and the
+  on-device answer path counts it as unreadable (`rank_context`).
+- The **node** drops it at sync (`crates/node/src/sync.rs`, `dispatch`) and
+  continues; the event is absent from its index, so its answers omit it.
 
 **Self-wrapped keyring.** `vault.key` is the vault keyring — each epoch key
 wrapped to the owner's own X25519 public key with the envelope's standard

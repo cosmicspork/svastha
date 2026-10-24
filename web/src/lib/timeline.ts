@@ -94,14 +94,13 @@ export interface TimelineDay {
 
 type Ev = StoredEvent['event']
 
-/** Pull a Quantity's value/unit out of an event, or null for a non-quantity.
- * Exported so summary.ts formats measurements exactly as the spine does rather
- * than re-deriving the shape. */
+/** Pull a Quantity's value/unit out of an event — a quantity value, or a
+ * dosage's dose — or null when there is none. Exported so summary.ts formats
+ * measurements exactly as the spine does rather than re-deriving the shape. */
 export function quantityOf(e: Ev): { value: string; unit: string } | null {
-  if (e.value && 'quantity' in e.value) {
-    return { value: e.value.quantity.value, unit: e.value.quantity.unit?.code ?? '' }
-  }
-  return null
+  if (!e.value) return null
+  const q = 'quantity' in e.value ? e.value.quantity : 'dosage' in e.value ? e.value.dosage.dose : null
+  return q ? { value: q.value, unit: q.unit?.code ?? '' } : null
 }
 
 /** `value unit`, unit-optional — the one place a Quantity becomes a string, so

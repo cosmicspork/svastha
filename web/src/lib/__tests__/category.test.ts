@@ -19,6 +19,7 @@ describe('categorize by kind', () => {
   it('maps non-observation kinds directly', () => {
     expect(categorize({ kind: 'nutrition_intake', value: { text: 'oatmeal' } })).toBe('food')
     expect(categorize({ kind: 'medication_statement', value: { text: 'ibuprofen' } })).toBe('med')
+    expect(categorize({ kind: 'medication_dose', value: { text: 'albuterol' } })).toBe('med')
     expect(categorize({ kind: 'condition' })).toBe('clinical')
     expect(categorize({ kind: 'immunization' })).toBe('clinical')
     expect(categorize({ kind: 'encounter' })).toBe('clinical')

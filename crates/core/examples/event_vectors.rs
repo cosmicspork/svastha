@@ -6,10 +6,13 @@
 //! Each entry carries the structured event, its canonical bytes, and its derived
 //! id; signed entries also carry a fixed signer seed, the author key, and the
 //! (deterministic, RFC 8032) signature. The two observation entries differ only
-//! in provenance to pin the cross-source id collision.
+//! in provenance to pin the cross-source id collision. Entries are only ever
+//! appended: the ones before a contract bump must regenerate byte-identically.
 
 use serde::Serialize;
-use svastha_core::event::{Code, Event, EventKind, EventValue, Provenance};
+use svastha_core::event::{
+    Code, Dosage, DosageFields, Event, EventKind, EventValue, PeriodUnit, Provenance, Quantity,
+};
 use svastha_core::keys::Identity;
 use svastha_core::CONTRACT_VERSION;
 
@@ -71,6 +74,14 @@ fn signed(note: &str, event: Event) -> EventVector {
         author_hex: Some(hex::encode(signed.author())),
         signature_hex: Some(hex::encode(signed.signature())),
         event,
+    }
+}
+
+fn ucum(code: &str) -> Code {
+    Code {
+        system: "http://unitsofmeasure.org".into(),
+        code: code.into(),
+        display: None,
     }
 }
 
@@ -179,6 +190,77 @@ fn main() {
                 Some(EventValue::Text("GI consult — Dr. Rao".into())),
                 Provenance {
                     source: "self".into(),
+                    source_doc: None,
+                },
+            ),
+        ),
+        signed(
+            "medication_dose: one self-reported dose at a time, signed",
+            Event::new(
+                EventKind::MedicationDose,
+                Some(Code {
+                    system: "http://www.nlm.nih.gov/research/umls/rxnorm".into(),
+                    code: "745679".into(),
+                    display: None,
+                }),
+                Some("2026-10-23T14:05:00-05:00".into()),
+                Some(EventValue::Quantity {
+                    value: "2".into(),
+                    unit: Some(ucum("{puff}")),
+                }),
+                Provenance {
+                    source: "self".into(),
+                    source_doc: None,
+                },
+            ),
+        ),
+        signed(
+            "medication_statement with a dosage value, every field present, signed",
+            Event::new(
+                EventKind::MedicationStatement,
+                Some(Code {
+                    system: "http://www.nlm.nih.gov/research/umls/rxnorm".into(),
+                    code: "860975".into(),
+                    display: None,
+                }),
+                Some("2026-01-02".into()),
+                Some(EventValue::Dosage(
+                    Dosage::new(DosageFields {
+                        dose: Some(Quantity {
+                            value: "500".into(),
+                            unit: Some(ucum("mg")),
+                        }),
+                        text: Some("Take 1 tablet by mouth twice daily with meals".into()),
+                        frequency: Some("2".into()),
+                        period: Some("1".into()),
+                        period_unit: Some(PeriodUnit::Day),
+                        when: Some("C".into()),
+                        as_needed: Some(false),
+                    })
+                    .unwrap(),
+                )),
+                Provenance {
+                    source: "Nebraska Medicine".into(),
+                    source_doc: Some("sha256:deadbeef".into()),
+                },
+            ),
+        ),
+        unsigned(
+            "dosage with only text and as_needed: absent fields are 0x00 presence bytes",
+            Event::new(
+                EventKind::MedicationStatement,
+                None,
+                None,
+                Some(EventValue::Dosage(
+                    Dosage::new(DosageFields {
+                        text: Some("2 puffs every 4 hours as needed for wheezing".into()),
+                        as_needed: Some(true),
+                        ..Default::default()
+                    })
+                    .unwrap(),
+                )),
+                Provenance {
+                    source: "Nebraska Medicine".into(),
                     source_doc: None,
                 },
             ),

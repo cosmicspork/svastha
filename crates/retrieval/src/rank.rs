@@ -1,7 +1,7 @@
 //! Scoring and rendering: keyword overlap with light recency, kind, and
 //! temporal-intent signals, over candidates the caller has already resolved.
 
-use svastha_core::event::{Event, EventKind, EventValue};
+use svastha_core::event::{DosageFields, Event, EventKind, EventValue};
 
 use crate::{Candidate, ConceptStatus, ContextItem};
 
@@ -80,6 +80,9 @@ fn score(candidate: &Candidate<'_>, query: &[String], intent: Intent) -> Option<
 /// current/past tag (only where clinically meaningful), the kind, the date, the
 /// name, and the value.
 pub(crate) fn render_line(event: &Event, name: &str, status: ConceptStatus) -> String {
+    if event.kind == EventKind::MedicationDose {
+        return render_dose_line(event, name);
+    }
     let mut parts = Vec::new();
     if let Some(tag) = status_tag(&event.kind, status) {
         parts.push(format!("[{tag}]"));
@@ -99,6 +102,56 @@ pub(crate) fn render_line(event: &Event, name: &str, status: ConceptStatus) -> S
     parts.join(" ")
 }
 
+/// A dose reads as "took X at T", with the full timestamp rather than the date:
+/// for a rescue inhaler, which hour it was taken is the fact being asked about.
+fn render_dose_line(event: &Event, name: &str) -> String {
+    let mut parts = vec![
+        kind_wire(&event.kind),
+        "took".to_string(),
+        name.trim().to_string(),
+    ];
+    if let Some(value) = render_value(event) {
+        if value != name.trim() {
+            parts.push(value);
+        }
+    }
+    if let Some(at) = event.effective_at.as_deref() {
+        parts.push(format!("at {at}"));
+    }
+    parts.retain(|p| !p.is_empty());
+    parts.join(" ")
+}
+
+/// A dosage's short rendering: the dose, then the sig text if the source gave
+/// one (it already spells out the timing), else the structured timing.
+fn render_dosage(d: &DosageFields) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(q) = &d.dose {
+        parts.push(match &q.unit {
+            Some(u) => format!("{} {}", q.value, u.code),
+            None => q.value.clone(),
+        });
+    }
+    if let Some(text) = &d.text {
+        parts.push(text.clone());
+    } else {
+        let unit = d.period_unit.map(|u| u.wire_name()).unwrap_or_default();
+        match (&d.frequency, &d.period) {
+            (Some(f), Some(p)) => parts.push(format!("{f} times per {p} {unit}")),
+            (Some(f), None) => parts.push(format!("{f} times")),
+            (None, Some(p)) => parts.push(format!("every {p} {unit}")),
+            (None, None) => {}
+        }
+        if let Some(when) = &d.when {
+            parts.push(format!("when {when}"));
+        }
+    }
+    if d.as_needed == Some(true) {
+        parts.push("as needed".to_string());
+    }
+    (!parts.is_empty()).then(|| parts.join(", "))
+}
+
 /// The value's short rendering, or `None` for a value that adds nothing textual
 /// (an attachment's bytes are out of band).
 fn render_value(event: &Event) -> Option<String> {
@@ -115,6 +168,7 @@ fn render_value(event: &Event) -> Option<String> {
         // The captured document itself is not text; its caption rides as a sibling
         // text event, which is indexed and retrieved on its own.
         EventValue::Attachment { .. } => None,
+        EventValue::Dosage(d) => render_dosage(d.fields()),
     }
 }
 
@@ -201,6 +255,17 @@ fn kind_hint(query: &[String], kind: &EventKind) -> f32 {
         EventKind::Encounter => {
             hits(&["visit", "visits", "encounter", "encounters", "appointment"])
         }
+        EventKind::MedicationDose => hits(&[
+            "dose",
+            "doses",
+            "took",
+            "take",
+            "taken",
+            "medication",
+            "medications",
+            "med",
+            "meds",
+        ]),
         EventKind::NutritionIntake => hits(&["food", "meal", "meals", "ate", "diet", "nutrition"]),
         EventKind::Document => hits(&["note", "notes", "document", "report"]),
     };
@@ -535,6 +600,73 @@ mod tests {
         assert!(!line.contains("[past]"), "got: {line}");
         assert!(line.contains("Body mass index"));
         assert!(line.contains("24.1"));
+    }
+
+    #[test]
+    fn a_dose_renders_as_took_x_at_t() {
+        let dose = event(
+            EventKind::MedicationDose,
+            None,
+            "2026-10-23T14:05:00-05:00",
+            Some(EventValue::Quantity {
+                value: "2".into(),
+                unit: Some(Code {
+                    system: "http://unitsofmeasure.org".into(),
+                    code: "{puff}".into(),
+                    display: None,
+                }),
+            }),
+        );
+        let line = render_line(&dose, "albuterol", ConceptStatus::Active);
+        assert_eq!(
+            line,
+            "medication_dose took albuterol 2 {puff} at 2026-10-23T14:05:00-05:00"
+        );
+        // A dose carries no current/past tag: it is a moment, not a standing fact.
+        assert!(!line.contains('['));
+    }
+
+    #[test]
+    fn a_dosage_renders_its_sig_or_its_timing() {
+        use svastha_core::event::{Dosage, PeriodUnit, Quantity};
+        let with = |fields: DosageFields| {
+            event(
+                EventKind::MedicationStatement,
+                None,
+                "2026-01-02",
+                Some(EventValue::Dosage(Dosage::new(fields).unwrap())),
+            )
+        };
+        let structured = with(DosageFields {
+            dose: Some(Quantity {
+                value: "500".into(),
+                unit: Some(Code {
+                    system: "http://unitsofmeasure.org".into(),
+                    code: "mg".into(),
+                    display: None,
+                }),
+            }),
+            frequency: Some("2".into()),
+            period: Some("1".into()),
+            period_unit: Some(PeriodUnit::Day),
+            when: Some("C".into()),
+            as_needed: Some(false),
+            ..Default::default()
+        });
+        assert_eq!(
+            render_line(&structured, "metformin", ConceptStatus::Active),
+            "[current] medication_statement 2026-01-02 metformin 500 mg, 2 times per 1 d, when C"
+        );
+        let sig = with(DosageFields {
+            text: Some("2 puffs q4h".into()),
+            frequency: Some("6".into()),
+            as_needed: Some(true),
+            ..Default::default()
+        });
+        assert_eq!(
+            render_line(&sig, "albuterol", ConceptStatus::Active),
+            "[current] medication_statement 2026-01-02 albuterol 2 puffs q4h, as needed"
+        );
     }
 
     #[test]

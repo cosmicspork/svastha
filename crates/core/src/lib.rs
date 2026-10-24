@@ -18,8 +18,10 @@
 /// additive, bumping this from `0` to `1`; it then added key epochs (the
 /// `vault.key` keyring, see [`keyring`]) — an epoch marker rides in the AAD and a
 /// legacy single-key `vault.key` still reads as epoch 0, so no key rotates —
-/// bumping it from `1` to `2`.
-pub const CONTRACT_VERSION: u32 = 2;
+/// bumping it from `1` to `2`; and then the `medication_dose` event kind and the
+/// `dosage` event value (see [`event`]), new shapes that leave every existing
+/// event's canonical bytes and id untouched, bumping it from `2` to `3`.
+pub const CONTRACT_VERSION: u32 = 3;
 
 /// The cryptographic era embedded in every HKDF / domain-separation label — key
 /// derivation, key wrapping, and the event/curation/relay-auth/mailbox signing
