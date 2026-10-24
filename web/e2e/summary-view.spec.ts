@@ -376,3 +376,80 @@ test('home: the medications glance card opens the medications page', async ({ pa
   await expect(page).toHaveURL(/#\/medications$/)
   await expect(page.getByTestId('medications-page')).toBeVisible()
 })
+
+test('summary: sections run allergies, problems, meds, vitals, results, then immunizations', async ({
+  page,
+}) => {
+  await onboardViaUI(page)
+  await page.evaluate(
+    async ({ rxnorm, cvx, snomed, loinc, recent }) => {
+      const { logEvent } = await import('/src/lib/events.ts')
+      const mg = (value: string, code: string) => ({
+        quantity: { value, unit: { system: 'http://unitsofmeasure.org', code } },
+      })
+      await logEvent([
+        {
+          kind: 'allergy_intolerance',
+          code: null,
+          effective_at: recent,
+          value: { coded: { system: snomed, code: '91936005', display: 'Penicillin allergy' } },
+        },
+        {
+          kind: 'condition',
+          code: { system: snomed, code: '38341003', display: 'Hypertension' },
+          effective_at: recent,
+          value: null,
+        },
+        {
+          kind: 'medication_statement',
+          code: { system: rxnorm, code: '29046', display: 'Lisinopril' },
+          effective_at: recent,
+          value: null,
+        },
+        {
+          kind: 'observation',
+          code: { system: loinc, code: '8867-4', display: 'Heart rate' },
+          effective_at: recent,
+          value: mg('72', '/min'),
+        },
+        {
+          kind: 'observation',
+          code: { system: loinc, code: '4548-4', display: 'Hemoglobin A1c' },
+          effective_at: recent,
+          value: mg('5.6', '%'),
+        },
+        {
+          kind: 'immunization',
+          code: { system: cvx, code: '140', display: 'Influenza' },
+          effective_at: recent,
+          value: null,
+        },
+      ])
+    },
+    {
+      rxnorm: RXNORM,
+      cvx: CVX,
+      snomed: 'http://snomed.info/sct',
+      loinc: 'http://loinc.org',
+      recent: daysAgo(10),
+    },
+  )
+  await page.reload()
+  await unlock(page)
+  await openSummary(page)
+
+  // Top-level sections only: sub-groups (Earlier immunizations, Past, As
+  // needed) are h3s nested inside their parent's split group.
+  const order = await page
+    .getByTestId('clinician-summary')
+    .locator('section:has(> h2)')
+    .evaluateAll((sections) => sections.map((s) => s.getAttribute('data-testid')))
+  expect(order).toEqual([
+    'summary-section-allergies',
+    'summary-section-problems',
+    'summary-section-medications',
+    'summary-section-latest-vitals',
+    'summary-section-recent-results',
+    'summary-section-immunizations',
+  ])
+})

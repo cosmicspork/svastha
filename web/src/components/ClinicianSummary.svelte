@@ -406,51 +406,6 @@
     <!-- Windowed sections: the last year leads, everything older sits behind a
          toggle. Nothing is dropped — an older row is one tap away, and the
          toggle states how many there are. -->
-    {#if immunizations.recent.length > 0 || immunizations.older.length > 0}
-      <div class="split-group">
-        <SummarySection
-          title="Immunizations"
-          rows={immunizations.recent}
-          hueClass="cat-clinical"
-          alwaysShow={immunizations.older.length > 0}
-          emptyText={noneRecently}
-          dictionaryEnabled={$dictionaryStatus.enabled}
-          {coveredSystems}
-          detailLabel="Doses"
-          {readonly}
-          {onviewtimeline}
-        />
-        {#if immunizations.older.length > 0}
-          <button
-            type="button"
-            class="ghost collapse-toggle"
-            aria-expanded={showOlderImmunizations}
-            onclick={() => (olderImmunizationsOpen = !olderImmunizationsOpen)}
-            data-testid="immunizations-older-toggle"
-          >
-            {showOlderImmunizations ? 'Hide' : 'Show'}
-            {immunizations.older.length}
-            {olderLabel}
-          </button>
-          <!-- Always rendered, hidden on screen until the toggle opens it: paper
-               has no toggle, so a printed handoff must carry these rows. -->
-          <div class="older" class:open={showOlderImmunizations}>
-            <SummarySection
-              title="Earlier immunizations"
-              rows={immunizations.older}
-              hueClass="cat-clinical"
-              heading="h3"
-              dictionaryEnabled={$dictionaryStatus.enabled}
-          {coveredSystems}
-              detailLabel="Doses"
-              {readonly}
-              {onviewtimeline}
-            />
-          </div>
-        {/if}
-      </div>
-    {/if}
-
     {#if vitals.recent.length > 0 || vitals.older.length > 0}
       <div class="split-group">
         <SummarySection
@@ -529,6 +484,54 @@
               heading="h3"
               dictionaryEnabled={$dictionaryStatus.enabled}
           {coveredSystems}
+              {readonly}
+              {onviewtimeline}
+            />
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+    <!-- Immunizations trail vitals and results: a visit asks what has been
+         measured lately far more often than for shot history (nurse feedback,
+         #214). -->
+    {#if immunizations.recent.length > 0 || immunizations.older.length > 0}
+      <div class="split-group">
+        <SummarySection
+          title="Immunizations"
+          rows={immunizations.recent}
+          hueClass="cat-clinical"
+          alwaysShow={immunizations.older.length > 0}
+          emptyText={noneRecently}
+          dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
+          detailLabel="Doses"
+          {readonly}
+          {onviewtimeline}
+        />
+        {#if immunizations.older.length > 0}
+          <button
+            type="button"
+            class="ghost collapse-toggle"
+            aria-expanded={showOlderImmunizations}
+            onclick={() => (olderImmunizationsOpen = !olderImmunizationsOpen)}
+            data-testid="immunizations-older-toggle"
+          >
+            {showOlderImmunizations ? 'Hide' : 'Show'}
+            {immunizations.older.length}
+            {olderLabel}
+          </button>
+          <!-- Always rendered, hidden on screen until the toggle opens it: paper
+               has no toggle, so a printed handoff must carry these rows. -->
+          <div class="older" class:open={showOlderImmunizations}>
+            <SummarySection
+              title="Earlier immunizations"
+              rows={immunizations.older}
+              hueClass="cat-clinical"
+              heading="h3"
+              dictionaryEnabled={$dictionaryStatus.enabled}
+          {coveredSystems}
+              detailLabel="Doses"
               {readonly}
               {onviewtimeline}
             />
