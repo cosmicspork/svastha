@@ -9,6 +9,7 @@
 // or returns a PRF result (unlock) is usable. `passkeysSupported()` only gates
 // whether the WebAuthn API exists at all.
 import { toHex, fromHex } from './hex'
+import { nativeShell } from './native'
 
 const enc = new TextEncoder()
 
@@ -45,8 +46,13 @@ export class PasskeyCeremonyError extends Error {
 }
 
 /** True when the WebAuthn API is present at all. Whether a given passkey can
- * actually derive a PRF secret is only known after an enroll/unlock attempt. */
+ * actually derive a PRF secret is only known after an enroll/unlock attempt.
+ *
+ * Always false in the native shell, even where its WebView exposes the API
+ * (WKWebView does): the RP ID there is the WebView's `localhost` host, which
+ * no passkey can be bound to. See src-tauri/README.md. */
 export function passkeysSupported(): boolean {
+  if (nativeShell) return false
   return (
     typeof window !== 'undefined' &&
     typeof window.PublicKeyCredential === 'function' &&

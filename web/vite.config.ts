@@ -8,14 +8,30 @@ import { VitePWA } from 'vite-plugin-pwa'
 // screen bakes this in at build time.
 const APP_VERSION: string = JSON.parse(readFileSync('../.release-please-manifest.json', 'utf8'))['.']
 
+// The Tauri CLI sets TAURI_ENV_PLATFORM when it runs this build for the native
+// shell (src-tauri/). That bundle ships inside the app, which updates through
+// the app stores, so it carries no service worker or web manifest: a worker
+// would cache a bundle the store update is meant to replace.
+const NATIVE_SHELL = !!process.env.TAURI_ENV_PLATFORM
+// A phone running `tauri android|ios dev` loads the dev server over the LAN,
+// so Vite has to listen on the address the CLI hands it.
+const TAURI_DEV_HOST = process.env.TAURI_DEV_HOST
+
 // https://vite.dev/config/
 export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(APP_VERSION),
   },
+  // TAURI_ENV_* reaches the app as import.meta.env.TAURI_ENV_PLATFORM, which
+  // lib/native.ts reads; the browser build never has it set.
+  envPrefix: ['VITE_', 'TAURI_ENV_'],
+  server: TAURI_DEV_HOST
+    ? { host: TAURI_DEV_HOST, strictPort: true, hmr: { protocol: 'ws', host: TAURI_DEV_HOST, port: 1421 } }
+    : undefined,
   plugins: [
     svelte(),
     VitePWA({
+      disable: NATIVE_SHELL,
       // 'prompt' (not 'autoUpdate'): a new build must not swap the running
       // bundle out from under the user silently. main.ts's onNeedRefresh
       // surfaces a notification instead, and the user relaunches on their own

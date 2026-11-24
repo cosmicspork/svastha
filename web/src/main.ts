@@ -8,6 +8,7 @@ import { mount } from 'svelte'
 import App from './App.svelte'
 import { notifyAppUpdate } from './lib/notifications'
 import { setUpdateHandler } from './lib/pwaUpdate'
+import { nativeShell } from './lib/native'
 
 const app = mount(App, {
   target: document.getElementById('app')!,
@@ -21,7 +22,9 @@ const app = mount(App, {
 // to take over, at which point we stash the `updateSW` handle for later (the
 // user may not tap the notification for a while) and let the notification
 // center surface it rather than swapping the app out from under them.
-if (import.meta.env.PROD) {
+//
+// The native shell has no service worker at all (see vite.config.ts).
+if (import.meta.env.PROD && !nativeShell) {
   import('virtual:pwa-register').then(({ registerSW }) => {
     const updateSW = registerSW({
       onNeedRefresh() {

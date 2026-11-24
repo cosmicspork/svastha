@@ -11,6 +11,7 @@
 // so nothing here ever touches record content either.
 import { get, put } from './db'
 import { base64UrlToBytes } from './base64'
+import { nativeShell } from './native'
 
 const PREF_KEY = 'pushEnabled'
 
@@ -200,4 +201,25 @@ export async function reassertPushOnStart(relay: PushRelayClient): Promise<void>
     // Best-effort — never blocks app boot, and the next start (or an
     // explicit re-enable) retries.
   }
+}
+
+export type PushAvailability =
+  | 'native' // the native shell: no service worker to receive a push, by design
+  | 'unsupported' // the browser doesn't expose the Push/Notification APIs at all
+  | 'not-ready' // the APIs exist, but no service worker is registered yet
+  | 'ready'
+
+/** Whether this build and browser can receive Web Push. The native shell is
+ * asked first: its WebView may expose PushManager, but the shell ships no
+ * service worker (vite.config.ts), so "reload and try again" or "add to Home
+ * Screen" would be advice that can never work there. */
+export async function pushAvailability(): Promise<PushAvailability> {
+  if (nativeShell) return 'native'
+  if (!('serviceWorker' in navigator) || !('PushManager' in globalThis) || !('Notification' in globalThis)) {
+    return 'unsupported'
+  }
+  // Non-blocking: `navigator.serviceWorker.ready` would hang forever if no
+  // worker is ever registered (a dev preview — see main.ts's PROD-only
+  // registerSW guard); `getRegistration()` resolves immediately either way.
+  return (await navigator.serviceWorker.getRegistration()) ? 'ready' : 'not-ready'
 }

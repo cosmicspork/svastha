@@ -14,7 +14,8 @@
         "crates/wasm/Cargo.toml",
         "crates/relay/Cargo.toml",
         "crates/node/Cargo.toml",
-        "crates/retrieval/Cargo.toml"
+        "crates/retrieval/Cargo.toml",
+        "src-tauri/Cargo.toml"
       ]
     }
   }

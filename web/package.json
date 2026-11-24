@@ -11,11 +11,13 @@
     "check": "bun run wasm && svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json && tsc -p tsconfig.scripts.json && tsc -p tsconfig.sw.json && vitest run",
     "test": "bun run wasm && vitest run",
     "e2e": "playwright test",
-    "icons": "bun run scripts/build-icons/build.ts"
+    "icons": "bun run scripts/build-icons/build.ts",
+    "tauri": "TAURI_APP_PATH=../src-tauri TAURI_FRONTEND_PATH=. tauri"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "@tauri-apps/cli": "2.12.5",
     "@tsconfig/svelte": "^5.0.8",
     "@types/node": "^24.12.3",
     "fake-indexeddb": "^6.2.5",
@@ -32,6 +34,7 @@
     "@fontsource/atkinson-hyperlegible": "^5.2.8",
     "@fontsource/ibm-plex-mono": "^5.2.7",
     "@fontsource/young-serif": "^5.2.7",
+    "@tauri-apps/api": "2.12.5",
     "fflate": "^0.8.3",
     "jsqr": "^1.4.0",
     "pdf-lib": "^1.17.1",
