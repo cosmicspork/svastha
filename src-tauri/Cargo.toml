@@ -1,6 +1,6 @@
 [package]
 name = "svastha-mobile"
-version = "0.17.0" # x-release-please-version
+version = "0.18.0" # x-release-please-version
 description = "Tauri 2 shell that runs the Svastha web app on iOS and Android"
 edition = "2021"
 license = "AGPL-3.0-only"
