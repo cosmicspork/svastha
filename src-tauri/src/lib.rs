@@ -40,4 +40,50 @@ mod tests {
         let json = serde_json::to_value(capabilities()).unwrap();
         assert_eq!(json, serde_json::json!({ "bluetooth": false }));
     }
+
+    // `tauri android init` regenerates these files from a template that backs
+    // the app's data up and shares all of external storage.
+    const MANIFEST: &str = include_str!("../gen/android/app/src/main/AndroidManifest.xml");
+    const EXTRACTION_RULES: &str =
+        include_str!("../gen/android/app/src/main/res/xml/data_extraction_rules.xml");
+    const FILE_PATHS: &str = include_str!("../gen/android/app/src/main/res/xml/file_paths.xml");
+
+    #[test]
+    fn android_keeps_the_vault_out_of_backup_and_device_transfer() {
+        assert!(MANIFEST.contains(r#"android:allowBackup="false""#));
+        assert!(MANIFEST.contains(r#"android:fullBackupContent="false""#));
+        assert!(MANIFEST.contains(r#"android:dataExtractionRules="@xml/data_extraction_rules""#));
+        assert!(!MANIFEST.contains(r#"android:allowBackup="true""#));
+
+        // Every storage domain is excluded on both paths, and nothing is
+        // re-included: one <include> would narrow the backup to that path
+        // instead of disabling it.
+        assert!(!EXTRACTION_RULES.contains("<include"));
+        for section in ["cloud-backup", "device-transfer"] {
+            let open = format!("<{section}>");
+            let close = format!("</{section}>");
+            let start = EXTRACTION_RULES.find(&open).expect(section);
+            let end = EXTRACTION_RULES.find(&close).expect(section);
+            let body = &EXTRACTION_RULES[start..end];
+            for domain in ["root", "file", "database", "sharedpref", "external"] {
+                assert!(
+                    body.contains(&format!(r#"<exclude domain="{domain}" path="." />"#)),
+                    "{section} does not exclude {domain}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn android_file_provider_shares_only_camera_captures() {
+        let roots: Vec<&str> = FILE_PATHS
+            .lines()
+            .map(str::trim)
+            .filter(|l| l.starts_with('<') && l.contains("path="))
+            .collect();
+        assert_eq!(
+            roots,
+            [r#"<external-files-path name="camera" path="Pictures/" />"#]
+        );
+    }
 }

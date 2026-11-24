@@ -4,7 +4,14 @@
   import { session } from '../../lib/session.svelte'
   import { get } from '../../lib/db'
   import { RelayClient } from '../../lib/relay'
-  import { enablePush, disablePush, isPushEnabledPref, type PushRelayClient } from '../../lib/push'
+  import {
+    enablePush,
+    disablePush,
+    isPushEnabledPref,
+    pushAvailability,
+    type PushAvailability,
+    type PushRelayClient,
+  } from '../../lib/push'
   import { isIos } from '../../lib/install'
 
   // Feature-detected, never user-agent-sniffed (Safari on iOS only exposes
@@ -12,13 +19,7 @@
   // naturally out of the check below rather than a UA test). `isIos()` is
   // used only to phrase the "not available" hint, never to decide
   // availability itself.
-  type Availability =
-    | 'checking'
-    | 'unsupported' // the browser doesn't expose the Push/Notification APIs at all
-    | 'not-ready' // the APIs exist, but no service worker is registered yet
-    | 'ready'
-
-  let availability = $state<Availability>('checking')
+  let availability = $state<'checking' | PushAvailability>('checking')
   let relayUrl = $state<string | null>(null)
   let enabled = $state(false)
   let busy = $state(false)
@@ -33,16 +34,7 @@
   onMount(async () => {
     relayUrl = (await get<string>('prefs', 'relayUrl')) ?? null
     enabled = await isPushEnabledPref()
-
-    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
-      availability = 'unsupported'
-      return
-    }
-    // Non-blocking: `navigator.serviceWorker.ready` would hang forever if no
-    // worker is ever registered (a dev preview — see main.ts's PROD-only
-    // registerSW guard); `getRegistration()` resolves immediately either way.
-    const registration = await navigator.serviceWorker.getRegistration()
-    availability = registration ? 'ready' : 'not-ready'
+    availability = await pushAvailability()
   })
 
   async function onEnable(): Promise<void> {
@@ -96,6 +88,8 @@
 
   {#if availability === 'checking'}
     <p class="muted" data-testid="push-checking">Checking…</p>
+  {:else if availability === 'native'}
+    <p class="muted" data-testid="push-native">Notifications aren't available in the app yet.</p>
   {:else if availability === 'unsupported'}
     <p class="muted" data-testid="push-unsupported">
       Push notifications aren't available in this browser.

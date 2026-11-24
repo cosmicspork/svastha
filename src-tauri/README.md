@@ -35,7 +35,9 @@ just tauri ios dev            # macOS + Xcode
 just tauri-check              # fmt, clippy, tests, Android target check (CI runs this)
 ```
 
-On Linux the host check needs `libwebkit2gtk-4.1-dev libxdo-dev libssl-dev`.
+On Linux the host clippy and tests need `libwebkit2gtk-4.1-dev libxdo-dev
+libssl-dev`. Without them `just tauri-check` says so and runs only the format
+and Android target checks.
 
 ## How the native build differs from the PWA
 
@@ -75,6 +77,7 @@ The RP ID has to be that `<domain>`, which the WebView origin is not, so
 enrollment likely needs a native passkey call (AuthenticationServices on iOS,
 Credential Manager on Android) behind `native.ts` rather than WebView WebAuthn.
 The PRF extension that derives the unlock secret also has to be available
-through that path. Until then the passphrase is the unlock method in the shell.
+through that path. Until then the passphrase is the unlock method in the shell:
+`passkeysSupported()` is false there, so the passkey options do not appear.
 A passkey enrolled in the PWA cannot unlock the app's vault either way: the
 vaults are separate (see Storage).

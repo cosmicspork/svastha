@@ -18,6 +18,12 @@ const NONE: NativeCapabilities = { bluetooth: false }
 /** What the shell can do natively; all false in the browser. */
 export async function nativeCapabilities(): Promise<NativeCapabilities> {
   if (!nativeShell) return NONE
-  const { invoke } = await import('@tauri-apps/api/core')
-  return { ...NONE, ...(await invoke<Partial<NativeCapabilities>>('capabilities')) }
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    return { ...NONE, ...(await invoke<Partial<NativeCapabilities>>('capabilities')) }
+  } catch {
+    // No shell answered: a shell older than the command, or the native dev
+    // server opened in an ordinary browser, where there is no IPC at all.
+    return NONE
+  }
 }

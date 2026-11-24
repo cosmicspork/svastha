@@ -32,14 +32,22 @@ tauri *args:
     cd web && bun run tauri {{args}}
 
 # what CI's tauri job runs. src-tauri is its own workspace; the Android check
-# compiles without the NDK because nothing links. Linux hosts need
-# libwebkit2gtk-4.1-dev for the host build.
+# compiles without the NDK because nothing links.
 tauri-check:
-    cd src-tauri && cargo fmt --check
-    cd src-tauri && cargo clippy --all-targets -- -D warnings
-    cd src-tauri && cargo test
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd src-tauri
+    cargo fmt --check
+    # `just all` has to stay runnable on a Linux host without the WebView
+    # headers (an immutable distro, say); CI always has them.
+    if [ "$(uname)" = Linux ] && ! pkg-config --exists webkit2gtk-4.1; then
+        echo "tauri-check: no webkit2gtk-4.1 headers, skipping the host clippy and tests (CI runs them)" >&2
+    else
+        cargo clippy --all-targets -- -D warnings
+        cargo test
+    fi
     rustup target add aarch64-linux-android
-    cd src-tauri && cargo clippy --target aarch64-linux-android -- -D warnings
+    cargo clippy --target aarch64-linux-android -- -D warnings
 
 # --- rust workspace (core, relay, node) ---
 

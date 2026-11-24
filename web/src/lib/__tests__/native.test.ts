@@ -36,4 +36,11 @@ describe('native', () => {
     const native = await load()
     expect(await native.nativeCapabilities()).toEqual({ bluetooth: false })
   })
+
+  it('reads every capability as false when the shell does not answer', async () => {
+    vi.stubEnv('TAURI_ENV_PLATFORM', 'android')
+    invoke.mockRejectedValue(new TypeError("Cannot read properties of undefined (reading 'invoke')"))
+    const native = await load()
+    expect(await native.nativeCapabilities()).toEqual({ bluetooth: false })
+  })
 })
