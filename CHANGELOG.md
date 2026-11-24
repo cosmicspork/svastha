@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/cosmicspork/svastha/compare/v0.17.0...v0.18.0) (2026-11-24)
+
+
+### Features
+
+* **mobile:** add a Tauri 2 shell for iOS and Android alongside the PWA ([#236](https://github.com/cosmicspork/svastha/issues/236)) ([f57b22c](https://github.com/cosmicspork/svastha/commit/f57b22cb828b76966e712936785be5597c49a347))
+
 ## [0.17.0](https://github.com/cosmicspork/svastha/compare/v0.16.0...v0.17.0) (2026-10-24)
 
 
