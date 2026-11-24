@@ -1,0 +1,28 @@
+[package]
+name = "svastha-mobile"
+version = "0.17.0" # x-release-please-version
+description = "Tauri 2 shell that runs the Svastha web app on iOS and Android"
+edition = "2021"
+license = "AGPL-3.0-only"
+repository = "https://github.com/cosmicspork/svastha"
+publish = false
+
+# Its own workspace (the root one excludes it): Tauri pulls in a WebView stack
+# that needs system libraries (webkit2gtk on Linux) the relay/core/node CI job
+# has no reason to install.
+[workspace]
+
+[lib]
+# staticlib for iOS, cdylib for Android, rlib for the desktop `main.rs`.
+name = "svastha_mobile_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

@@ -2,6 +2,7 @@
 // install yet" pref, backing the first-run InstallSheet (see
 // components/InstallSheet.svelte).
 import { get, put } from './db'
+import { nativeShell } from './native'
 
 const PREFS_KEY = 'install-nudge-dismissed'
 
@@ -9,6 +10,8 @@ const PREFS_KEY = 'install-nudge-dismissed'
  * tab. `navigator.standalone` is iOS Safari's pre-standard legacy flag —
  * display-mode: standalone never matches there. */
 export function isStandalone(): boolean {
+  // The native shell is the installed app; its WebView matches neither test.
+  if (nativeShell) return true
   return (
     matchMedia('(display-mode: standalone)').matches ||
     (navigator as { standalone?: boolean }).standalone === true

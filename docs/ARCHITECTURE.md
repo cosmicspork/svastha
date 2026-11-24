@@ -751,12 +751,20 @@ never be imported (it carries no sealed bytes). The container is app-level
 packaging of bytes the wire contract already defines, sitting below it like the
 `vault.key` blob does, so it needs no `spec/` or `CONTRACT_VERSION` change.
 
-## Native (later)
+## Native shell (`src-tauri`)
 
-The same web bundle wraps in Capacitor or Tauri (Tauri is Rust and composes with
-`core`) when native-only capabilities are needed: Bluetooth medical devices,
-Apple HealthKit, Android Health Connect, and good on-device OS OCR. The OS
-keystore (Keychain, Keystore) then secures the seed in hardware.
+The same web bundle runs in a Tauri 2 shell on iOS and Android (Tauri is Rust
+and composes with `core`). It is optional: the browser PWA remains a
+first-class deployment and builds without it. The shell's build of the bundle
+drops the service worker (the app stores deliver updates) and is otherwise the
+same Svelte app and `core` WASM; data model, signing, storage, and sync never
+move into platform code. Native-only capabilities reach the app through one
+module, `web/src/lib/native.ts`, which reports every capability as absent in
+the browser. Planned capabilities: Bluetooth medical devices (standard SIG
+profiles, parsed in shared Rust, with Kotlin/Swift only as BLE transport),
+Apple HealthKit, Android Health Connect, and on-device OS OCR. The OS keystore
+(Keychain, Keystore) then secures the seed in hardware. `src-tauri/README.md`
+covers the WebView origins, storage separation from the PWA, and passkeys.
 
 ## Self-hosting
 

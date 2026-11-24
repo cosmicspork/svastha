@@ -25,6 +25,22 @@ web-check:
 web-icons:
     cd web && bun run icons
 
+# --- native shell (src-tauri, Tauri 2) ---
+
+# the Tauri CLI with this repo's paths, e.g. `just tauri android dev`
+tauri *args:
+    cd web && bun run tauri {{args}}
+
+# what CI's tauri job runs. src-tauri is its own workspace; the Android check
+# compiles without the NDK because nothing links. Linux hosts need
+# libwebkit2gtk-4.1-dev for the host build.
+tauri-check:
+    cd src-tauri && cargo fmt --check
+    cd src-tauri && cargo clippy --all-targets -- -D warnings
+    cd src-tauri && cargo test
+    rustup target add aarch64-linux-android
+    cd src-tauri && cargo clippy --target aarch64-linux-android -- -D warnings
+
 # --- rust workspace (core, relay, node) ---
 
 build:
@@ -88,4 +104,4 @@ accuracy *args:
 
 check: fmt-check clippy web-check
 
-all: check build test web-build
+all: check build test web-build tauri-check
